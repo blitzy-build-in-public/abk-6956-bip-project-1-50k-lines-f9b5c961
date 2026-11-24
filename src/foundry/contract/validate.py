@@ -1,42 +1,10 @@
 """Instance validation: compile a schema, walk an instance, report the first violation.
 
-Two callers reach the contract layer with opposite needs:
-:func:`foundry.assertions.assert_json_schema` wants an exception carrying the violating JSON path,
-:mod:`foundry.data.schema` a value it turns into a :class:`~foundry.core.exceptions.DataError`.
-:func:`validate_instance` raises, :func:`find_violation` returns, and both run the same walk.
-
-An *instance invalid* -- a document that breaks the schema -- is one or the other of those, built
-from the first :class:`~foundry.contract.violations.Violation`. A *schema unusable* -- unloadable,
-not a schema object, invalid under its metaschema, declaring an unavailable draft, or referencing
-a missing subschema -- leaves no verdict about the instance, so every entry point raises, and the
-summary it raises with names the document the caller validated against whenever that name is
-known: the path a schema source carries, or the label the data engine passes down.
-
-The reported violation is Foundry's choice, never the library's: ``iter_errors`` documents no
-ordering and the library's relevance ranking is an explicit heuristic whose answer can change with
-the shape of the schema (AAP 0.2.1), so every result is ordered by
-:func:`foundry.contract.violations.sort_violations` -- shallowest JSON path first, then the path
-structurally, then the message -- and the same instance reports the same violation everywhere.
-
-The draft is pinned rather than inferred: a document with no ``$schema`` validates as JSON Schema
-2020-12, and one naming an unavailable draft is refused by name. ``format`` is annotation only,
-because format checking needs extras outside the declared dependency set (AAP 0.5.1).
-
-``format`` is annotation only: its extras sit outside the declared dependency set (AAP 0.5.1), so a
-schema carrying ``"format": "email"`` accepts ``"not-an-email"``, which keeps validation offline and
-reproducible with the packages the wheel declares.
-
-Importing this module defines names and does nothing else: ``jsonschema`` is imported inside the
-functions that need it, never at module scope, because :mod:`foundry.http` imports this module and
-the plugin loads it on every ``pytest`` startup inside the 150 ms budget (AAP 0.4.8, implicit
-requirement I5). It keeps no compiled-validator cache and no other mutable state, so a schema
-edited between two calls is read by the second; at module scope it imports only
-:mod:`foundry.core.exceptions`, :mod:`foundry.contract.schema` and
-:mod:`foundry.contract.violations`, and it raises only
-:class:`~foundry.core.exceptions.ContractError`. Its single ``DEBUG`` record per walk -- draft and
-violation count, never an instance value or a violation message -- goes through
-:func:`foundry.obs.events.log_event`, imported inside :func:`iter_violations` so that module-scope
-imports stay inside the set AAP 0.4.8 lists for ``foundry.contract``.
+:func:`validate_instance` raises, :func:`find_violation` returns, and both run one walk ordered by
+:func:`foundry.contract.violations.sort_violations` rather than the library's heuristic (AAP 0.2.1);
+an unusable schema raises from every entry point. ``format`` is annotation only (AAP 0.5.1), and
+``jsonschema`` is imported inside the functions that need it so the plugin's startup budget holds
+(AAP 0.4.8, implicit requirement I5).
 """
 
 from __future__ import annotations
@@ -93,10 +61,8 @@ def _schema_fault(
 ) -> ContractError:
     """Build the contract error a fault in a schema document reports.
 
-    One construction site keeps every such failure in the same shape: the one-line summary in
-    ``message``, the specifics in ``detail``, an actionable ``hint`` where one exists, and the path
-    at the document root unless the fault names a location inside the schema. Returned, never
-    raised here, so each caller keeps the original cause chained.
+    One construction site keeps every such failure in the same shape; it is returned, never raised
+    here, so each caller keeps the original cause chained.
     """
     return ContractError(message, json_path=json_path, detail=detail, hint=hint)
 
@@ -104,22 +70,11 @@ def _schema_fault(
 def _invalid_schema_fault(error: SchemaError, *, source: str | None = None) -> ContractError:
     """Build the contract error for a document that is not a valid schema.
 
-    Both paths are rendered by :mod:`foundry.contract.violations`, so a schema fault's JSON path is
-    spelled exactly like the path of a violation, and the reason is collapsed to one line and
-    redacted so a schema cannot inject a newline -- or a quoted secret -- into a failure report.
-    ``source`` prefixes the summary with the name the caller knows the document by, which is what
-    lets an author in a tree of data files find the broken sidecar; ``detail`` keeps the unlabelled
-    text, so the reason and the schema-internal path are spelled the same whether or not a name
-    was available.
-
-    Args:
-        error: The library's metaschema fault, whose message is the reason and whose
-            ``absolute_schema_path`` locates the offending keyword inside the schema.
-        source: The label naming the document, normally the path it was loaded from, or ``None``
-            when the caller holds the document without a name for it.
-
-    Returns:
-        The contract error to raise, which the caller chains onto ``error``.
+    Both paths are rendered by :mod:`foundry.contract.violations`, and the reason is collapsed to
+    one line and redacted so a schema cannot inject a newline -- or a quoted secret -- into a
+    failure report. ``source`` prefixes the summary with the name the caller knows the document by,
+    which is what lets an author in a tree of data files find the broken sidecar; ``detail`` keeps
+    the unlabelled text.
     """
     json_path = json_path_from_parts(tuple(error.absolute_path))
     schema_path = format_schema_path(tuple(error.absolute_schema_path))
@@ -136,16 +91,8 @@ def _invalid_schema_fault(error: SchemaError, *, source: str | None = None) -> C
 def _source_label(schema: SchemaSource) -> str | None:
     """Return the name a schema fault reports a document by, when the source carries one.
 
-    A schema handed over as a mapping in memory has no name, so its fault reports the reason
-    alone; a ``str`` or a :class:`~pathlib.Path` names the file, so a caller that passed a path --
-    as :func:`validate_instance` and :func:`find_violation` both accept -- gets a fault naming
-    that file without passing anything extra.
-
-    Args:
-        schema: The schema source the caller validated against.
-
-    Returns:
-        ``str(schema)`` for a path source, and ``None`` for a document in memory.
+    A ``str`` or a :class:`~pathlib.Path` names the file; a document handed over as a mapping in
+    memory has no name, so its fault reports the reason alone.
     """
     if isinstance(schema, (str, Path)):
         return str(schema)

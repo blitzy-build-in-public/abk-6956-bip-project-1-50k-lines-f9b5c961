@@ -546,7 +546,6 @@ def test_eventually_reports_the_last_value_and_the_poll_count(
     assert "and 5 polls" in message
     assert sleeping.delays == [0.5, 0.5, 0.5, 0.5]
     assert sleeping.total == 2.0
-    assert sleeping.total <= 2.0
 
 
 def test_eventually_never_accepts_none(clock: _FakeClock, sleeping: _SleepRecorder) -> None:

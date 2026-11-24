@@ -1,38 +1,6 @@
-"""The extension table that routes a data file to its reader.
+"""The extension table that routes a data file to its reader, and composes the load (AAP 0.4.7).
 
-A data file reaches the package as a path, and this module is the single place that decides
-which reader parses it: :func:`loader_for` maps a suffix onto one of the shipped readers
-(``csv``, ``json``, ``yaml``/``yml``, ``jsonl``), and the loading functions compose the steps
-into a document, a case set or an expanded matrix. The composition lives here rather than in
-each of those modules because it is what keeps ``cases``, ``matrix`` and ``schema`` free of
-imports between one another: the direction stays ``loaders`` <- ``registry`` ->
-{``cases``, ``matrix``, ``schema``} (AAP 0.4.8).
-
-The table is one of only two import-time registration tables the tree permits (AAP 0.4.8): the
-four shipped readers are registered at import from the ``LOADER`` singleton each of them
-publishes, and :func:`register` is the additive extension point a new format uses -- implement
-:class:`~foundry.data.loaders.base.Loader` and call it (AAP 0.4.9). Nothing else happens at
-import: no file is opened, no directory is scanned, no environment variable is read and no
-logger is configured.
-
-Two behaviours are states rather than faults. A file that parses but holds no data rows yields
-an empty case set, which :func:`foundry.data.cases.build_parameters` turns into one skipped item
-whose reason reads ``no cases in <file>``. A path whose suffix no reader claims is a
-:class:`~foundry.core.exceptions.DataError` raised at collection through
-:func:`foundry.data.loaders.base.data_error`, naming the extension and listing every supported
-one (AAP 0.4.7).
-
-Containment of a data file name is not decided here: :func:`resolve_data_file` delegates it to
-:func:`foundry.core.paths.resolve_under`, the tree's single check that raises
-:class:`~foundry.core.exceptions.ArtifactError` when a resolved path escapes its root, including
-through a symlink (AAP 0.14.3). That error and the ``DataError`` are the only exceptions this
-module lets out.
-
-``cases``, ``matrix`` and ``schema`` are imported inside the functions that use them rather than
-at module scope: ``foundry.data.cases`` imports pytest (it is the parametrisation adapter) and
-the schema engine reaches PyYAML and jsonschema on demand, so this module stays importable
-without any of the three and the plugin's startup budget pays nothing for a run that reads no
-data file (implicit requirement I5, AAP 0.14.2).
+Four shipped readers register at import; :func:`register` is the additive extension point.
 """
 
 from __future__ import annotations

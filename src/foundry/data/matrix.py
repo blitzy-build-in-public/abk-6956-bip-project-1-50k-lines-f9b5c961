@@ -1,23 +1,6 @@
-"""Matrix expansion: the deterministic cross-product a matrix data file expands into.
+"""Matrix expansion: the deterministic cross-product a matrix data file expands into (AAP 0.7.2).
 
-A matrix data file is a mapping whose every value is a list of axis values, so its expansion is the
-cross-product of those lists: one :class:`~foundry.data.cases.Case` per combination, with an id
-that :func:`foundry.data.ids.matrix_case_id` builds from the file's stem and the combination's axis
-values. ``foundry.data.loaders.base`` hands the axes over already sorted by name, and this module
-sorts them once more so that a caller assembling an axis mapping directly gets the same order.
-
-That one order is what makes a sharded run collect exactly what the serial run collects: axes
-sorted by name, the alphabetically first axis varying slowest, every axis keeping the order its
-file wrote, and ``row_index`` counting combinations from zero (AAP 0.7.2, implicit requirement I6).
-Nothing here reads the clock, the host, an environment variable or any other ambient input, and no
-state survives a call, so two expansions of one document agree value for value.
-
-The module converts only. A malformed axis is reported as a
-:class:`foundry.core.exceptions.DataError` by the reader that parses the file, and an axis holding
-no values is not a fault but an empty expansion, which ``foundry.data.cases`` turns into the single
-skipped parameter whose reason reads ``no cases in <file>`` (AAP 0.4.7). So nothing here defines an
-exception, opens a file or writes one: importing the module defines names and does nothing else
-(AAP 0.4.8).
+Axes sort by name, the first varying slowest, and ``row_index`` counts combinations from zero.
 """
 
 from __future__ import annotations

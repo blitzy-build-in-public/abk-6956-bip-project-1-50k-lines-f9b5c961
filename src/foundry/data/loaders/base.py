@@ -1,31 +1,6 @@
-"""The neutral document shapes the four format readers share.
+"""The neutral document shapes the four format readers share (AAP 0.4.7, AAP 0.4.8).
 
-A data file reaches :mod:`foundry.data` as one of two in-memory documents: a
-:class:`LoadedTable` for anything that reads as rows of named columns (CSV, JSON
-records, YAML records, JSON Lines) and a :class:`LoadedMatrix` for a mapping
-whose values are axes. Neither shape records which format produced it, so the
-four readers stay independent of one another and the case builder, the matrix
-expander and the schema checker downstream depend on these shapes rather than on
-a parser.
-
-The dependency direction is acyclic: this module imports nothing from the package
-that contains it, the four readers import it, and ``foundry.data.registry``
-imports the readers -- ``base`` <- {``csv``, ``json``, ``yaml``, ``jsonl``} <-
-``foundry.data.registry`` (AAP 0.4.8). Each reader module exposes exactly one
-module-level object named ``LOADER`` typed as :class:`Loader` and publishes the
-suffixes it accepts, and the registry seeds its table from those four objects.
-Everything the readers share lives here -- the two document shapes, the
-column-union rule of :func:`build_table`, the shape rule of
-:func:`classify_document`, the ragged-row check of :func:`check_row_width` and
-the error helper -- so that no reader imports another.
-
-:func:`data_error` is the package's only ``DataError`` construction site, which is
-what gives every data fault its file, line and column on the way out
-(AAP 0.14.3, AAP 0.4.7).
-
-Importing this module does no work beyond defining names (AAP 0.4.8): the
-standard library plus ``DataError`` are its whole import list, no state is
-created, no file is opened and no logger is configured.
+:func:`data_error` is the package's only ``DataError`` site, so every fault is located.
 """
 
 from __future__ import annotations
@@ -154,36 +129,11 @@ def data_error(
     line: int | None = None,
     column: str | None = None,
 ) -> NoReturn:
-    """Raise the data package's only ``DataError``, naming the file it came from.
+    """Raise the data package's only ``DataError``, naming the file and the location.
 
-    Every data fault -- a non-string column, a ragged row, a mapping that is half
-    matrix, an extension no reader handles -- is reported through this function,
-    so the package constructs a ``DataError`` in exactly one place and every
-    message names the file it is in. That single site is also the seam a caller
-    adjusts if the exception's constructor ever changes shape; no caller passes
-    the location keywords itself.
-
-    The composed message takes one of four shapes, chosen by which parts of the
-    location are known, and every one of them starts with the file:
-
-    * line and column: ``<path>:<line>: <message> (column '<column>')``
-    * line only: ``<path>:<line>: <message>``
-    * column only: ``<path>: <message> (column '<column>')``
-    * neither: ``<path>: <message>``
-
-    ``DataError.file``, ``DataError.line`` and ``DataError.column`` carry the same
-    context in structured form, so a handler branches on an attribute instead of
-    parsing the text, while ``str()`` renders the message alone.
-
-    Args:
-        path: The data file the fault is in; it always appears in the message.
-        message: What is wrong, phrased without the location, because this
-            function supplies it.
-        line: The 1-based line the fault is on, or ``None`` when it concerns the
-            file as a whole.
-        column: The *name* of the column at fault, or ``None``. It is never a
-            character offset: when a parser knows a character position in a syntax
-            error, that belongs in ``message``.
+    The message takes one of four shapes -- ``<path>:<line>: <message> (column '<column>')`` -- with
+    the line or the column part omitted when it is unknown; ``file``, ``line`` and ``column`` carry
+    the same context in structured form, so a handler branches on an attribute, not on the text.
 
     Raises:
         DataError: Always, carrying the composed message and the location.
@@ -208,36 +158,11 @@ def build_table(
 ) -> LoadedTable:
     """Build a table from row mappings, taking the column order from first appearance.
 
-    The column set is the union of every row's keys, ordered by where each key is
-    first seen: rows in document order, and the keys of one row in that row's own
-    order. A later row that introduces a column appends it. No set is ever
-    iterated, so two runs and two shards derive the same ``columns`` tuple
-    (implicit requirement I6). This is the single implementation of that rule: the
-    JSON and YAML readers reach it through :func:`classify_document`, and the JSON
-    Lines reader calls it directly because it builds its rows one line at a time.
-
-    Every produced row carries every column, with ``None`` for a key its own
-    mapping lacks, so ``schema.py`` and ``cases.py`` see a rectangular shape
-    instead of a ragged one and a schema can tell an absent column from a column
-    whose value is null.
-
-    Args:
-        path: The data file the rows came from; carried on the table and named by
-            every error.
-        rows: One ``(mapping, line)`` pair per data row, in file order. Pairing a
-            row with its line keeps the two aligned when a reader skips blank or
-            comment lines. ``line`` is the 1-based line in the file, or ``None``
-            for a format with no per-row line notion.
-
-    Returns:
-        The table, whose ``columns`` follow first appearance, whose ``rows`` hold
-        one :class:`RawRow` per input mapping with ``row_index`` equal to that
-        mapping's 0-based position, and whose ``rows`` is empty when the input
-        holds no mappings.
+    Columns are the union of every row's keys in first-appearance order, never a set, and every row
+    carries every column with ``None`` for a key its mapping lacks, so the table is rectangular.
 
     Raises:
-        DataError: When a mapping has a non-string key. A data column is a column
-            name, so a key that is not a ``str`` cannot become one.
+        DataError: When a mapping has a non-string key, which cannot become a column name.
     """
     columns: list[str] = []
     seen: set[str] = set()
@@ -279,47 +204,17 @@ def _axis_name(axis: tuple[str, tuple[object, ...]]) -> str:
 def classify_document(payload: object, path: Path) -> LoadedDocument:
     """Build the document a parsed data file holds, applying the shape rule once.
 
-    The rules below are applied in this order and no other, and every branch
-    either returns a document or reports a fault through :func:`data_error`; no
-    builtin exception escapes.
-
-    1. A ``list`` is a table of records, one row per element. An empty list is the
-       empty-document state -- a :class:`LoadedTable` with no columns and no rows
-       -- which a caller reports as ``no cases in <file>`` rather than as a fault
-       (AAP 0.4.7). Each element must be a mapping: a scalar element reports
-       ``element <i> is <type>, expected a mapping``, and a mapping element
-       contributes one row with ``line=None`` because a parsed JSON or YAML
-       document carries no per-element line notion.
-    2. An empty ``Mapping`` is the same empty-document state as ``[]``.
-    3. A non-empty ``Mapping`` whose every value is a ``list`` is a matrix. Its
-       keys are column-style names, so a key that is not a ``str`` is a fault, and
-       its axes are sorted by name here, once, so that ``matrix.py`` expands a
-       stable cross-product on every worker (implicit requirement I6). Axis values
-       keep the document's order and are neither de-duplicated nor sorted.
-    4. A non-empty ``Mapping`` whose no value is a ``list`` is a single record:
-       one row, ``row_index`` 0, columns in key order.
-    5. A ``Mapping`` that mixes list and non-list values is a fault. An author who
-       wrote one list axis meant a matrix, so reading that mapping as a single row
-       holding a list cell would hide the mistake; the message names the axis and
-       the type of the non-list value that broke the rule instead, and never the
-       value itself, which is ``foundry.data.schema``'s rule for the messages it
-       reports.
-    6. Anything else -- a scalar, ``None``, any type no rule above covers -- reports
-       ``expected a list of mappings or a mapping, got <type>``.
-
-    Args:
-        payload: The value a reader produced by parsing the file: a JSON or YAML
-            parse result, or a list of parsed rows.
-        path: The data file the payload came from; carried on the returned
-            document and named by every error.
+    A list of mappings is a table of records; an empty list or mapping is the empty-document state a
+    caller reports as ``no cases in <file>`` (AAP 0.4.7); a mapping whose every value is a list is a
+    matrix, its axes sorted by name here; a mapping mixing list and non-list values, and any other
+    payload, are faults.
 
     Returns:
-        A :class:`LoadedTable` for rules 1, 2 and 4, or a :class:`LoadedMatrix` for
-        rule 3.
+        A :class:`LoadedTable`, or a :class:`LoadedMatrix` for the all-lists mapping.
 
     Raises:
-        DataError: For rules 5 and 6, for a list element that is not a mapping, and
-            for a matrix key that is not a ``str``.
+        DataError: For a payload no rule covers, for a list element that is not a mapping, and for a
+            matrix key that is not a ``str``.
     """
     if isinstance(payload, list):
         if not payload:

@@ -1,66 +1,12 @@
 """The two ``httpx`` transports that make a cassette run possible: replay and record.
 
-``foundry.cassette`` owns record/replay (AAP 0.3.2), and this module is the seam where a cassette
-meets the HTTP client. An :class:`httpx.BaseTransport` is the only place ``httpx`` consults for a
-reply, so a transport that answers from a document -- and holds no live transport at all -- is
-what makes replay provably offline rather than merely believed to be (AAP 0.2.1).
-:class:`ReplayTransport` serves the recorded interactions of one cassette, and
-:class:`RecordingTransport` wraps the live transport and captures what passed through it -- the
-``record`` row of the mode table (AAP 0.7.3) that would otherwise have no seam. Both are ordinary
-``httpx`` objects, so :mod:`foundry.http` hands one to :class:`httpx.Client` and learns which mode
-it is in from the tag on each reply rather than from the transport's type.
-
-The reply tag is the interface :mod:`foundry.http.response` reads
-    Every reply either class returns carries ``extensions[SOURCE_EXTENSION_KEY]``, whose value is
-    :data:`SOURCE_CASSETTE` for a recorded interaction and :data:`SOURCE_LIVE` for a reply the live
-    transport produced -- including the one a ``passthrough`` replay delegates to its fallback. That
-    is how ``FoundryResponse.source: Literal["live", "cassette"]`` (AAP 0.4.3) is populated without
-    the HTTP layer reaching into this module, and a reply carrying neither value is a defect in the
-    transport rather than a third state. Nothing else about a reply is rewritten: the status, the
-    headers and the body are the peer's.
-
-Replay opens no socket, by construction (AAP 0.9.2, AAP 0.14.3)
-    :class:`ReplayTransport` is handed a document and a path, not a client: in ``off``, ``record``
-    and ``replay`` mode it holds no live transport, so no path inside it can reach ``httpcore`` or
-    ``socket.connect``. Only ``passthrough`` receives a fallback (assumption A8), and that is the
-    caller's own transport, which the caller already owns. Nothing here patches a socket and nothing
-    falls back silently: a request with no recorded counterpart raises
-    :class:`~foundry.core.exceptions.CassetteMissError` naming the method, the path and the cassette
-    document (AAP 0.4.3, AAP 0.4.9), and only a non-``None`` fallback changes that.
-
-Matching, ordering and determinism
-    Every lookup goes through :func:`foundry.cassette.matcher.match_interaction` with a cursor this
-    instance holds, so a test that issues one request twice replays the first recording and then the
-    second, and a third lookup replays the last one instead of reporting a miss (AAP 0.2.1,
-    AAP 0.4.6). The cursor is an attribute of one transport, never module state (AAP 0.4.8), so two
-    tests of one session each start from zero. A fingerprint carries the method, the path, the
-    decoded query pairs and the body hash and nothing else (assumption A7), so one document and one
-    sequence of requests always produce the same replies, on any host and any port (AAP 0.13.1).
-
-Capture never changes a test's outcome (AAP 0.1.2, AAP 0.14.3)
-    :class:`RecordingTransport` returns the live transport's own response object, tagged and
-    otherwise untouched, and an ``httpx`` fault raised by the live transport propagates unchanged so
-    :mod:`foundry.http.retries` can classify it. A fault while *capturing* that reply -- a body that
-    cannot be read, a sink that raises -- is a fault in Foundry's own plumbing: it is reported as
-    exactly one ``WARNING`` on the ``foundry`` logger and the reply is still returned, because a
-    cassette that could not be recorded must never turn a passing test into an error.
-
-Redaction belongs to the store, not to this module (implicit requirement I4)
-    :func:`headers_subset` deliberately keeps ``authorization``, ``cookie`` and any other denied
-    name: :class:`~foundry.cassette.store.CassetteStore` replaces those values with the redaction
-    marker on the way to disk and records the names in the document's ``redacted_keys``, which it
-    could not do for a header removed before it was ever offered. This module therefore stores no
-    secret and scrubs nothing; there is one redaction engine and one write funnel, and neither is
-    here.
-
-Import direction and import-time discipline (AAP 0.4.8)
-    ``httpx``, :mod:`foundry.cassette.models`, :mod:`foundry.cassette.matcher`,
-    :mod:`foundry.cassette.paths`, :mod:`foundry.core.exceptions` and :mod:`foundry.obs.events` --
-    never :mod:`foundry.http`, which imports this package, and never :mod:`foundry.config`,
-    :mod:`foundry.reporting` or :mod:`foundry.execution`. ``httpx`` may be imported at module scope
-    because nothing on ``foundry.plugin``'s import path reaches this package. Importing the module
-    reads no environment variable, opens no file, configures no logger and builds no mutable
-    module-level state: the only mutable containers are the cursors on a replay instance.
+:class:`ReplayTransport` answers from a document and holds no live transport, so replay never
+reaches ``httpcore`` (AAP 0.2.1); :class:`RecordingTransport` tags the live replies (AAP 0.4.3).
+A query parameter whose name the redaction engine redacts is carried as the marker here too,
+because the fingerprint this module builds is both what capture stores and what replay compares
+against: one rule, :func:`foundry.cassette.matcher.mask_query`, so the marker a document holds is
+the marker the arriving request carries, and the miss diagnostic renders neither the value nor the
+request's own URL (AAP 0.3.2, AAP 0.4.7).
 """
 
 from __future__ import annotations
@@ -71,7 +17,7 @@ from typing import Final
 
 import httpx
 
-from foundry.cassette.matcher import RequestFingerprint, describe, match_interaction
+from foundry.cassette.matcher import RequestFingerprint, describe, mask_query, match_interaction
 from foundry.cassette.models import (
     CassetteDocument,
     Interaction,
@@ -82,6 +28,7 @@ from foundry.cassette.models import (
 )
 from foundry.core.exceptions import CassetteMissError, FoundryError
 from foundry.obs.events import emit_plumbing_failure
+from foundry.obs.redaction import Redactor, default_redactor
 
 __all__: Final[tuple[str, ...]] = (
     "SOURCE_CASSETTE",
@@ -99,9 +46,8 @@ SOURCE_EXTENSION_KEY: Final[str] = "foundry.cassette.source"
 """The ``httpx.Response.extensions`` key that says which side answered a request.
 
 :mod:`foundry.http.response` reads it to fill ``FoundryResponse.source`` (AAP 0.4.3), so the two
-values below are the only legal contents and every reply this module returns carries one of them.
-The key is namespaced with the distribution's own name so it cannot collide with an extension
-``httpcore`` sets on a live reply.
+values below are the only legal contents. The key is namespaced with the distribution's own name so
+it cannot collide with an extension ``httpcore`` sets on a live reply.
 """
 
 SOURCE_CASSETTE: Final[str] = "cassette"
@@ -111,8 +57,7 @@ SOURCE_LIVE: Final[str] = "live"
 """The value :data:`SOURCE_EXTENSION_KEY` carries for a reply the live transport produced.
 
 A ``passthrough`` replay tags a delegated reply with this value rather than with
-:data:`SOURCE_CASSETTE`, because the peer answered it and a failure diagnosed against it belongs to
-the service under test (assumption A8).
+:data:`SOURCE_CASSETTE`, because the peer answered it (assumption A8).
 """
 
 VOLATILE_HEADERS: Final[frozenset[str]] = frozenset(
@@ -126,12 +71,10 @@ VOLATILE_HEADERS: Final[frozenset[str]] = frozenset(
 )
 """The header names a capture drops, because they say nothing about the exchange.
 
-Every one of them is set by the client or the connection rather than by the caller: a ``host`` and a
-``content-length`` recorded on one machine would describe a different request on another, and an
-``accept-encoding`` or ``user-agent`` describes the client rather than the intent. Denied names --
-``authorization``, ``cookie``, ``x-api-key`` and the rest of ``secrets.redact_keys`` -- are
-deliberately *not* listed here and are kept by :func:`headers_subset`, because the store redacts
-their values on the way to disk and records the scrubbed names in the document's ``redacted_keys``.
+Every one is set by the client or the connection rather than by the caller: a ``host`` and a
+``content-length`` recorded on one machine would describe a different request on another. Denied
+names such as ``authorization`` are deliberately not listed here: :func:`headers_subset` keeps them
+and the store redacts their values on the way to disk.
 """
 
 _ORIGIN_PATH: Final[str] = "/"
@@ -151,12 +94,11 @@ _CAPTURE_ERRORS: Final[tuple[type[BaseException], ...]] = (
 )
 """Faults that end one capture attempt instead of the test that produced it.
 
-A malformed recorded value (``FoundryError``), a body whose read failed (``httpx.HTTPError``,
-which covers ``StreamConsumed`` and the read faults), a coercion the models refuse
-(``TypeError``, ``ValueError``, ``KeyError``, ``AttributeError``) and a sink that cannot write
-(``OSError``). All of them are faults in Foundry's own capture, so they may not change an outcome
-(AAP 0.1.2). A fault the *live* transport raises is raised before this band is reached and is
-therefore untouched.
+A malformed recorded value (``FoundryError``), a body whose read failed (``httpx.HTTPError``), a
+coercion the models refuse (``TypeError``, ``ValueError``, ``KeyError``, ``AttributeError``) and a
+sink that cannot write (``OSError``). All are faults in Foundry's own capture, so they may not
+change an outcome (AAP 0.1.2); a fault the live transport raises is raised before this band is
+reached and is therefore untouched.
 """
 
 
@@ -207,7 +149,9 @@ def _kept_headers(headers: httpx.Headers) -> dict[str, str]:
     return {name: kept[name] for name in sorted(kept)}
 
 
-def fingerprint_from_request(request: httpx.Request) -> RequestFingerprint:
+def fingerprint_from_request(
+    request: httpx.Request, *, redactor: Redactor | None = None
+) -> RequestFingerprint:
     """Return the comparable part of ``request``, as a replay lookup decides a match.
 
     The four fields are the whole matching rule (AAP 0.3.2, AAP 0.4.6): the method, the path, the
@@ -215,19 +159,27 @@ def fingerprint_from_request(request: httpx.Request) -> RequestFingerprint:
     :attr:`httpx.URL.path` alone, with no scheme, host or port, so a cassette recorded against one
     port replays on another (assumption A7), and the query is passed through
     :func:`~foundry.cassette.models.normalise_query` so parameter order and percent-encoding cannot
-    separate two identical requests. Headers are absent by design: a header the client sets for
-    itself would make a recording unplayable elsewhere.
+    separate two identical requests. A parameter whose name the engine redacts then carries the
+    marker instead of its value, through :func:`~foundry.cassette.matcher.mask_query`, so the same
+    request fingerprints the same way when it is captured and when it is looked up while the value
+    itself reaches neither a document nor a miss message (AAP 0.2.1, AAP 0.3.2 "Security
+    architecture"). Headers are absent by design: a header the client sets for itself would make a
+    recording unplayable elsewhere.
 
     Args:
         request: The request about to be sent, as ``httpx`` built it.
+        redactor: The run's redaction engine, normally the one the store carries. Defaults to
+            :func:`~foundry.obs.redaction.default_redactor`, which holds the built-in deny-lists, so
+            a caller that passes nothing still masks every name those lists name.
 
     Returns:
-        The fingerprint, normalised, frozen and hashable, so it can key a replay cursor.
+        The fingerprint, normalised, masked, frozen and hashable, so it can key a replay cursor.
     """
+    engine = default_redactor() if redactor is None else redactor
     return RequestFingerprint(
         method=request.method,
         path=request.url.path,
-        query=normalise_query(request.url.query),
+        query=mask_query(normalise_query(request.url.query), engine),
         body_sha256=body_sha256_of(_request_body(request)),
     )
 
@@ -237,8 +189,8 @@ def headers_subset(request: httpx.Request) -> Mapping[str, str]:
 
     :data:`VOLATILE_HEADERS` are dropped; every other header is kept exactly as received, denied
     names included, because :class:`~foundry.cassette.store.CassetteStore` redacts their values
-    before the document is written and records what it scrubbed (implicit requirement I4). Nothing
-    is redacted here: a second redaction rule in this module would drift from the engine the
+    before the document is written and records what it scrubbed (implicit requirement I4). No header
+    value is redacted here: a second redaction rule in this module would drift from the engine the
     artifact writer, the JSON store and the report all use.
 
     Args:
@@ -274,14 +226,15 @@ def recorded_response(response: httpx.Response) -> RecordedResponse:
     )
 
 
-def _recorded_request(request: httpx.Request) -> RecordedRequest:
+def _recorded_request(request: httpx.Request, redactor: Redactor) -> RecordedRequest:
     """Return the capture of ``request``, built from the fingerprint a lookup will compare.
 
     Going through :func:`fingerprint_from_request` rather than recomputing the fields is what keeps
     capture and matching in step: a request that records differently from the way it is looked up
-    would produce a cassette that cannot replay the run which wrote it.
+    would produce a cassette that cannot replay the run which wrote it. The engine travels with it
+    for the same reason, so a recorded query holds the marker the lookup will hold.
     """
-    fingerprint = fingerprint_from_request(request)
+    fingerprint = fingerprint_from_request(request, redactor=redactor)
     return RecordedRequest(
         method=fingerprint.method,
         path=fingerprint.path,
@@ -313,10 +266,13 @@ def _tag(response: httpx.Response, source: str) -> None:
 class ReplayTransport(httpx.BaseTransport):
     """An ``httpx`` transport that answers from one cassette document and opens no socket.
 
-    The transport holds the document's interactions, its path for the miss diagnostic and a cursor
-    per fingerprint, and nothing else: no client, no socket, no live transport unless the caller
-    supplies one for ``passthrough``. That is what makes a replay run's offline behaviour a property
-    of the design rather than of the request sequence (AAP 0.9.2, AAP 0.14.3).
+    The transport holds the document's interactions, its path for the miss diagnostic, the run's
+    redaction engine and a cursor per fingerprint, and nothing else: no client, no socket, no live
+    transport unless the caller supplies one for ``passthrough``. That is what makes a replay run's
+    offline behaviour a property of the design rather than of the request sequence (AAP 0.9.2,
+    AAP 0.14.3). The engine is held because the fingerprint this class looks up has to mask a query
+    value exactly as the recording did, and because the miss it reports is rendered from that
+    fingerprint (AAP 0.2.1).
 
     The cursor is what serves a repeated request in recording order. A cassette holding two
     interactions for one fingerprint hands them out on the first and second lookup, and a third
@@ -332,6 +288,7 @@ class ReplayTransport(httpx.BaseTransport):
         *,
         fallback: httpx.BaseTransport | None = None,
         on_served: Callable[[Interaction], None] | None = None,
+        redactor: Redactor | None = None,
     ) -> None:
         """Bind the transport to one document and the file it came from.
 
@@ -348,11 +305,15 @@ class ReplayTransport(httpx.BaseTransport):
             on_served: Called with each interaction the cassette served, so the caller can count
                 replays or report them. It is not called for a delegated reply: that exchange was
                 not served by the cassette.
+            redactor: The run's redaction engine, normally the one the store carries, so a lookup
+                masks a query value exactly as the recording did. Defaults to
+                :func:`~foundry.obs.redaction.default_redactor`.
         """
         self._interactions = cassette.interactions
         self._cassette_path = cassette_path
         self._fallback = fallback
         self._on_served = on_served
+        self._redactor = default_redactor() if redactor is None else redactor
         self._consumed: dict[RequestFingerprint, int] = {}
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
@@ -367,10 +328,11 @@ class ReplayTransport(httpx.BaseTransport):
 
         Raises:
             CassetteMissError: No interaction matches and no fallback was given. The message and the
-                structured attributes both name the method, the path and the cassette document, and
-                no socket was touched on the way here.
+                structured attributes both name the method, the path and the cassette document, with
+                every query value the engine redacts rendered as the marker, and no socket was
+                touched on the way here.
         """
-        fingerprint = fingerprint_from_request(request)
+        fingerprint = fingerprint_from_request(request, redactor=self._redactor)
         found = match_interaction(
             fingerprint, self._interactions, consumed=self._consumed.get(fingerprint, 0)
         )
@@ -398,7 +360,12 @@ class ReplayTransport(httpx.BaseTransport):
     def _delegate_or_raise(
         self, request: httpx.Request, fingerprint: RequestFingerprint
     ) -> httpx.Response:
-        """Return the fallback's reply for an unmatched request, or raise the typed miss."""
+        """Return the fallback's reply for an unmatched request, or raise the typed miss.
+
+        The miss is rendered from the fingerprint, never from the request's own URL, so a query
+        value the engine redacts reaches neither the message nor the ``path`` attribute while the
+        method, the path and the cassette document stay named (AAP 0.4.3, AAP 0.4.7, AAP 0.4.9).
+        """
         if self._fallback is not None:
             response = self._fallback.handle_request(request)
             _tag(response, SOURCE_LIVE)
@@ -424,11 +391,16 @@ class RecordingTransport(httpx.BaseTransport):
     captured :class:`~foundry.cassette.models.Interaction` goes to the sink the caller supplied --
     normally a list the ``record`` path saves at teardown -- and a fault in that capture is reported
     as one ``WARNING`` and absorbed, because it is Foundry's plumbing rather than the test's
-    (AAP 0.1.2, AAP 0.14.3).
+    (AAP 0.1.2, AAP 0.14.3). A captured query value whose name the run's engine redacts carries the
+    marker, so capture and the store agree about what a cassette may hold (AAP 0.2.1).
     """
 
     def __init__(
-        self, live: httpx.BaseTransport, on_exchange: Callable[[Interaction], None]
+        self,
+        live: httpx.BaseTransport,
+        on_exchange: Callable[[Interaction], None],
+        *,
+        redactor: Redactor | None = None,
     ) -> None:
         """Bind the transport to the live transport it wraps and the sink that keeps captures.
 
@@ -438,9 +410,14 @@ class RecordingTransport(httpx.BaseTransport):
                 without recording.
             on_exchange: Called once per successful exchange with the captured interaction, in the
                 order the requests were issued.
+            redactor: The run's redaction engine, normally the one the store carries, so the capture
+                of a query value carries the marker the store would write and a replay of it will
+                compare against. Defaults to
+                :func:`~foundry.obs.redaction.default_redactor`.
         """
         self._live = live
         self._on_exchange = on_exchange
+        self._redactor = default_redactor() if redactor is None else redactor
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         """Send ``request`` live, capture the exchange and return the live response.
@@ -474,7 +451,7 @@ class RecordingTransport(httpx.BaseTransport):
         try:
             self._on_exchange(
                 Interaction(
-                    request=_recorded_request(request),
+                    request=_recorded_request(request, self._redactor),
                     response=recorded_response(response),
                 )
             )

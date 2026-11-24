@@ -1,43 +1,6 @@
-"""The YAML data reader, which reaches PyYAML only through ``yaml.safe_load``.
+"""The YAML data reader, which reaches PyYAML only through ``yaml.safe_load`` (AAP 0.14.3).
 
-A ``.yaml`` or ``.yml`` file inside ``data.dir`` reaches this module through
-``foundry.data.registry``, which seeds its suffix table from :data:`LOADER`. The file is
-read as UTF-8 text and handed to ``yaml.safe_load``, and the parsed value is classified
-into one of the two neutral shapes :mod:`foundry.data.loaders.base` defines: a list of
-mappings and a mapping of scalars become a :class:`LoadedTable`, a mapping whose every
-value is a list becomes a :class:`LoadedMatrix`, and anything else is a fault. The shape
-rules are not restated here -- :func:`base.classify_document` owns them, and this module
-only hands it a parsed payload.
-
-Two of this module's properties are security requirements rather than style choices
-(AAP 0.3.2 "Deserialisation safety", AAP 0.14.3 "No unsafe deserialisation"):
-
-* ``yaml.safe_load`` is the only YAML loader this module names. The tree's other
-  ``safe_load`` site is ``foundry.contract.schema``, which decodes schema documents the
-  same way; no unchecked loader is named in either, so a document can never construct a
-  Python object, and an explicitly unsafe tag such as ``!!python/object:...`` raises a
-  ``YAMLError``, which this module reports as a :class:`DataError` like any other syntax
-  fault.
-* ``import yaml`` sits inside :meth:`YamlLoader.load` rather than at module scope, because
-  ``foundry.plugin`` imports :mod:`foundry.data` during ``pytest_configure`` and a suite
-  that reads no data files must not pay for PyYAML (implicit requirement I5, AAP 0.14.2's
-  150 ms startup budget). Importing this module therefore imports neither ``yaml`` nor any
-  of PyYAML's dependencies.
-
-The empty document is the one classification this module adds to the parser's output.
-``yaml.safe_load`` returns ``None`` for a blank file, a comments-only file and a bare
-``---``, and all three mean the file holds no cases: they map to a :class:`LoadedTable`
-with no columns and no rows, which the caller reports as ``no cases in <file>`` rather
-than as a fault, exactly as a header-only CSV does (AAP 0.4.7). Every other payload keeps
-its own meaning, so a top-level scalar such as ``42`` is still a fault.
-
-Only :class:`foundry.core.exceptions.DataError` escapes :meth:`YamlLoader.load`. The four
-faults a reader can meet -- an unreadable file, a file that is not UTF-8, a document PyYAML
-rejects, and a document nested too deeply to parse -- are each caught once at that boundary
-and translated through :func:`base.data_error`, which names the file, the 1-based line and,
-when the fault is about a column, the column's name. Importing this module has no effect
-beyond defining names: no file is opened, no state is written and no logger is configured
-(AAP 0.4.8).
+``yaml`` is imported inside the load so a suite reading no data files pays nothing (AAP 0.14.2).
 """
 
 from __future__ import annotations

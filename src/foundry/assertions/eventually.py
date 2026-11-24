@@ -1,71 +1,9 @@
 """Polling helper: call a function until it succeeds, or until the deadline passes.
 
-``eventually`` is Foundry's public polling primitive (AAP 0.4.3). It calls a zero-argument
-callable repeatedly and stops on the first *truthy* value, which it returns unchanged:
-
-* a truthy return value ends the wait and is handed straight back to the caller;
-* a falsy return value (``False``, ``0``, ``""``, ``[]``, ``None``) keeps polling;
-* an exception raised by the callable keeps polling too, and is remembered as the last
-  outcome instead of being propagated.
-
-``None`` therefore never satisfies this helper. A polled function whose success signal is
-``None`` must return something truthy instead: the value it waited for, or ``True``.
-
-Deadline
-    Elapsed time is measured from a single baseline taken when the call starts, on the
-    monotonic clock (``time.monotonic``) by default or on a supplied clock implementing
-    :class:`foundry.core.types.ClockLike`. A wall-clock read is never taken, so a run does not
-    depend on the machine's date, on daylight saving or on a clock adjustment, and a deadline
-    in seconds means the same thing on every host. Measuring from one baseline rather than
-    accumulating intervals keeps the deadline exact even when a sleep is cut short.
-
-Injected sleep
-    Every wait goes through the ``sleep`` argument (AAP 0.4.3, AAP 0.7.3). This module never
-    sleeps itself -- ``time.sleep`` appears only as the parameter's default -- so a test or the
-    ``foundry_poll`` fixture passes a recording fake and asserts on the delays instead of
-    paying them. That is what keeps every sleep in Foundry's suite under the 100 ms cap
-    (AAP 0.14.3) and what lets the example project spend its wall clock on deterministic work
-    rather than on waiting.
-
-Interrupts
-    An ``Exception`` raised by the polled callable is an outcome; a ``BaseException`` is not.
-    ``KeyboardInterrupt`` and ``SystemExit`` leave the poller immediately and unwind through
-    the test, so the host runner reports the interrupt with its own exit code (AAP 0.4.7).
-
-Poll budget
-    A clock that never advances combined with a no-op sleep would otherwise poll forever, so
-    the loop counts consecutive polls that saw no progress on the clock and stops once
-    ``ceil(timeout / interval) + 2`` of them have happened. The budget is a safety net for a
-    stalled clock rather than a second deadline: a clock that does advance always reaches the
-    timeout first, so a caller who injects a no-op sleep and a real clock still gets the
-    documented ``timed out after <timeout>s`` message. When the budget is what ended the loop,
-    the message says that instead.
-
-Rendered outcomes
-    The last outcome is quoted in the failure message, which is why it is scrubbed through the
-    redaction engine the caller supplies -- the one built from ``secrets.redact_keys``, with
-    :func:`foundry.obs.redaction.default_redactor` as the fallback for a caller that holds no
-    configured keys -- and bounded by :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes
-    before interpolation: a polled value is frequently a response body, a header set or a
-    token-bearing payload, and the message reaches the terminal, ``results.json``,
-    ``junit.xml`` and ``report.html``. Every message is a single line and never carries a
-    traceback.
-
-The additive keywords
-    ``clock`` and ``redactor`` are keyword-only and default to ``None``, so the signature
-    published in AAP 0.4.3 keeps working unchanged: the stability statement permits additions
-    and forbids renames and removals (AAP 0.4.9). ``clock`` exists because AAP 0.7.1 requires a
-    deterministic deadline computed from a supplied clock, which is how a test asserts deadline
-    behaviour without waiting for it; its ``now()`` must return a ``datetime`` on every call, the
-    baseline included, because a reader that is callable but returns anything else -- a count of
-    seconds, a string, ``None`` -- raises this module's own ``AssertionError`` naming the
-    clock's type rather than leaking an ``AttributeError`` or ``TypeError`` out of the poll
-    loop (AAP 0.13.1). ``redactor`` exists so the run's configured ``secrets.redact_keys`` are
-    applied to the quoted outcome instead of only the built-in deny-lists.
-
-Importing this module defines names only: the function, its helpers, the public name listed
-in ``__all__`` and the constants below. It performs no I/O, reads no environment variable,
-configures no logger and parses no arguments (AAP 0.4.8).
+:func:`eventually` calls ``fn`` until it returns a truthy value, which it returns unchanged; falsy
+values and raised exceptions keep it polling, and an expired deadline raises ``AssertionError``
+naming the last outcome and the poll count (AAP 0.4.3). Deadline time comes from the monotonic clock
+or a supplied clock, and every wait goes through the injected ``sleep`` (AAP 0.7.1, AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -451,45 +389,10 @@ def eventually(
 ) -> T:
     """Poll ``fn`` until it returns a truthy value, or raise once the deadline passes.
 
-    Each poll calls ``fn`` with no arguments. A truthy return value ends the wait and is
-    returned unchanged; a falsy one is remembered and polling continues; an exception raised by
-    ``fn`` is remembered as the last outcome and polling continues too. Once the deadline has
-    passed the helper raises :class:`AssertionError` naming the last value or exception and the
-    number of polls, so a failing wait says what it last saw rather than only that it gave up.
-
-    Every wait goes through ``sleep``, so a caller that injects a recording fake never spends
-    real time. ``KeyboardInterrupt`` and ``SystemExit`` are not caught and leave the helper
-    immediately.
-
-    Args:
-        fn: The zero-argument callable to poll. It receives nothing and its return value is
-            judged by truthiness alone, so a function that signals success by returning
-            ``None`` never satisfies this helper.
-        timeout: How long to keep polling, in seconds. Must be a finite number greater than or
-            equal to zero; ``0`` polls exactly once and fails if that poll is not a success.
-        interval: How long to wait between polls, in seconds. Must be a finite number greater
-            than zero, since a zero-length wait would spin without yielding.
-        sleep: The wait used between polls, called with the number of seconds to wait. Defaults
-            to ``time.sleep``; tests and the ``foundry_poll`` fixture pass a fake.
-        clock: Optional time source used instead of the monotonic clock. It must implement
-            :class:`foundry.core.types.ClockLike`, whose ``now()`` returns the current
-            ``datetime``; the deadline is then measured from the instant the call started.
-            Additive over AAP 0.4.3 and permitted by AAP 0.4.9.
-        redactor: Optional redaction engine for the quoted outcome, normally the run's own,
-            built from ``secrets.redact_keys``, so a configured key is scrubbed out of the
-            message as well as the built-in deny-lists. ``None`` builds one carrying only those
-            deny-lists. Additive over AAP 0.4.3 and permitted by AAP 0.4.9.
-
-    Returns:
-        The first truthy value ``fn`` returned, unchanged.
-
-    Raises:
-        AssertionError: When the deadline passes, when the poll budget is exhausted because a
-            supplied clock never advanced, or when an argument is unusable (``fn`` not
-            callable, ``timeout`` or ``interval`` outside its accepted range, ``sleep`` not
-            callable, ``clock`` without a callable ``now()`` returning a ``datetime``). The
-            message names the last outcome and the poll count, and quotes it redacted and
-            bounded.
+    Each poll calls ``fn`` with no arguments. A truthy return value comes back unchanged; a falsy
+    one or a raised exception is remembered and polling continues. When the deadline passes, or the
+    poll budget ends a stalled clock, ``AssertionError`` names the last outcome and the poll count
+    (AAP 0.4.3); ``clock`` and ``redactor`` are additive over AAP 0.4.3 (AAP 0.4.9).
 
     Example:
         Poll an endpoint until the order it describes is ready, without spending real time::

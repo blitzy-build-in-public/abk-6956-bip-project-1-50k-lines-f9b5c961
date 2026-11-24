@@ -1,34 +1,6 @@
-"""The JSON reader: stdlib ``json`` over array documents and object documents.
+"""The JSON reader: stdlib ``json`` over array documents and object documents (AAP 0.4.7).
 
-A JSON data file is one of the four formats the data engine reads, and this module
-turns one into the neutral document shapes of :mod:`foundry.data.loaders.base`. The
-document-shape rule is deliberately not re-implemented here: an array of objects is
-a table of records, an object whose every value is an array is a matrix of axes, an
-object of scalar fields is a single record, and an empty array or object is the
-empty document -- all of that is decided once, by
-:func:`foundry.data.loaders.base.classify_document`, so JSON and YAML cannot drift
-apart.
-
-What is specific to this reader is turning bytes into a payload. The file is read
-as UTF-8, ``json.loads`` parses it, and each of the four ways that can fail -- an
-unreadable file, a file that is not valid UTF-8, a document that is not valid JSON,
-a document nested too deeply to parse -- is translated into exactly one ``DataError``
-naming the file. A JSON syntax error therefore reaches a user as a located data
-fault rather than as a builtin ``JSONDecodeError`` (AAP 0.4.7, AAP 0.14.3), and that
-translation is the whole of this module's error handling: :meth:`JsonLoader.load`
-raises ``DataError`` and nothing else.
-
-Two consequences of the format matter to a caller. A parsed JSON document carries
-no per-element line notion, so every row of a table produced here holds ``line=None``;
-and the payload's own order is preserved throughout -- no key is sorted, renamed or
-defaulted -- so two runs and two sharding workers derive the same columns in the
-same order (implicit requirement I6).
-
-JSON Lines is a different format with its own reader
-(:mod:`foundry.data.loaders.jsonl`), and schema strictness belongs to
-``foundry.data.schema``; neither is this module's concern. Importing it defines
-names only: no file is opened, no logger is configured and no state is created
-(AAP 0.4.8).
+Shapes come from ``classify_document``; a parsed document has no per-element line notion.
 """
 
 from __future__ import annotations

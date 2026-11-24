@@ -85,7 +85,11 @@ _REDACTED: Final[str] = "***"  # the marker a scrubbed value becomes (AAP 0.3.2)
 _SENTINEL: Final[str] = "s3cr3t-sentinel"  # assembled here, so no scanner reads this as a leak
 _SENTINEL_HEADER: Final[str] = f"Bearer {_SENTINEL}"  # the Authorization value capture must scrub
 _COOKIE_VALUE: Final[str] = "session=cookie-value-8d2f"  # a Cookie value naming no secret word
-_BODY: Final[bytes] = b'{"message":"hello"}'  # the committed fixture's body, so the hashes agree
+# The committed fixture's recorded request body, so the hashes agree: the bytes a session actually
+# sends for ``json={"message": "hello"}``, encoded by httpx here rather than spelled by hand.
+_BODY: Final[bytes] = httpx.Request(
+    "POST", "http://cassette.test/echo", json={"message": "hello"}
+).read()
 _NODEID: Final[str] = "tests/test_api.py::test_checkout[ticket-1]"  # carries /, :: and [
 
 # A host that resolves nowhere: the suite guard refuses every non-loopback name, so a replay that

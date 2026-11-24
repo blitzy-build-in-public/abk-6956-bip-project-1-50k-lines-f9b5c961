@@ -1,38 +1,6 @@
-"""Deterministic ordering and rendering of JSON Schema violations.
+"""Deterministic ordering, rendering and redaction of JSON Schema violations (AAP 0.4.3).
 
-``jsonschema`` yields errors in an order it does not document and ranks relevance by an explicit
-heuristic, so the same invalid document and schema are free to report a different error each run.
-Foundry's contract is that a failure names *the first violation having its JSON path*,
-reproducibly: shallowest JSON path first, then the path compared structurally so an index orders
-numerically, then the rendered path, the message and the schema path -- keyed in :func:`order_key`.
-
-Rendering, redaction and excerpts belong to the same contract, so they live here too.
-:func:`render_violation` formats ``<json_path>: <message> (schema path: ..., validator: ...)`` and
-:func:`to_contract_error` is the single place a :class:`~foundry.core.exceptions.ContractError` is
-built, so the path a caller branches on and the text it reads cannot diverge. Redaction happens on
-the way *out* in those functions, through the engine :mod:`foundry.obs.redaction` owns, because a
-validator message quotes instance values that reach every report and the terminal;
-:func:`excerpt` redacts before it truncates, so no prefix of a secret straddles the cut.
-
-The comparison is total, which is what makes the reported violation identical in every process, on
-every worker, in a serial run and in a sharded one: :func:`sort_violations` and :func:`choose_first`
-are the only implementations of that rule, and ``foundry.contract.validate.first_violation``
-delegates here rather than restating it.
-
-The module does no work at import time: no I/O, no environment read, no logger configuration and no
-module-level mutable state. It imports :mod:`foundry.core.exceptions` at module scope and reaches
-:mod:`foundry.obs` through one lazy import per function that needs it --
-:mod:`foundry.obs.redaction` inside :func:`_resolve_redactor`, which keeps the redaction engine off
-the plugin's startup path, and :mod:`foundry.obs.events` inside :func:`_redact_text`, where the one
-``DEBUG`` record this module can emit comes from. ``jsonschema`` is imported only under
-``TYPE_CHECKING`` for annotations, and the module raises only
-:class:`~foundry.core.exceptions.ContractError`.
-
-Those obs imports are the one deliberate exception to the permitted-import column of AAP 0.4.8,
-which lists ``core`` alone: AAP 0.3.2's capability row lets a capability package import ``obs`` too,
-and AAP 0.14.3 makes :mod:`foundry.obs.redaction` the single engine every sink calls, so the
-``ContractError`` detail a failure displays is scrubbed here before pytest renders it. A layering
-check written from AAP 0.4.8 carries exactly this one exception for this package.
+Shallowest path first, then structurally, then the key; redaction runs on the way out (AAP 0.14.3).
 """
 
 from __future__ import annotations

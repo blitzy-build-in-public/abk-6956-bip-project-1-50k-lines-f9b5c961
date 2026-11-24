@@ -1,45 +1,12 @@
 """The ``foundry config show`` and ``foundry config validate`` subcommands.
 
-AAP 0.4.4 fixes what each command accepts and prints, AAP 0.4.5 fixes the source reporting and
-the two machine-readable documents, and AAP 0.7.3 fixes that a ``--format`` run emits exactly one
-document on stdout. Both commands are presenters and nothing else: the four-layer resolution is
-:func:`foundry.config.merge.resolve`, the table rows and the JSON and TOML documents are
-:mod:`foundry.config.render`, and rows, messages and documents reach the terminal through
-:mod:`foundry.cli.render`. No precedence rule, value coercion, key ordering or redaction rule is
-stated here, because a second statement of one could disagree with the resolution a run performed
-(AAP 0.4.5).
-
-``foundry config show`` reports one of two things. Without ``--resolved`` it reports the
-resolution from defaults, file, profile and environment only, and lists the ``--foundry-*``
-overrides it was given in a separate section titled ``not applied`` (AAP 0.4.4). With
-``--resolved`` those overrides are applied and each value they supplied is attributed to
-``cli:<--option>``, which is what makes criterion 4's ladder and its per-key attribution
-inspectable. ``--foundry-config`` is honoured in both forms: selecting the configuration file is
-not an override of a key, and a resolution cannot report a file it never read.
-
-``foundry config validate`` resolves with every override applied and prints exactly
-``configuration valid (profile=<name>)`` from :func:`foundry.config.errors.success_message`
-(AAP 0.4.4, AAP 0.4.5) -- one template, so the wording and the profile spelling cannot drift.
-
-*A fault is never caught here.* A :class:`foundry.core.exceptions.ConfigError` propagates to
-:func:`foundry.cli.main.main`, which prints its first message on stderr and exits ``2`` with
-nothing on stdout (AAP 0.4.4); every command that returns returns
-:data:`foundry.cli.exit_codes.SUCCESS`.
-
-*Every printed value is redacted.* The configuration stores only the *names* of auth environment
-variables (implicit requirement I9), and a header value or a ``http.base_url`` carrying URL
-userinfo is scrubbed by :func:`foundry.config.render.redactor_for` before it reaches a cell, a
-document or the terminal (AAP 0.3.2, AAP 0.14.3), so this module adds no value path of its own.
-
-*A ``--format`` run prints one document and nothing else* (AAP 0.7.3), which is also why
-:func:`foundry.cli.render.render_document` bypasses ``rich``: a width-dependent wrap would break a
-JSON or TOML line in half.
-
-The option set is built from :data:`foundry.config.keys.KEY_SPECS` rather than listed here, so the
-``--foundry-<dotted.key>`` spellings, their help text and their destinations come from the one
-registry that declares them: a key added to it becomes an option with no edit to this module, and
-no option can drift out of the published key set (AAP 0.4.5). ``rich`` is never imported here; it
-stays inside :mod:`foundry.cli.render` (implicit requirement I5).
+AAP 0.4.4 fixes what each command accepts and prints, AAP 0.4.5 the per-key source reporting and the
+two machine-readable documents, and AAP 0.7.3 that a ``--format`` run emits exactly one document on
+stdout. Both are presenters -- resolution is :func:`foundry.config.merge.resolve`, the rows and
+documents are :mod:`foundry.config.render`, the output is :mod:`foundry.cli.render` -- and a
+:class:`foundry.core.exceptions.ConfigError` propagates to :func:`foundry.cli.main.main`, which
+prints it on stderr and exits ``2`` (AAP 0.4.4). The override options come from
+:data:`foundry.config.keys.KEY_SPECS`.
 """
 
 from __future__ import annotations

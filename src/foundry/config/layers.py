@@ -1,38 +1,11 @@
 """The configuration-layer vocabulary and the per-layer value carriers.
 
-Every configuration value Foundry resolves is produced by one of the layers AAP 0.4.5
-fixes, and each layer hands its contribution on as a :class:`LayerPayload`: what it read
-in flat, dotted-key form, plus the one detail a person needs in order to inspect the
-result -- the file path, the environment variable or the option spelling the value came
-from. :class:`ConfigLayer` names the layers, :data:`LAYER_ORDER` states the order they win
-in, and :func:`layer_label` composes the Source spelling ``foundry config show`` prints.
-The rest of the package speaks that vocabulary instead of restating it, so the precedence
-rule has exactly one edit site.
-
-:data:`LAYER_ORDER` and the enum are immutable constants, not the module-level mutable
-state the layering rules prohibit (AAP 0.4.8): the tuple is built once at import, cannot
-be rebound or mutated, and only :mod:`foundry.data.registry` and
-:mod:`foundry.reporting.renderers` populate a mutable table. Importing this module does
-no I/O, reads no environment variable, configures no logger and parses nothing, and its
-only Foundry imports are :mod:`foundry.config.errors` -- the one place an error message is
-worded -- :mod:`foundry.config.keys`, which says which keys hold a table, and the
-exception type :mod:`foundry.config.errors` returns (AAP 0.4.8, AAP 0.14.3). It does not
-import :mod:`pydantic`: the settings model sits above this vocabulary, and the plugin
-startup budget depends on this file staying cheap (implicit requirement I5). The registry
-is reachable without cost because :mod:`foundry.plugin` already reads it to declare its
-option group, and it is pure standard library.
-
-Two things deliberately live elsewhere. Per-key source attribution belongs to
-:mod:`foundry.config.sources`, which owns ``ConfigSource``, and to
-:mod:`foundry.config.merge`, which records it while it applies the payloads -- the detail
-string carried here is the input to that record, not the record itself (implicit
-requirement I2). The set of valid keys, and its nearest-key suggestion, belong to
-:mod:`foundry.config.keys`; this module asks the registry only which keys hold a table, so
-that :func:`flatten` reports a wrong *shape* -- a value where a table is needed, or a table
-where a value is -- and leaves an unknown *key* to the registry's suggestion logic.
-
-Every mapping this module produces is ordered by sorted key, so a payload, a flattened
-table and a conflict message read identically on two runs and on two workers (AAP 0.13.1).
+Every value Foundry resolves is produced by one of the layers AAP 0.4.5 fixes, and each hands its
+contribution on as a :class:`LayerPayload`: what it read in flat, dotted-key form, plus the detail a
+person needs in order to inspect the result -- the file path, environment variable or option
+spelling the value came from. :class:`ConfigLayer` names the layers, :data:`LAYER_ORDER` states the
+order they win in, and :func:`layer_label` composes the Source spelling ``foundry config show``
+prints, so the precedence rule of AAP 0.4.5 has exactly one edit site in the package.
 """
 
 from __future__ import annotations
@@ -89,30 +62,18 @@ so there is no path, variable or option behind them: it carries this empty detai
 class ConfigLayer(StrEnum):
     """The four resolution layers plus the ``default`` the resolution starts from.
 
-    The members are the layer names AAP 0.4.5 and AAP 0.7.4 publish. Each is a
-    :class:`enum.StrEnum` member and therefore *is* the string ``default``, ``file``,
-    ``profile``, ``env`` or ``cli``: it formats, serialises and compares as that text,
-    which is what lets a resolved configuration report its per-key origin as a plain
-    string without a second conversion, and lets ``foundry config show --format json``
-    write ``"layer": "env"`` with no mapping table in between.
-
-    ``PROFILE`` is a layer of its own rather than part of ``FILE`` because a
-    ``[profiles.<name>]`` table overrides the base file and is overridden by the
-    environment and the CLI: it sits between ``FILE`` and ``ENV`` in
-    :data:`LAYER_ORDER`, and that position is the whole of the profile-precedence rule.
-
-    The five values are part of the published compatibility promise (AAP 0.4.9): a later
-    release may add a member, but a rename or removal would change what
-    ``foundry config show`` and every recorded source report say.
+    The members are the layer names AAP 0.4.5 and AAP 0.7.4 publish, each a :class:`enum.StrEnum`
+    member and therefore *is* its own text, so a resolved configuration reports a per-key origin
+    as a plain string without a second conversion. ``PROFILE`` is a layer of its own rather than a
+    part of ``FILE``: a ``[profiles.<name>]`` table overrides the base file and is overridden by the
+    environment and the CLI, and that position in :data:`LAYER_ORDER` is the whole
+    profile-precedence rule. The five values are part of the published promise (AAP 0.4.9).
 
     A value's layer is one of the five spellings AAP 0.4.5 publishes, and the fifth --
-    ``profile:<name>`` -- carries the selected profile's own name, so no fixed member can
-    hold it. :meth:`_missing_` answers that lookup with an instance of this class that *is*
-    the spelling, which is what lets :attr:`foundry.config.sources.ConfigSource.layer` be
-    typed as this enum while ``config show`` keeps printing ``profile:ci``. An instance is
-    therefore one of the five published spellings -- ``default``, ``file``, ``env`` and
-    ``cli`` as the members above, and the profile-labelled form -- while the member table
-    itself stays the five of AAP 0.4.9.
+    ``profile:<name>`` -- carries the selected profile's own name, so no fixed member can hold it:
+    :meth:`_missing_` answers that lookup with an instance of this class that *is* the spelling,
+    which is what lets :attr:`foundry.config.sources.ConfigSource.layer` be typed as this enum while
+    ``config show`` keeps printing ``profile:ci``.
     """
 
     DEFAULT = "default"
@@ -219,33 +180,13 @@ def layer_label(layer: ConfigLayer, detail: str = DEFAULT_DETAIL) -> str:
 class LayerPayload:
     """One layer's contribution: its values as dotted keys, and what it names itself by.
 
-    A payload is what a layer produces and what :mod:`foundry.config.merge` applies:
     :mod:`foundry.config.files` builds one per configuration file and one for the selected
-    ``[profiles.<name>]`` table, :mod:`foundry.config.env` builds one from the matching
-    ``FOUNDRY_*`` variables, and :mod:`foundry.config.cli_layer` builds one from the
-    overrides an operator typed.
-
-    :attr:`values` is always flat -- ``{"http.retries.max_attempts": 5}`` -- because both
-    facts merge has to record are per dotted key: which layer supplied a key, and whether
-    a key exists at all. The nesting is restored once, by :func:`unflatten`, at the moment
-    the settings model is constructed, so no table is ever partially attributed.
-
-    :attr:`detail` is the file path, variable spelling, option spelling or profile name an
-    operator reads, and it is a *name*, never a value: a payload carrying a credential
-    would leak through ``foundry config show``, ``results.json`` and the report, which is
-    why the configuration stores the name of the variable that holds a secret and not the
-    secret (implicit requirement I9).
-
-    The instance is frozen and slotted: the layer that built a payload cannot later be
-    surprised by an edit, and a reader cannot add an attribute a second reader would have
-    to account for. A changed payload is a new payload. The mapping is held as given and
-    read only -- in the tree it always comes from :func:`flatten`, which returns a fresh
-    dict nobody else keeps.
-
-    Attributes:
-        layer: The layer that produced the values.
-        values: The values as dotted key to leaf value.
-        detail: What the layer names itself by, or :data:`DEFAULT_DETAIL`.
+    ``[profiles.<name>]`` table, :mod:`foundry.config.env` one from the matching ``FOUNDRY_*``
+    variables, and :mod:`foundry.config.cli_layer` one from the overrides an operator typed.
+    :attr:`values` is always flat, because both facts merge records are per dotted key, and the
+    nesting is restored once by :func:`unflatten`. :attr:`detail` is a *name* -- a file path,
+    variable spelling, option spelling or profile name -- never a value, which is why the
+    configuration stores the name of the variable that holds a secret (implicit requirement I9).
     """
 
     layer: ConfigLayer

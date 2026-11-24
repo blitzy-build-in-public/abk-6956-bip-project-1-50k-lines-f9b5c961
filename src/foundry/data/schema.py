@@ -1,17 +1,10 @@
 """JSON Schema enforcement for the rows of a data file.
 
-A data file may carry a *sidecar* schema: a JSON Schema document beside it, discovered under either
-of two spellings -- the data file's own full name plus ``.schema.json``, or its bare stem plus the
-same suffix -- so ``testdata/cart.csv`` is described by ``testdata/cart.csv.schema.json`` or by
-``testdata/cart.schema.json``, and ``testdata/pricing.json`` by
-``testdata/pricing.json.schema.json`` or by ``testdata/pricing.schema.json``. The full-name form
-is tried first and wins when both documents exist, which is what lets ``cart.csv`` and
-``cart.json`` sit in one directory with a schema each; the stem form is there for the sidecar an
-author writes beside the bare stem, and a stem keeps every dot it holds, so ``cart.pricing.csv``
-is described by ``cart.pricing.schema.json``. Nothing else declares a schema -- there is no schema
-key in a data file and none in the configuration -- so the sidecar's presence is the whole
-declaration, and a data file without one is enforced against nothing beyond the shape rules the
-readers apply.
+A data file may carry a *sidecar* schema: a JSON Schema document beside it, discovered under the
+data file's full name plus ``.schema.json`` -- tried first, so ``testdata/cart.csv`` is described by
+``testdata/cart.csv.schema.json`` -- or its bare stem plus the same suffix, so
+``testdata/cart.schema.json`` describes it too. Nothing else declares a schema, so the sidecar's
+presence is the whole declaration and a data file without one is enforced against nothing.
 
 Two checks run for a row, in this order, and both report through
 :func:`foundry.data.loaders.base.data_error`, the package's single ``DataError`` construction
@@ -20,44 +13,29 @@ site, so every fault names the file and, where they are known, the line and the 
 
 1. **Structure, before values.** A column the schema lists in ``required`` that the row does not
    carry is reported by name, and a column the schema's ``properties`` does not declare is
-   reported by name when ``data.schema_strict`` is on (AAP 0.4.5); a schema that declares no
-   ``properties`` fixes no column set, so it has no undeclared column to report. Running this
-   first is what keeps a missing column nameable: the ``required`` complaint a JSON Schema walk
-   produces is located at the document root, where there is no column to report.
-2. **Values, through the contract layer.** The row's values are validated with
-   :func:`foundry.contract.validate.find_violation`, which returns the first violation in
-   Foundry's own order instead of raising, so this module turns it into a located
-   :class:`~foundry.core.exceptions.DataError` whose ``column`` comes from the violation's
-   ``path_parts``. ``jsonschema`` is never imported here: the contract layer owns the walk, the
-   ordering and the redaction, and this module reads only the resulting violation (implicit
-   requirement I5).
+   reported by name when ``data.schema_strict`` is on (AAP 0.4.5). Running this first is what keeps
+   a missing column nameable: the ``required`` complaint a JSON Schema walk produces is located at
+   the document root, where there is no column to report.
+2. **Values, through the contract layer.** :func:`foundry.contract.validate.find_violation` returns
+   the first violation in Foundry's own order instead of raising, so this module turns it into a
+   located :class:`~foundry.core.exceptions.DataError` whose ``column`` comes from the violation's
+   ``path_parts``; ``jsonschema`` is never imported here (implicit requirement I5).
 
-A schema document that loads but is unusable -- a ``type`` holding a number, say -- is refused by
-the contract layer inside that same walk, as a :class:`~foundry.core.exceptions.ContractError`
-naming the sidecar it came from: :func:`enforce_table` labels the document with
-:func:`schema_path_for` of the data file, the decision :func:`load_row_schema` already made for it,
-so an author working in a tree of data files learns which schema to correct.
+A schema document that loads but is unusable is refused by the contract layer inside that same
+walk, as a :class:`~foundry.core.exceptions.ContractError` naming the sidecar it came from.
 
 ``strict=False`` tolerates extra columns: they stay in the row the caller carries forward but are
-left out of the projection the schema validates, so a schema that says nothing about
-``additionalProperties`` does not fail on a column an author added for another consumer.
+left out of the projection the schema validates. Every check is order-stable -- the ``required``
+names, the declared property set and the extra columns are each sorted before the first of them is
+reported -- so the same file reports the same message on every run and on every ``pytest-xdist``
+worker (implicit requirement I6).
 
-Every check is order-stable, which is what makes the reported fault reproducible: the
-``required`` names, the declared property set and the extra columns are each sorted before the
-first of them is reported, and :func:`find_violation` owns the choice of violation. The same file
-therefore reports the same message on every run and on every ``pytest-xdist`` worker (implicit
-requirement I6).
+Enforcement precedes case construction -- :func:`enforce_table` returns the table that
+:func:`foundry.data.cases.build_case_set` converts -- so no case exists for a rejected row and the
+fault surfaces at collection time rather than inside a test.
 
-Enforcement precedes case construction: :func:`enforce_table` returns the table that
-:func:`foundry.data.cases.build_case_set` converts, so no case exists for a row the schema
-rejects, and the fault surfaces at collection time, where pytest reports it as a collection error
-rather than inside a test.
-
-Importing the module defines names and does nothing else (AAP 0.4.8): no schema is loaded at
-import, no file is opened, no environment variable is read and no logger is configured. Its whole
-import list is the standard library, three modules of :mod:`foundry.contract` and
-:mod:`foundry.data.loaders.base`; it never reaches ``http``, ``reporting``, ``cli``, ``plugin``,
-``execution``, ``config``, ``fixtures``, ``db``, ``assertions`` or ``cassette`` (AAP 0.4.8).
+Importing the module defines names and does nothing else (AAP 0.4.8): no schema is loaded, no file
+is opened, no environment variable is read and no logger is configured.
 """
 
 from __future__ import annotations

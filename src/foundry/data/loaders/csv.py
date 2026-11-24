@@ -1,31 +1,6 @@
-"""The CSV reader of the data engine, built on the standard library's ``csv`` module.
+"""The CSV reader of the data engine, built on the standard library's ``csv`` module (AAP 0.4.7).
 
-A ``.csv`` file reaches :mod:`foundry.data` as a table: the header line names the columns and
-every following non-blank line is one row of values in that column order. Nothing about the
-format survives the read -- no dialect, no delimiter guess, no encoding sniff -- so the case
-builder, the matrix expander and the schema checker downstream depend on the table shape rather
-than on a parser (AAP 0.3.2).
-
-Line numbers are the reader's own, reported where a record starts. ``csv.reader.line_num`` is
-1-based and counts *physical* lines as the reader consumes them, so once a record has been read it
-names that record's last line; the reader therefore remembers where the previous record ended and
-reports the next line as the one the following record starts on. A header on line 1 makes the
-first data row line 2, a quoted field holding a newline moves the records after it past every line
-it covers, and a blank line between records still occupies its own line. A row's ``line`` is
-therefore the physical line the record starts on -- the same contract ``RawRow.line`` and
-``Case.line`` state -- which is the line the collection-time error of AAP 0.4.7 reports beside the
-file and the column.
-
-This module raises only ``DataError``, and only through
-:func:`foundry.data.loaders.base.data_error`, so every fault carries the file, the line and the
-column it was found at (AAP 0.14.3). The parser's own exceptions -- ``UnicodeDecodeError``,
-``csv.Error`` and ``OSError`` -- are caught once, at the single boundary in
-:meth:`CsvLoader.load`, and translated there with their original text preserved; a ``DataError``
-raised for a malformed header or a ragged row travels through that boundary untouched.
-
-Importing the module defines names only: no file is opened, no configuration is read, no logger
-is configured and no mutable module state is created beyond :data:`LOADER`, which
-:mod:`foundry.data.registry` imports to seed its loader table (AAP 0.4.8).
+A row's ``line`` is the physical line its record starts on; every fault names file and line.
 """
 
 from __future__ import annotations

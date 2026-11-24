@@ -30,7 +30,7 @@
     },
     {
       "request": {
-        "body_sha256": "9b2d43affbf49a367028df2e1414f84c0e099ac98c3d54a8a80157fd7771af25",
+        "body_sha256": "cf8f644b80ee8100db6f910fa33514be8e0ac3d3f54546de914b34c2206ad6a9",
         "headers_subset": {
           "accept": "application/json",
           "content-type": "application/json"

@@ -1,18 +1,6 @@
-"""Stable identifiers for the cases a data file expands into.
+"""Stable identifiers for the cases a data file expands into (AAP 0.7.2).
 
-A data-driven case needs a name that a serial run and every xdist worker agree on, because
-the controller aborts the run when two workers collect different collections (implicit
-requirement I6). An id here comes from the data file's stem and either the row's 0-based
-position or the case's axis values, and from nothing else: no clock, no worker id, no host.
-
-The two id shapes belong to :mod:`foundry.core.ids`, which owns ``case_id_for_row`` and
-``case_id_for_matrix``; the functions here delegate to it and restate neither the format nor
-the axis sorting nor the canonical JSON rendering of an axis value. AAP 0.7.2 names one
-function, ``case_id()``, published here as :func:`tabular_case_id` and
-:func:`matrix_case_id` because the two shapes take disjoint inputs and one dispatcher could
-not reject a malformed call without a bare builtin error (AAP 0.14.3).
-
-Importing the module defines names and does nothing else (AAP 0.4.8).
+Every id comes from the file's stem plus a row position or axis values, never a clock or a worker.
 """
 
 from __future__ import annotations

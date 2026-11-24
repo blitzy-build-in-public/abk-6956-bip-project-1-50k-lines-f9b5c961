@@ -1,43 +1,12 @@
 """The one place Foundry renders terminal output.
 
-Every command line module hands this renderer plain data -- rows, node ids, one message, one
-document -- and receives nothing back: widths, colours, borders and the stdout/stderr choice live
-here and nowhere else (AAP 0.7.1, AAP 0.7.4). The four surfaces are the ``Key`` / ``Value`` /
-``Source`` table of ``foundry config show``, the ``Probe`` / ``Status`` / ``Detail`` table of
-``foundry doctor``, the three labelled groups of ``foundry report compare``, and the plain lines,
-messages, errors and documents the remaining commands print.
-
-*Rich is imported lazily.* ``rich`` is imported inside the body of each function that needs it and
-never at module scope, so ``import foundry.cli.render`` leaves ``rich`` out of :data:`sys.modules`
-and the pytest activation path pays for nothing until a command actually renders (implicit
-requirement I5, the 150 ms startup budget of AAP 0.14.2). ``click`` is imported at module scope for
-the one thing that must not go through ``rich``: :func:`render_document`.
-
-*Every rendered value is redacted.* Each function takes ``redactor`` and passes every cell, message,
-hint and line through :meth:`foundry.obs.redaction.Redactor.text` before it reaches the console, so
-the one redaction engine of AAP 0.3.2 covers the terminal as it covers every file (AAP 0.14.3). A
-configuration error names the absent environment variable, never its value (implicit requirement
-I9), and a rendering path here cannot reintroduce one.
-
-*Output is deterministic.* No clock is read, nothing sleeps, no ``set`` or bare ``dict`` is
-iterated on its way to the console, and every collection is printed in the order it arrived -- the
-callers supply the sorted order (AAP 0.13.1). Machine-readable documents bypass ``rich`` entirely,
-because a width-dependent wrap would corrupt a JSON or TOML document, which is why
-:func:`render_document` writes through :func:`click.echo`.
-
-*Presentation is plain English on rich's defaults.* Light, unstyled output with no custom theme and
-no custom style table (AAP 0.6): ``pass``, ``warn`` and ``fail`` are distinguished by rich's own
-built-in style names and by nothing else, and markup in a value is never interpreted -- every
-value is wrapped in :class:`rich.text.Text` rather than handed to the markup parser, so a node id
-such as ``test_login[case-1]`` prints as written.
-
-*Faults are isolated.* Nothing here raises on a caller's data: a row that is not three cells
-contributes the cells it has. A write fault such as :exc:`BrokenPipeError` or :exc:`OSError` is the
-one thing allowed to leave a function, and it travels no further than the caller's guard, which
-logs it at ``WARNING`` and changes neither a test's outcome nor an exit code (AAP 0.1.2).
-
-Importing this module performs no I/O, reads no environment variable, configures no logger and holds
-no mutable state (AAP 0.4.8); the only tables it populates are the read-only constants below.
+Every CLI module hands this renderer plain data -- rows, node ids, one message, one document -- and
+receives nothing back: widths, colours, borders and the stdout/stderr choice live here (AAP 0.7.1,
+AAP 0.7.4). ``rich`` is imported inside each function that needs it, so the pytest activation path
+pays for nothing until a command renders (I5, AAP 0.14.2), and every cell, message and line passes
+through the redactor before it reaches the console (AAP 0.3.2, AAP 0.14.3). Output is deterministic
+and unstyled on rich's own defaults, with no value ever interpreted as markup, and a write fault
+travels no further than the caller's guard (AAP 0.13.1, AAP 0.6, AAP 0.1.2).
 """
 
 from __future__ import annotations

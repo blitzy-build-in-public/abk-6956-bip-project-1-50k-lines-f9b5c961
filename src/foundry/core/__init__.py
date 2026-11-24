@@ -1,14 +1,9 @@
 """The foundation package: the vocabulary every other Foundry package speaks.
 
-It defines the exception hierarchy a module raises across a boundary, the shared
-pytest-phase, artifact-kind and quarantine vocabularies, the node id encoding and path
-containment rules, and the identifier and timestamp formats. Nothing here imports another
-Foundry package or a third-party distribution, and the plugin reaches this package on
-every pytest startup, so it defines names only: no I/O, no environment read, no logger
-configuration and no heavy import.
-
-It is the stable import root: consumers and the other packages import these names from
-``foundry.core`` rather than from the sibling modules that define them.
+It defines the exception hierarchy a module raises across a boundary, the phase, artifact-kind
+and quarantine vocabularies, node id encoding and path containment, and the id and timestamp
+formats. It is the stable import root and the stdlib-only foundation rung, so importing it
+defines names only: no I/O, no environment read, no logger configuration (AAP 0.4.8).
 """
 
 from typing import Final

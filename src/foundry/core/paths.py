@@ -1,11 +1,9 @@
-"""The sole implementation of node id encoding and path containment.
+"""The sole implementation of node id encoding and path containment (AAP 0.3.2, AAP 0.14.3).
 
-Two rules live here so that a consumer which builds a path itself is a bug: percent-encoding
-with an empty safe set is injective, so two node ids never share an artifact directory, and
-every candidate path is resolved and rejected when the resolved location is not the run
-directory or a descendant of it (AAP 0.3.2). The encoding is deterministic across processes,
-so the controller and every parallel worker derive the same directory for the same test, and
-nothing here creates, changes or removes a file.
+Percent-encoding with an empty safe set is injective, so two node ids never share an artifact
+directory, and every candidate path is resolved and rejected when it is not the run directory or a
+descendant of it. The encoding is deterministic across processes, so the controller and every worker
+derive one directory for one test, and nothing here creates, changes or removes a file.
 """
 
 from __future__ import annotations
@@ -29,35 +27,21 @@ MAX_NODEID_NAME_LENGTH: Final[int] = 180
 """Maximum length of an encoded node id used as a single path component.
 
 A POSIX name is limited to 255 bytes; 180 leaves room for the ``.json`` suffix a cassette adds,
-truncation's separator and digest, and the slack a filesystem or archive tool may reserve. The limit
-counts encoded characters, and :func:`quote_from_bytes` emits one ASCII character per non-unreserved
-byte, so the character count is also the byte count.
+truncation's separator and digest, and filesystem slack. One encoded character is one ASCII byte.
 """
 
 
 def sanitize_nodeid(nodeid: str) -> str:
-    """Encode a pytest node id as one deterministic, filesystem-safe name.
+    """Encode a pytest node id as one deterministic, filesystem-safe path component.
 
-    Percent-encoding with an empty safe set escapes every character outside ``A-Za-z0-9_.-~``, so
-    the mapping is injective and the result is a single component with no path separator. An
-    encoding longer than :data:`MAX_NODEID_NAME_LENGTH` keeps its first 180 characters and appends
-    a hyphen plus eight hex digits of the node id's SHA-256, which keeps truncation deterministic
-    and keeps two long ids with a shared prefix apart.
-
-    The function is **not idempotent** -- a second call escapes the ``%`` signs again, so ``%2F``
-    becomes ``%252F`` -- so every caller applies it exactly once. The value is a file name, not the
-    node id stored in ``results.json``, which carries the unsanitised id.
-
-    A node id derived from a file name that is not valid UTF-8 carries lone surrogates, which
-    ``surrogatepass`` encodes so the mapping stays injective and the function is total instead of
-    raising ``UnicodeEncodeError`` into artifact capture.
-
-    Returns:
-        One path component, at most :data:`MAX_NODEID_NAME_LENGTH` characters plus nine.
+    Percent-encoding with an empty safe set makes the mapping injective; an encoding longer than
+    :data:`MAX_NODEID_NAME_LENGTH` keeps its first 180 characters and appends a hyphen plus eight
+    hex digits of the node id's SHA-256. The function is **not idempotent** -- a second call escapes
+    the ``%`` signs again -- so every caller applies it once, and the name is not the node id stored
+    in ``results.json``. ``surrogatepass`` keeps a lone surrogate encodable.
 
     Raises:
-        FoundryError: ``nodeid`` is empty or contains only whitespace, because no meaningful
-            artifact directory can be derived from it.
+        FoundryError: ``nodeid`` is empty or contains only whitespace.
     """
     if not nodeid.strip():
         raise FoundryError(
@@ -76,13 +60,9 @@ def sanitize_nodeid(nodeid: str) -> str:
 def resolve_under(root: Path, candidate: str | Path) -> Path:
     """Resolve ``candidate`` and require it to stay inside ``root``.
 
-    An absolute candidate is resolved on its own and a relative one is joined to the resolved root,
-    so both forms pass the same check. Resolution is non-strict, so a symlink that does exist is
-    followed, which is what rejects an artifact directory pointing outside the run; a path equal to
-    ``root`` is accepted. This is the single containment check for artifact and cassette paths.
-
-    Returns:
-        The resolved absolute path, ``root`` itself or a descendant of it.
+    An absolute candidate is resolved on its own and a relative one joined to the resolved root.
+    Resolution is non-strict, so a symlink is followed, which is what rejects an artifact directory
+    pointing outside the run; a path equal to ``root`` is accepted.
 
     Raises:
         ArtifactError: The resolved path is outside ``root``; it carries ``attempted_path`` and
@@ -104,19 +84,11 @@ def resolve_under(root: Path, candidate: str | Path) -> Path:
 
 
 def artifact_dir_for(run_dir: Path, nodeid: str) -> Path:
-    """Return the per-test artifact directory for ``nodeid``.
+    """Return the per-test artifact directory for ``nodeid``: ``artifacts/<run_id>/<name>/``.
 
-    Implements the ``artifacts/<run_id>/<sanitized-nodeid>/`` layout: one directory per collected
-    item, so parallel workers never contend for the same file. Creating it belongs to the artifact
-    writer.
-
-    The artifact writer renders a node id through the redaction engine first, so a parametrised id
-    carrying a credential cannot name a directory and a caller rebuilding a live test's directory
-    must pass that same scrubbed node id; the final component is :func:`sanitize_nodeid` of
-    ``nodeid``, applied exactly once.
-
-    Returns:
-        The resolved absolute directory inside ``run_dir``, named by :func:`sanitize_nodeid`.
+    One directory per collected item, so parallel workers never contend for the same file; creating
+    it belongs to the artifact writer. That writer renders a node id through the redaction engine
+    first, so a caller rebuilding a live test's directory must pass the same scrubbed node id.
 
     Raises:
         FoundryError: ``nodeid`` is empty or whitespace-only.
@@ -126,15 +98,10 @@ def artifact_dir_for(run_dir: Path, nodeid: str) -> Path:
 
 
 def relative_artifact_path(path: Path, run_dir: Path) -> str:
-    """Return ``path`` relative to ``run_dir`` using forward slashes.
+    """Return ``path`` relative to ``run_dir`` with forward slashes, for records and manifests.
 
-    This produces the ``path`` field of an artifact entry in ``results.json`` and the ``file`` value
-    in a manifest, so it is comparable between macOS and Linux. A path equal to the run directory
-    yields ``"."``; the ``..`` check states the rule that a stored artifact path never contains one,
-    and it fires only if a containment assumption has broken.
-
-    Returns:
-        The resolved path relative to ``run_dir``, with ``/`` separators and no leading one.
+    A path equal to the run directory yields ``"."``, and the ``..`` check fires only if a
+    containment assumption has broken.
 
     Raises:
         ArtifactError: ``path`` escapes ``run_dir``, or the relative path contains ``..``.
@@ -156,13 +123,8 @@ def relative_artifact_path(path: Path, run_dir: Path) -> str:
 
 
 def _is_within(path: Path, root: Path) -> bool:
-    """Return whether ``path`` is ``root`` or lies beneath it.
+    """Return whether resolved ``path`` is ``root`` or lies beneath it.
 
-    Both arguments are already resolved; equality covers the root and
-    :meth:`pathlib.Path.is_relative_to` avoids the string-prefix mistake that would accept
-    ``/tmp/run-other`` for ``/tmp/run``.
-
-    Returns:
-        ``True`` when ``path`` equals ``root`` or is a descendant of it.
+    ``is_relative_to`` avoids the string-prefix mistake that would accept ``/tmp/run-other``.
     """
     return path == root or path.is_relative_to(root)

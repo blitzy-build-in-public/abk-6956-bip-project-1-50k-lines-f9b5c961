@@ -1,18 +1,9 @@
 """Observability for Foundry: the logger, the log ring, the redactor, the artifact writer.
 
-``foundry.obs`` is the foundation package every other Foundry package logs, redacts and persists
-through: :mod:`foundry.obs.logging` owns the single ``foundry`` logger and its one ``NullHandler``,
-:mod:`foundry.obs.capture` the bounded log ring, :mod:`foundry.obs.redaction` the one redaction
-engine every sink calls before it writes, :mod:`foundry.obs.artifacts` and
-:mod:`foundry.obs.manifest` the per-test artifact writer and its manifest, and
-:mod:`foundry.obs.events` the lifecycle lines a run emits. This module is the barrel naming them.
-
-**Import rule** (AAP 0.4.8). The package imports :mod:`foundry.core` and nothing else of Foundry,
-and no third-party distribution, which keeps ``foundry.plugin`` inside the 150 ms startup budget
-(AAP 0.14.2). **Who writes.** Only :mod:`foundry.obs.artifacts`, :mod:`foundry.cassette.store` and
-:mod:`foundry.reporting.store` write files. **Faults.** A plumbing fault logs at ``WARNING`` on the
-``foundry`` logger and changes neither a test's outcome nor the exit code, the HTML fallback
-excepted; importing this module defines names only.
+The barrel over ``logging``, ``capture``, ``redaction``, ``artifacts``, ``manifest`` and ``events``
+(AAP 0.4.8): one logger, one bounded log ring, the single redaction engine every sink calls before
+it writes, the artifact writer with its manifest, and the lifecycle lines a run emits. Importing it
+defines names only and pulls in no third-party distribution (AAP 0.14.2).
 """
 
 from .artifacts import ARTIFACT_FILENAMES as ARTIFACT_FILENAMES

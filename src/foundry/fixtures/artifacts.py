@@ -1,60 +1,37 @@
 """The ``foundry_run_id`` and ``foundry_artifacts`` fixtures: one identity and one artifact tree.
 
-``foundry_run_id`` and ``foundry_artifacts`` are two of Foundry's twelve public fixtures, both fixed
-by AAP 0.4.3. Both are session scoped, because a run has exactly one identity and one artifact tree:
-``foundry_run_id`` returns the ``YYYYmmddTHHMMSS-<6 hex>`` identifier of the session, and
-``foundry_artifacts`` returns that run's :class:`FoundryArtifacts` writer, whose ``dir_for``,
-``write`` and ``manifest`` members are the published contract.
+Both are among Foundry's twelve public fixtures, both fixed by AAP 0.4.3 and both session scoped,
+because a run has exactly one identity and one artifact tree: ``foundry_run_id`` returns the
+``YYYYmmddTHHMMSS-<6 hex>`` identifier of the session, and ``foundry_artifacts`` returns that run's
+:class:`FoundryArtifacts` writer, whose ``dir_for``, ``write`` and ``manifest`` members are the
+published contract.
 
-**The layout.** One directory per collected item, named by its percent-encoded node id, so parallel
-workers never contend for a file (AAP 0.4.6)::
+**The layout** (AAP 0.4.6). One directory per collected item, named by its percent-encoded node id,
+so parallel workers never contend for a file::
 
-    artifacts/<run_id>/<sanitized-nodeid>/request.json
-                                          /response.json
-                                          /stdout.log
-                                          /stderr.log
-                                          /traceback.txt
-                                          /log_tail.log
-                                          /manifest.json
+    artifacts/<run_id>/<sanitized-nodeid>/request.json, response.json, stdout.log, stderr.log,
+                                          traceback.txt, log_tail.log, manifest.json
 
 ``artifacts.dir`` roots the tree and ``artifacts.keep_passed`` decides whether a passing test keeps
-its files or only ``manifest.json`` (AAP 0.4.5). The writer owns all of that: the encoding lives in
+its files or only ``manifest.json`` (AAP 0.4.5); the encoding lives in
 :func:`foundry.core.paths.sanitize_nodeid` and the pruning in
-:meth:`foundry.obs.artifacts.ArtifactWriter.finalize`, and nothing here re-implements either.
+:meth:`foundry.obs.artifacts.ArtifactWriter.finalize`. The run id is generated here, through
+:func:`foundry.core.ids.run_id`, because ``foundry.fixtures`` may not import the plugin's session
+stash (AAP 0.4.8 puts the typed keys in ``foundry.execution``), and the plugin's own bootstrap uses
+the same function.
 
-**Why the run id is generated here.** A run id names the directory the artifacts written through
-this fixture live under, and this module builds it with :func:`foundry.core.ids.run_id`, the single
-implementation of the format, because ``foundry.fixtures`` may not read the plugin's session stash:
-AAP 0.4.8 puts the typed stash keys in ``foundry.execution``, which this package may not import.
-The plugin's own bootstrap uses the same function for its report, so both agree in shape.
+**Failure isolation** (AAP 0.4.7). An artifacts directory that cannot be written disables capture
+for the run: the writer reports the fault once at ``WARNING`` on the ``foundry`` logger, every later
+``write`` returns ``None``, and no test outcome or exit code changes. A path escaping the run
+directory still surfaces as :class:`foundry.core.exceptions.ArtifactError` (AAP 0.14.3), and no
+directory is created eagerly, so an unwritable directory stays observable.
 
-**Failure isolation.** An artifacts directory that cannot be written disables capture for the run:
-the writer reports the fault once at ``WARNING`` on the ``foundry`` logger, every later ``write``
-returns ``None``, and no test outcome and no exit code changes (AAP 0.4.7). Nothing here adds a
-second check that could raise, and nothing here catches
-:class:`foundry.core.exceptions.ArtifactError` -- a path escaping the run directory must surface,
-because a traversal attempt is a defect rather than a fault to absorb (AAP 0.14.3). No directory is
-created eagerly either, so a session that never wants an artifact never touches the filesystem, and
-the disabled state stays observable.
-
-**Determinism.** The run id is the only non-deterministic value this module produces: the writer is
-built from configuration and that id alone, and holds no clock reading of its own (AAP 0.14.3).
-
-**Imported lazily.** This module is imported by ``foundry.plugin`` during ``pytest_configure``, at
-every pytest start, inside the 150 ms budget (AAP 0.14.2), while only a minority of suites read
-artifacts. Module scope therefore imports ``pytest``, the standard library and nothing else of
-Foundry: :mod:`foundry.core.ids`, :mod:`foundry.core.exceptions`, :mod:`foundry.obs.artifacts` and
-:mod:`foundry.obs.redaction` are imported inside the fixture that first needs them, and the names
-used in annotations are imported under ``TYPE_CHECKING``.
-
-**Layering** (AAP 0.4.8). This module imports :mod:`foundry.core` and, lazily, :mod:`foundry.obs`,
-plus :mod:`foundry.config` for the ``foundry_config`` fixture's annotation only -- the one upward
-edge the fixture set is allowed. It imports no ``foundry.execution``, ``foundry.reporting``,
-``foundry.cli`` or ``foundry.plugin``, and no fixture here opens a socket, starts a thread or reads
-the environment: the fixture lifecycle stays single-threaded and deterministic.
-
-Importing this module defines names only: the protocol and the two fixture functions. It holds
-no module-level state, performs no I/O and reads no environment variable (AAP 0.4.8).
+**Lazily imported and layered** (AAP 0.4.8, AAP 0.14.2). ``foundry.plugin`` imports this module
+during ``pytest_configure`` at every pytest start, inside the 150 ms budget, so module scope imports
+``pytest``, the standard library and nothing else of Foundry: the ``foundry.core.ids``,
+``foundry.core.exceptions``, ``foundry.obs.artifacts`` and ``foundry.obs.redaction`` imports sit
+inside the fixture that first needs them, and annotation names are imported under
+``TYPE_CHECKING``. Importing this module defines names only and holds no module-level state.
 """
 
 from __future__ import annotations
@@ -77,14 +54,12 @@ class FoundryArtifacts(Protocol):
 
     The three published members only, and :class:`foundry.obs.artifacts.ArtifactWriter` satisfies
     them structurally, so a test can annotate its parameter with this protocol without importing
-    :mod:`foundry.obs` -- the layering contract keeps that direction of the dependency in the type
-    rather than in an import, exactly as :class:`foundry.core.types.ClockLike` does for the poller.
+    :mod:`foundry.obs`, exactly as :class:`foundry.core.types.ClockLike` does for the poller.
 
-    ``dir_for`` is the session-scoped half: it answers with the directory of any collected item,
-    naming it by its sanitised node id and creating it on first use. ``write`` and ``manifest`` are
-    the per-test half, because an artifact belongs to one test's directory: they address the test
-    :meth:`foundry.obs.artifacts.ArtifactWriter.for_node` bound the writer to, and a session-scoped
-    writer that has not been bound raises rather than guessing where a file should go.
+    ``dir_for`` is the session-scoped half: it answers with the directory of any collected item.
+    ``write`` and ``manifest`` are the per-test half, because an artifact belongs to one test's
+    directory: they address the test :meth:`foundry.obs.artifacts.ArtifactWriter.for_node` bound the
+    writer to, and a session-scoped writer that has not been bound raises rather than guessing.
     """
 
     def dir_for(self, nodeid: str) -> Path:
@@ -92,15 +67,14 @@ class FoundryArtifacts(Protocol):
 
         Args:
             nodeid: The pytest node id, unsanitised; the writer scrubs it through the redaction
-                engine and percent-encodes it, so the returned directory is one component inside the
-                run directory and never a path the node id could steer elsewhere.
+                engine and percent-encodes it, so the directory is one component inside the run
+                directory and never a path the node id could steer elsewhere.
 
         Returns:
             The resolved absolute directory, ``artifacts/<run_id>/<sanitized-nodeid>/``.
 
         Raises:
-            foundry.core.exceptions.FoundryError: The node id is empty or whitespace-only, so no
-                meaningful artifact directory can be derived from it.
+            foundry.core.exceptions.FoundryError: The node id is empty or whitespace-only.
             foundry.core.exceptions.ArtifactError: The derived path escapes the run directory, which
                 a symlink inside it can cause.
         """
@@ -118,8 +92,7 @@ class FoundryArtifacts(Protocol):
             kind: Which artifact this is, one of the seven values of
                 :data:`foundry.core.types.ArtifactKind`; it selects the file name ``name`` does not.
             name: An extra artifact's relative path inside the test's directory, or ``None`` to use
-                the fixed file name the kind has. A blank name, an absolute one or one with ``..``
-                is rejected.
+                the fixed file name the kind has. A blank, absolute or ``..`` name is rejected.
             data: The payload, as text or as bytes decoded as UTF-8 with replacement.
 
         Returns:
@@ -154,22 +127,19 @@ def foundry_run_id() -> str:
 
     Session scoped (AAP 0.4.3), so every artifact of a session lands under the one
     ``artifacts/<run_id>/`` directory and the id a test reads is the id that names that directory.
-
     The value comes from :func:`foundry.core.ids.run_id`, the one implementation of the format, and
-    is checked with :func:`foundry.core.ids.is_valid_run_id` before it is returned: the pattern is
-    published as a contract (AAP 0.4.6), so it is verified at its producer instead of being assumed.
+    is checked with :func:`foundry.core.ids.is_valid_run_id` before it is returned, because the
+    pattern is published as a contract (AAP 0.4.6).
 
     The six random hexadecimal characters and the UTC timestamp make this the only non-deterministic
-    value this module produces. Nothing here derives a second one and nothing caches the value at
-    module scope, so every session gets the id its own run wrote under.
+    value this module produces, and nothing caches it at module scope.
 
     Returns:
         The run id, for example ``20250102T030405-9f3c1a``.
 
     Raises:
         foundry.core.exceptions.ArtifactError: The generated value does not match the published
-            pattern. That is a defect in Foundry rather than in the suite under test, so it surfaces
-            as a typed error instead of being replaced by a freshly drawn id.
+            pattern, which is a defect in Foundry rather than in the suite under test.
     """
     from foundry.core.exceptions import ArtifactError
     from foundry.core.ids import is_valid_run_id, run_id
@@ -197,36 +167,30 @@ def foundry_artifacts(
     Session scoped (AAP 0.4.3): one writer per run, holding the root the run's per-test directories
     hang from. It is built from the resolved configuration and the run id alone -- no clock reading,
     no filesystem access -- so constructing it is free and no directory exists until a test asks for
-    one, which is what keeps an unwanted artifact tree off the disk and the unwritable-directory
-    state observable rather than raised (AAP 0.4.7).
+    one, which keeps an unwanted artifact tree off the disk and the unwritable-directory state
+    observable rather than raised (AAP 0.4.7).
 
     Redaction is wired in twice on purpose: ``secrets.redact_keys`` is the project's own deny-list,
     which only widens the header and query deny-lists :class:`foundry.obs.redaction.Redactor` always
-    applies, and the writer then scrubs every payload, file name and the node id it writes through
-    that engine before serialisation (AAP 0.3.2). A configured secret therefore has no route onto
-    the disk, into ``manifest.json`` or into a report.
+    applies, and the writer then scrubs every payload, file name and node id it writes through that
+    engine (AAP 0.3.2). A configured secret therefore has no route onto the disk, into
+    ``manifest.json`` or into a report.
 
     Args:
-        foundry_config: The resolved configuration. ``artifacts.dir`` is the root of the artifact
-            tree, ``artifacts.keep_passed`` decides whether a passing test keeps its files or only
-            ``manifest.json``, ``secrets.redact_keys`` widens the redaction deny-list and
-            ``profile`` is recorded in every manifest. The profile is rendered with ``str``, so a
-            configuration whose ``model_copy`` installs the name as a plain string -- the override
-            :func:`foundry.fixtures.config.foundry_config` documents -- still builds the writer.
-            The log tail's capacity is ``logging.capture_lines``, which the log ring owns; the
-            writer is handed the lines.
+        foundry_config: The resolved configuration. ``artifacts.dir`` roots the artifact tree and
+            ``artifacts.keep_passed`` decides whether a passing test keeps its files, while
+            ``secrets.redact_keys`` widens the deny-list and ``profile`` is recorded in every
+            manifest, rendered with ``str`` so a ``model_copy`` override that installs a plain
+            string still builds the writer.
         foundry_run_id: The session's run id, which is the directory name inside ``artifacts.dir``.
 
     Returns:
-        The run's writer, typed as :class:`FoundryArtifacts`. Its ``dir_for`` serves the whole
-        session, while ``write`` and ``manifest`` address the one test the writer is bound to, which
-        is what :meth:`foundry.obs.artifacts.ArtifactWriter.for_node` returns.
+        The run's writer, typed as :class:`FoundryArtifacts`.
 
     Raises:
         foundry.core.exceptions.ArtifactError: The run directory joined with the run id would escape
-            ``artifacts.dir``, or the run id is blank. Neither can happen with an id
-            :func:`foundry_run_id` produced, and the error is deliberately not caught here: a path
-            containment fault must surface rather than be absorbed (AAP 0.14.3).
+            ``artifacts.dir``, or the run id is blank. Deliberately not caught here: a path
+            containment fault must surface (AAP 0.14.3).
     """
     from foundry.obs.artifacts import ArtifactWriter
     from foundry.obs.redaction import Redactor

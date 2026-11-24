@@ -1,34 +1,13 @@
 """Unit tests for the ``foundry.obs`` foundation package.
 
-Six modules, each pinned to the contract it owns (AAP 0.2.1, 0.3.2, 0.4.6, 0.4.7, 0.4.8, 0.13.1,
-0.14.3):
+Each of its six modules is pinned to the contract it owns (AAP 0.2.1, 0.3.2, 0.4.6, 0.4.7, 0.4.8,
+0.13.1, 0.14.3): ``logging`` moves only the ``foundry`` logger's level; ``capture`` keeps a bounded
+ring and returns the last ``n`` records (I7); ``redaction`` is the one engine every sink calls,
+asserted on the serialised form; ``manifest`` and ``artifacts`` publish the per-test layout and
+disable capture with one ``WARNING``; ``events`` emits nothing above ``WARNING``.
 
-* ``logging`` owns the ``foundry`` logger and nothing else: ``configure`` moves that logger's level
-  and leaves the root logger's handlers, its level and the manager-wide ``disable`` flag untouched,
-  because a library that reconfigures its host breaks every other library in the process.
-* ``capture`` keeps a bounded ring of the newest records and returns the *last* ``n`` in order,
-  ``tail(0)`` being the empty tuple rather than everything (implicit requirement I7).
-* ``redaction`` is the one engine every sink calls before it writes, so the assertions inspect the
-  **serialised** form -- ``json.dumps`` of a redacted mapping and the bytes of a written artifact --
-  because a test that only walks the object graph passes while the writer leaks.
-* ``manifest`` publishes the field set, the size and the digest of every artifact file, and
-  ``artifacts`` writes the per-test layout, where a directory that cannot be created disables
-  capture with one ``WARNING`` and no exception: the AAP 0.4.7 state row, proven at unit level.
-* ``events`` emits nothing above ``WARNING`` -- the single ``INFO`` line of a run, the ``DEBUG``
-  detail lines and the two ``WARNING`` failure-isolation lines -- with free text scrubbed.
-
-Three expectations differ from the brief this file was written against, the modules on disk being
-authoritative: ``manifest.render`` serialises in the published field order rather than with
-``sort_keys=True``, its stability coming from the frozen dataclass and the ordered ``artifacts``
-tuple; ``write_manifest`` returns ``None`` when the run directory itself cannot be created, so
-``artifacts_disabled: true`` is read from the second scenario's manifest, a write that fails *after*
-the directory exists; and ``LogRing.records`` holds records while ``tail(n)`` formats them.
-
-Determinism and isolation (AAP 0.14.3): inputs live in ``tmp_path``, the loggers this module changes
-are restored by the ``restore_foundry_logger`` fixture, nothing sleeps and no wall-clock value is
-asserted, and no pytest machinery, subprocess, network call or CLI is driven here -- the pytester,
-subprocess and ``CliRunner`` surfaces of AAP 0.14.5 are the business of ``tests/plugin`` and
-``tests/e2e``.
+Isolation (AAP 0.14.3): inputs live in ``tmp_path``, the loggers this module changes are restored
+by ``restore_foundry_logger``, and nothing sleeps or reads the wall clock.
 """
 
 from __future__ import annotations
@@ -46,8 +25,7 @@ from foundry.core.types import ARTIFACT_KINDS
 from foundry.obs import artifacts, capture, events, manifest, redaction
 from foundry.obs import logging as obs_logging
 
-# A run id of the shape AAP 0.4.3 publishes, a profile from AAP 0.4.5's four, a realistic node id
-# carrying "/", "::" and "[", and a fixed `created_at` so no assertion reads the wall clock.
+# Fixed run id, profile, node id and creation time, so no assertion reads the wall clock.
 _RUN_ID = "20250102T030405-abc123"
 _PROFILE = "ci"
 _NODEID = "tests/test_api.py::test_cart[1]"
@@ -64,9 +42,6 @@ _DENY_LISTED_HEADERS: tuple[tuple[str, str], ...] = (
     ("Set-Cookie", "sid=cookie-credential; HttpOnly"),
     ("X-API-Key", "api-key-credential"),
 )
-
-
-# --- Helpers and fixtures ---------------------------------------------------
 
 
 def _record(
@@ -113,8 +88,8 @@ def _foundry_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord
 def restore_foundry_logger() -> Iterator[None]:
     """Restore the ``foundry`` logger's level, handlers and propagation after the test.
 
-    The suite shares one process, so a test that configures the level or attaches a ring would
-    otherwise decide what every later test observes (AAP 0.4.8: one owner per piece of state).
+    The suite shares one process, so a test that configured the level would otherwise decide what
+    every later test observes (AAP 0.4.8: one owner per piece of state).
     """
     logger = logging.getLogger(obs_logging.LOGGER_NAME)
     level = logger.level
@@ -126,9 +101,6 @@ def restore_foundry_logger() -> Iterator[None]:
         logger.setLevel(level)
         logger.handlers[:] = handlers
         logger.propagate = propagate
-
-
-# --- Logger ownership (AAP 0.2.1, AAP 0.4.8) --------------------------------
 
 
 def test_configure_moves_the_foundry_level_and_leaves_root_untouched(
@@ -206,9 +178,6 @@ def test_attach_and_detach_handler_change_the_handler_list_once(
 
     assert obs_logging.attach_handler("not a handler") is None  # type: ignore[arg-type]
     assert obs_logging.detach_handler("not a handler") is None  # type: ignore[arg-type]
-
-
-# --- Log ring (implicit requirement I7, AAP 0.4.6) --------------------------
 
 
 def _filled_ring(capacity: int, messages: tuple[str, ...]) -> capture.LogRing:
@@ -300,9 +269,6 @@ def test_an_attached_ring_captures_what_the_foundry_logger_emits(
 
     assert ring not in logging.getLogger(obs_logging.LOGGER_NAME).handlers
     assert ring.tail(2) == ("WARNING foundry: second", "DEBUG foundry: third")
-
-
-# --- Redaction (AAP 0.3.2, AAP 0.14.3, implicit requirement I4) -------------
 
 
 def test_the_published_header_deny_list_holds_the_secret_header_set() -> None:
@@ -422,9 +388,6 @@ def test_redaction_precedes_serialisation_of_the_written_artifact(tmp_path: Path
     assert json.loads(written)["method"] == "POST"
 
 
-# --- Manifest (AAP 0.4.6) ---------------------------------------------------
-
-
 def test_the_manifest_document_carries_the_published_field_set() -> None:
     document = _document()
 
@@ -483,9 +446,6 @@ def test_a_manifest_path_outside_the_run_directory_is_rejected() -> None:
 
     with pytest.raises(manifest.ArtifactError):
         _document((escaping,))
-
-
-# --- Artifact writer (AAP 0.4.6, AAP 0.4.7) ---------------------------------
 
 
 def test_dir_for_sanitises_the_node_id_into_one_path_component(tmp_path: Path) -> None:
@@ -622,9 +582,6 @@ def test_a_failed_write_disables_capture_and_the_manifest_records_it(
     assert writer.write_text("stdout", "after the fault\n") is None
     warnings = [record for record in _foundry_records(caplog) if record.levelno == logging.WARNING]
     assert len(warnings) == 1
-
-
-# --- Lifecycle events (AAP 0.13.1) -----------------------------------------
 
 
 def test_every_emitter_stays_at_or_below_warning(caplog: pytest.LogCaptureFixture) -> None:

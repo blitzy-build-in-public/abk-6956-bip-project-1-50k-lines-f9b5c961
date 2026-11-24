@@ -1,34 +1,12 @@
 """Session bootstrap and per-run record assembly: the state one pytest run shares.
 
-``plugin.py`` is the only module holding pytest hooks; this is the plain Python it calls.
-:func:`bootstrap_session` resolves the configuration, builds the :class:`SessionState` and emits the
-run's one ``INFO`` line, :func:`assemble_payload` turns a collected item's final attempt into the
-``TestPayload`` the controller records, and :func:`resolve_exit_status` composes the exit code from
-pytest's status, the quarantine verdicts and the run errors.
-
-**Configuration is resolved exactly once.** AAP 0.14.2 bounds a resolution at 50 ms, so
-:func:`bootstrap_session` calls ``foundry.config.merge.resolve`` once and stashes the outcome behind
-``SESSION_STATE`` and ``SESSION_CONFIG`` for every hook, fixture and CLI path. An xdist worker
-re-resolves nothing: the controller writes :func:`worker_payload` into
-``config.workerinput[WORKER_INPUT_KEY]`` and the worker rebuilds its state from it (requirement I3).
-
-**The reporting boundary.** ``foundry.execution`` may never import the reporting package (AAP
-0.4.8), yet the element ``results.json`` holds is ``reporting.record.ResultRecord``: this module
-assembles ``TestPayload``, whose ``as_result_fields()`` emits that record's field names, and
-``plugin.py`` builds the frozen record from them. Outcomes stay ``OutcomeValue`` strings and a
-run-level failure is ``RunErrorPayload``, so no reporting type crosses either way.
-
-**Items that never ran** (assumption A12) get a record from :func:`not_run_payload` carrying the
-partial data the run holds, rather than being dropped from the document.
-
-**Failure isolation** (AAP 0.1.2): the run's directory is created by ``foundry.obs.artifacts``, the
-module AAP 0.4.8 permits that write in, and a directory that cannot be created warns once through
-``emit_plumbing_failure``, sets ``artifacts_enabled`` false and lets the run continue, so every
-record reports ``artifacts_disabled: true`` and the exit code follows the tests alone.
-
-**Import-time discipline** (AAP 0.4.8): importing defines names only. No file, environment variable
-or logger is touched, and no module-level mutable state exists. Neither ``pytest`` -- an annotation
-under ``TYPE_CHECKING`` -- nor the reporting, cli or plugin package is imported at all.
+``plugin.py`` holds the pytest hooks; this is the plain Python it calls. :func:`bootstrap_session`
+resolves the configuration once (AAP 0.14.2) and builds the :class:`SessionState`, which carries the
+artifact writer, redaction engine, retry budget, quarantine registry and timeout policy, so no
+consumer rebuilds one from configuration (AAP 0.4.8). :func:`assemble_payload` turns a final attempt
+into the ``TestPayload`` the controller records, a boundary no reporting type crosses, and
+:func:`resolve_exit_status` composes the exit code of AAP 0.4.4 and AAP 0.4.7. Importing defines
+names only (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -417,22 +395,14 @@ def assemble_payload(
 ) -> TestPayload:
     """Assemble one collected item's record from the data the capture phase already redacted.
 
-    A pure function of its arguments -- no clock, no filesystem, no pytest -- so a record is
-    assertable without running a session, and the same inputs always yield an equal payload
-    (AAP 0.13.1).
-
-    The outcome comes from the reports of the final attempt: ``error`` when setup or teardown
-    failed, ``failed`` for a failing call phase, else ``passed`` or ``skipped``, with
-    ``xfailed``/``xpassed`` read from the call report's ``wasxfail`` marker. A quarantine verdict
-    then replaces it, so the record, the report section, the JUnit element and the exit code agree
-    (AAP 0.4.7).
-
-    ``reports`` are the final attempt's phase reports in any order; ``attempts`` is the ledger, so
-    ``duration_ms`` sums the attempts' own elapsed times instead of being re-measured;
-    ``quarantine`` is the verdict ``QuarantineRegistry.decide`` returned; ``artifacts`` carry
-    run-relative paths; and ``log_tail`` is cut here to the newest ``logging.capture_lines``
-    lines, so a record crossing the worker boundary stays bounded (requirement I7). ``nodeid``
-    stays unsanitised -- sanitising is the writer's job.
+    A pure function of its arguments -- no clock, no filesystem, no pytest -- so the same inputs
+    yield an equal payload (AAP 0.13.1). The outcome comes from the final attempt's reports:
+    ``error`` when setup or teardown failed, ``failed`` for a failing call, else ``passed`` or
+    ``skipped``, with ``xfailed``/``xpassed`` read from the call report's ``wasxfail`` marker; a
+    quarantine verdict then replaces it, so the record, the report, the JUnit element and the exit
+    code agree (AAP 0.4.7). ``duration_ms`` sums the attempts' own elapsed times, artifacts carry
+    run-relative paths, and ``log_tail`` is cut to the newest ``logging.capture_lines`` lines here,
+    so a record crossing the worker boundary stays bounded (requirement I7).
 
     Returns:
         The record, with its markers, failures and artifacts in canonical order.
@@ -496,20 +466,14 @@ def resolve_exit_status(
 
     The one composition point for AAP 0.4.4's exit codes and every AAP 0.4.7 row that changes one:
 
-    1. pytest's ``2``, ``3``, ``4`` and ``5`` -- interrupt, internal error, usage error and nothing
-       collected -- are returned unchanged, because Foundry never rewrites them (AAP 0.4.4); a
-       configuration fault already exits 2 through ``pytest.exit(returncode=2)``.
+    1. pytest's ``2``, ``3``, ``4`` and ``5`` are returned unchanged, because Foundry never rewrites
+       them (AAP 0.4.4); a configuration fault already exits 2 through ``pytest.exit``.
     2. Any ``run_error`` -- a lost xdist worker -- fails the run with ``1`` (AAP 0.4.7).
     3. Any decision carrying ``fails_run`` fails it with ``1``: ``QuarantineRegistry.run_failed`` is
-       the single quarantine rule, so ``strict`` mode counts a marked failure and ``report`` does
-       not.
+       the single quarantine rule, so ``strict`` counts a marked failure and ``report`` does not.
     4. A pytest status of ``1`` whose every failure is a ``quarantined_failed`` in ``report`` mode
-       becomes ``0`` -- the documented quarantine downgrade, which keeps a known-flaky test visible
-       without breaking the build.
+       becomes ``0``, the documented downgrade that keeps a flaky test visible.
     5. Otherwise pytest's status stands, so a failure no verdict explains is never downgraded.
-
-    ``decisions`` are the verdicts taken for the session's tests, in any order, and are consumed
-    once; ``quarantine`` is the authority on ``strict`` versus ``report``.
 
     Returns:
         The exit code the process ends with, identically for ``pytest`` and for ``foundry run``.

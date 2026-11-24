@@ -1,65 +1,46 @@
 """The transactional session half of the ``foundry_db`` fixture.
 
-``foundry_db`` (AAP 0.4.3) promises "a transactional session on a fresh in-memory sqlite
-schema built from the models the test registers, rolled back at teardown".
-:mod:`foundry.db.engine` owns the connection and the pool that holds it; this module owns
-the transaction that makes the promise true, and it is the only place a test's database work
-is begun and discarded.
+``foundry_db`` (AAP 0.4.3) promises "a transactional session on a fresh in-memory sqlite schema
+built from the models the test registers, rolled back at teardown".
+:mod:`foundry.db.engine` owns the connection and the pool that holds it; this module owns the
+transaction that makes the promise true, and it is the only place a test's database work is begun
+and discarded.
 
 **The contract, stated once.** Inside a test that requested ``foundry_db`` its own writes are
-visible: an ``add`` followed by ``flush`` is found by the test's own ``select``, and a
-``commit`` leaves the rows in place for the rest of that test. At teardown those writes are
-discarded -- the session's transaction is rolled back, the session is closed and the engine
-is disposed, which for the ``StaticPool`` connection described in :mod:`foundry.db.engine`
-also destroys the in-memory database. Nothing a test does is therefore observable by another
-test: not its rows, not its schema, not a committed batch. A test that fails half way through
-leaves nothing behind either, because teardown runs whatever the test did (AAP 0.4.3,
-AAP 0.7.1, and the ``src/foundry/db`` folder record's "double rollback and closure").
+visible: an ``add`` followed by ``flush`` is found by the test's own ``select``, and a ``commit``
+leaves the rows in place for the rest of that test. At teardown those writes are discarded -- the
+transaction is rolled back, the session closed and the engine disposed, which for the
+``StaticPool`` connection of :mod:`foundry.db.engine` also destroys the in-memory database. Nothing
+a test does is observable by another test: not its rows, not its schema, not a committed batch, and
+a test that fails half way through leaves nothing behind either (AAP 0.4.3, AAP 0.7.1).
 
-**Two functions, and no third.** :func:`open_session` creates the schema for the models the
-test registered and opens the session with its outer transaction already begun;
-:func:`rollback_and_close` ends that transaction, closes the session and disposes the engine.
-``foundry_db`` calls exactly those two, with ``create_engine`` from :mod:`foundry.db.engine`
-supplying the engine, and needs nothing else from this package: no session factory, no
-repository base class and no migration step.
+**Two functions, and no third.** :func:`open_session` creates the schema for the models the test
+registered and opens the session with its outer transaction already begun;
+:func:`rollback_and_close` ends that transaction, closes the session and disposes the engine. The
+transaction is begun explicitly because a session begins one lazily: a session whose test has not
+touched the database yet would otherwise have no unambiguous rollback target, including when the
+test's first call is ``rollback()`` itself.
 
-**Why the transaction is begun explicitly.** A SQLAlchemy session begins a transaction
-lazily, on the first statement it runs, so a session whose test has not touched the database
-yet has no transaction to roll back and ``rollback()`` there would be a no-op with an
-ambiguous meaning. :func:`open_session` calls ``begin()`` so ``in_transaction()`` is true
-from the first moment and the rollback target is unambiguous -- including when a test's very
-first call is ``rollback()`` itself.
-
-**Teardown never raises** (AAP 0.1.2 and AAP 0.14.3, failure isolation).
-:func:`rollback_and_close` is Foundry's own plumbing: a fixture that cannot roll back or
-cannot close its session must not turn a passing test into a failing one or change the run's
-exit code, so each step is wrapped, a fault is reported at ``WARNING`` through
-:func:`foundry.obs.events.emit_plumbing_failure`, and the function returns. The swallowing is
-deliberately narrow. It covers this function's own steps only -- a test's exception belongs to
-pytest and is never caught, rewritten or reported here -- and no message it builds carries a
+**Teardown never raises** (AAP 0.1.2 and AAP 0.14.3, failure isolation). A fixture that cannot roll
+back or close must not turn a passing test into a failing one or change the exit code, so each step
+is wrapped, a fault is reported at ``WARNING`` through
+:func:`foundry.obs.events.emit_plumbing_failure`, and the function returns. The swallowing covers
+this function's own steps only -- a test's exception belongs to pytest. No message carries a
 connection string, because a database URL can hold ``user:password`` and a log line reaches the
-terminal, the captured-log artifact and the report (AAP 0.3.2 Security). The exception itself
-contributes its class name and nothing else: a driver's message routinely embeds ``[SQL: ...]``
-with the ``[parameters: (...)]`` row values a test wrote, so recording that text would put test
-data in that same captured-log block.
+terminal, the captured-log artifact and the report (AAP 0.3.2 Security), and the exception
+contributes its class name alone: a driver's message routinely embeds ``[SQL: ...]`` with the
+``[parameters: (...)]`` row values a test wrote.
 
-**SQLAlchemy is imported lazily** (implicit requirement I5). ``foundry.plugin`` is imported
-at every pytest start and has a 150 ms budget, while only a minority of tests request the
-database fixture, so no SQLAlchemy name is bound at module scope: the names this module
-annotates with are imported under ``TYPE_CHECKING`` and the names it calls are imported
-inside the function that needs them. Importing this module therefore costs two Foundry
-imports and the standard library, and ``sqlalchemy`` stays out of ``sys.modules``.
-
-Those two imports are the whole of its outward dependency: :mod:`foundry.db.schema` for the
-schema it creates, and :mod:`foundry.obs.events` for every record it emits -- the single emission
-point AAP 0.13.1 declares, so this module acquires no logger of its own and its levels, its
-scrubbing and its class-name-only rule for exceptions are the ones the emitter applies.
-``foundry.db`` sits on the capability rung of the layering table, whose row for this package
-(AAP 0.4.8) permits exactly ``core`` and ``obs`` -- the two imports above -- and the module
-defines no exception type of its own. Nothing happens at import time beyond
-defining names -- no I/O, no environment read, no logger configuration, no module-level mutable
-state -- and the lifecycle it serves is single-threaded and deterministic (AAP 0.4.8, "Fixture
-lifecycle rule"): no thread, no background task, no sleep and no socket.
+**SQLAlchemy is imported lazily** (implicit requirement I5). ``foundry.plugin`` is imported at every
+pytest start inside a 150 ms budget while only a minority of tests request the database fixture, so
+no SQLAlchemy name is bound at module scope: annotated names come from ``TYPE_CHECKING`` and called
+names from inside the function that needs them. The outward dependency is :mod:`foundry.db.schema`
+for the schema and :mod:`foundry.obs.events` for every record emitted -- the single emission point
+AAP 0.13.1 declares, so this module acquires no logger of its own and inherits the emitter's levels,
+scrubbing and class-name-only rule; AAP 0.4.8 permits exactly ``core`` and ``obs`` here, and no
+exception type is defined. Importing it defines names only, and the lifecycle it serves is
+single-threaded and deterministic (AAP 0.4.8, "Fixture lifecycle rule"): no thread, no background
+task, no sleep and no socket.
 """
 
 from __future__ import annotations
@@ -112,42 +93,21 @@ def open_session(engine: Engine, models: ModelSpec = None) -> Session:
 
     The order of the steps is the contract:
 
-    1. :func:`foundry.db.schema.create_all` creates every table of every model's metadata on
-       ``engine`` first, so the schema exists before the session's transaction opens. The DDL
-       is therefore outside what the rollback undoes, which is what lets one test's rows
-       disappear while the tables stay usable until the engine is disposed.
-    2. A session is built over ``engine`` with ``expire_on_commit=False``. A test may
-       ``commit()`` and keep asserting on the instances it holds: with the default ``True``
-       the commit would expire them, the next attribute read would trigger a lazy reload, and
-       that reload could no longer be served once teardown has ended the transaction.
-       Keeping the loaded state on the instance makes the test independent of whether its
-       teardown has already run.
-    3. ``autoflush`` is left at its default of ``True`` on purpose. A test that adds an object
-       and then queries for it must find it, and autoflush is what makes pending state
-       visible to the session's own ``select`` without the test having to remember a
-       ``flush``. Turning it off would make the fixture's "your own writes are visible"
-       promise depend on the test's call order.
-    4. ``session.begin()`` opens the outer transaction explicitly, for the reason the module
-       docstring gives: the rollback target then exists from the first statement rather than
-       appearing lazily with it.
-
-    Args:
-        engine: The engine that owns the test's private in-memory sqlite database, normally
-            the value of :func:`foundry.db.engine.create_engine`.
-        models: The models whose schema the test needs -- a declarative model class, a
-            :class:`~sqlalchemy.Table`, an iterable of either, or ``None`` for a session over
-            a database whose tables the test never asked for.
-
-    Returns:
-        A session bound to ``engine`` with its outer transaction already begun, to be passed
-        to :func:`rollback_and_close` at teardown.
+    1. :func:`foundry.db.schema.create_all` creates every table of every model's metadata first, so
+       the schema exists before the session's transaction opens and the DDL is outside what the
+       rollback undoes: one test's rows disappear while the tables stay usable until disposal.
+    2. The session is built with ``expire_on_commit=False``, so a test may ``commit()`` and keep
+       asserting on the instances it holds: with the default the commit would expire them, and the
+       reload the next attribute read triggers could not be served after teardown.
+    3. ``autoflush`` keeps its default of ``True`` on purpose: a test that adds an object and then
+       queries for it must find it, without having to remember a ``flush``.
+    4. ``session.begin()`` opens the outer transaction explicitly, as the module docstring says.
 
     Raises:
-        FoundryError: If ``models`` holds a value that is neither a declarative model class
-            nor a ``Table``. Every other failure comes from SQLAlchemy itself and propagates
-            unchanged, because a schema that cannot be created is the caller's configuration
-            error rather than Foundry plumbing: the fault is reported to the caller and no
-            session is created, so nothing is left to tear down.
+        FoundryError: If ``models`` holds a value that is neither a declarative model class nor a
+            ``Table``. Every other failure comes from SQLAlchemy itself and propagates unchanged: a
+            schema that cannot be created is the caller's configuration error rather than Foundry
+            plumbing, and no session was created, so nothing is left to tear down.
     """
     schema_models = normalize_models(models)
     create_all(engine, schema_models)
@@ -179,43 +139,27 @@ def rollback_and_close(session: Session) -> None:
 
     Four steps, in this order, each wrapped so that no fault escapes:
 
-    1. The session's bind is read first, while the session still holds it. Closing releases
-       the connection the bind was resolved through, so reading it afterwards is not
-       dependable, and the bind is what decides whether an engine disposal is still owed.
-    2. If the session reports an open transaction, it is rolled back. That is the step that
-       makes the fixture's isolation real: every row the test wrote, including a batch it
-       ``commit()``-ed inside the transaction, disappears here.
-    3. The session is closed, which returns the connection to the pool and expunges whatever
-       the test left in the identity map.
-    4. When the bind is an :class:`~sqlalchemy.engine.Engine` it is disposed. Both steps are
-       needed, not either: closing the session hands the ``StaticPool`` connection back to
-       the pool, and only disposing the engine closes that connection -- which for an
-       in-memory sqlite database is also what destroys the database.
+    1. The session's bind is read first, while the session still holds it: closing releases the
+       connection the bind was resolved through, and the bind decides whether a disposal is owed.
+    2. An open transaction is rolled back, which is the step that makes the isolation real: every
+       row the test wrote, a batch it ``commit()``-ed included, disappears here.
+    3. The session is closed, which returns the connection to the pool and expunges whatever the
+       test left in the identity map.
+    4. The bind is disposed when it is an :class:`~sqlalchemy.engine.Engine`. Both steps are
+       needed: closing hands the ``StaticPool`` connection back to the pool, and only disposing the
+       engine closes it -- which for an in-memory sqlite database is also what destroys it.
 
-    A bind that is not an engine is a real arrangement with a different owner. A session bound
-    to a bare :class:`~sqlalchemy.engine.Connection`, or one reporting no bind at all, is
-    closed here while its connection is left open, because disposing it belongs to whoever
-    created it. That case, and a bind of any type this function cannot dispose, is reported
-    once at ``WARNING`` naming its type, so an operator learns that a disposal was skipped
-    without reading Foundry's source.
+    A bind that is not an engine is a real arrangement with a different owner: a bare
+    :class:`~sqlalchemy.engine.Connection`, or no bind at all, is closed here while its connection
+    stays open, because disposing it belongs to whoever created it, and that case is reported once
+    at ``WARNING`` naming the bind's type.
 
-    The call is idempotent: a session this function has already torn down is recognised
-    through the ``Session.info`` marker :data:`_TEARDOWN_KEY` names, and a second call
-    returns without touching anything. Each step would be harmless a second time anyway --
-    SQLAlchemy's ``close()`` and ``Engine.dispose()`` are idempotent -- but a teardown that
-    performs no work at all is what a fixture wrapped in pytest's finalisation can rely on.
-
-    It returns nothing and it never raises. Every step is wrapped: a fault is reported at
-    ``WARNING`` through :func:`foundry.obs.events.emit_plumbing_failure`, which records the
-    exception's class name and never its message -- never the URL, which is where a credential
-    would be -- and the remaining steps still run (AAP 0.1.2 and AAP 0.14.3, failure isolation).
-    Nothing the test did is caught, rewritten or reported here: a test's own exception is
-    pytest's business.
-
-    Args:
-        session: The session :func:`open_session` returned. A session bound to something other
-            than an engine, or one that is already closed, is accepted and handled the same
-            way.
+    The call is idempotent and it never raises: a session already torn down is recognised through
+    the ``Session.info`` marker :data:`_TEARDOWN_KEY` names and returns untouched -- each step is
+    harmless a second time, but a teardown that does no work is what a fixture wrapped in pytest's
+    finalisation can rely on -- and each fault is reported at ``WARNING`` through
+    :func:`foundry.obs.events.emit_plumbing_failure` with the exception's class name alone while the
+    remaining steps still run (AAP 0.1.2, AAP 0.14.3). A test's own exception is never caught.
     """
     if _teardown_already_started(session):
         return
@@ -238,15 +182,9 @@ def _teardown_already_started(session: Session) -> bool:
     """Report whether a previous call already tore this session down.
 
     The marker lives in ``Session.info``, which every real session exposes as a plain dict. A
-    session-like object without one -- a stand-in a test passes, say -- is answered ``False``
-    so that the teardown still runs: the per-step guards make that safe, while refusing to
-    clean up because a marker was unreadable would be the worse failure.
-
-    Args:
-        session: The session being torn down.
-
-    Returns:
-        ``True`` only when the marker this module writes is present and set to ``True``.
+    session-like object without one is answered ``False`` so that the teardown still runs: the
+    per-step guards make that safe, while refusing to clean up because a marker was unreadable
+    would be the worse failure.
     """
     info = getattr(session, "info", None)
     if not isinstance(info, dict):
@@ -257,12 +195,8 @@ def _teardown_already_started(session: Session) -> bool:
 def _mark_teardown_started(session: Session) -> None:
     """Record in the session that its teardown has begun.
 
-    The marker is set before the first real step rather than after the last, so that a fault
-    in one step cannot leave the session looking untouched and invite a second, redundant
-    teardown.
-
-    Args:
-        session: The session being torn down.
+    Set before the first real step rather than after the last, so a fault in one step cannot leave
+    the session looking untouched and invite a second, redundant teardown.
     """
     info = getattr(session, "info", None)
     if isinstance(info, dict):
@@ -272,18 +206,10 @@ def _mark_teardown_started(session: Session) -> None:
 def _capture_bind(session: Session) -> Engine | Connection | None | _UnknownBind:
     """Return the session's bind, or :data:`_BIND_UNKNOWN` when it cannot be read.
 
-    The bind is captured before the session is closed: ``get_bind()`` resolves through the
-    connection the session is using, and a closed session no longer answers for it. A session
-    created with no bind at all raises from ``get_bind()``; that fault is reported here, once,
-    and the sentinel tells :func:`_release_bind` to skip a disposal instead of guessing at an
-    engine it never saw.
-
-    Args:
-        session: The session whose bind is wanted.
-
-    Returns:
-        The engine or connection the session is bound to, ``None`` when it reports no bind, or
-        :data:`_BIND_UNKNOWN` when reading the bind raised.
+    Captured before the session is closed, because ``get_bind()`` resolves through the connection
+    the session is using and a closed session no longer answers for it. A session created with no
+    bind at all raises from ``get_bind()``; that fault is reported here, once, and the sentinel
+    tells :func:`_release_bind` to skip a disposal instead of guessing at an engine it never saw.
     """
     try:
         return session.get_bind()
@@ -295,16 +221,12 @@ def _capture_bind(session: Session) -> Engine | Connection | None | _UnknownBind
 def _release_bind(bind: Engine | Connection | None | _UnknownBind) -> None:
     """Dispose ``bind`` when it is an engine, and report every other kind.
 
-    Disposing an engine Foundry did not build is not this function's decision to make: a
-    caller that bound its session to a connection owns that connection's lifetime, so the
-    session is closed and the connection is left alone. A bind that is not an engine is
-    reported once at ``WARNING`` naming its type -- never its value, because an engine's repr
-    carries its URL and a URL can carry a password (AAP 0.3.2 Security). The sentinel is the one
-    exception: :func:`_capture_bind` has already reported that fault, so this function stays
-    quiet rather than reporting one problem twice.
-
-    Args:
-        bind: The value :func:`_capture_bind` returned.
+    Disposing an engine Foundry did not build is not this function's decision: a caller that bound
+    its session to a connection owns that connection's lifetime, so the session is closed and the
+    connection left alone. A bind that is not an engine is reported once at ``WARNING`` naming its
+    type -- never its value, because an engine's repr carries its URL and a URL can carry a password
+    (AAP 0.3.2 Security). The sentinel is the one exception: :func:`_capture_bind` has already
+    reported that fault, so this function stays quiet rather than reporting one problem twice.
     """
     from sqlalchemy import Engine as SQLAlchemyEngine
 
@@ -323,14 +245,8 @@ def _release_bind(bind: Engine | Connection | None | _UnknownBind) -> None:
 def _bind_type_name(bind: Connection | None) -> str:
     """Return the type name to report for a bind this module cannot dispose.
 
-    The qualified type name is used rather than the value's repr, because the repr of a bind
-    carries the database URL and an sqlite URL may embed ``user:password``.
-
-    Args:
-        bind: The session's bind, as :func:`_capture_bind` returned it.
-
-    Returns:
-        The bind's type qualified name, such as ``sqlalchemy.engine.base.Connection``.
+    The qualified type name rather than the value's repr: the repr of a bind carries the database
+    URL, and an sqlite URL may embed ``user:password``.
     """
     return f"{type(bind).__module__}.{type(bind).__qualname__}"
 
@@ -338,16 +254,9 @@ def _bind_type_name(bind: Connection | None) -> str:
 def _in_transaction(session: Session) -> bool:
     """Report whether ``session`` currently holds an open transaction.
 
-    A test that committed inside the outer transaction has already ended it, so the rollback
-    is skipped for that test; the close and the disposal still run, which is what keeps the
-    committed batch from outliving the test.
-
-    Args:
-        session: The session being torn down.
-
-    Returns:
-        ``True`` when the session reports an open transaction, ``False`` otherwise and also
-        when the state cannot be read.
+    A test that committed inside the outer transaction has already ended it, so the rollback is
+    skipped for that test; the close and the disposal still run, which is what keeps the committed
+    batch from outliving the test. An unreadable state answers ``False``.
     """
     try:
         return bool(session.in_transaction())
@@ -359,11 +268,7 @@ def _in_transaction(session: Session) -> bool:
 
 
 def _rollback_transaction(session: Session) -> None:
-    """Roll back the session's open transaction, reporting a fault instead of raising it.
-
-    Args:
-        session: The session holding the transaction to discard.
-    """
+    """Roll back the session's open transaction, reporting a fault instead of raising it."""
     try:
         session.rollback()
     except Exception as exc:
@@ -373,11 +278,7 @@ def _rollback_transaction(session: Session) -> None:
 
 
 def _close_session(session: Session) -> None:
-    """Close the session, reporting a fault instead of raising it.
-
-    Args:
-        session: The session to close.
-    """
+    """Close the session, reporting a fault instead of raising it."""
     try:
         session.close()
     except Exception as exc:
@@ -385,11 +286,7 @@ def _close_session(session: Session) -> None:
 
 
 def _dispose_engine(engine: Engine) -> None:
-    """Dispose the engine, closing its pooled connection and ending an in-memory database.
-
-    Args:
-        engine: The engine the session was bound to.
-    """
+    """Dispose the engine, closing its pooled connection and ending an in-memory database."""
     try:
         engine.dispose()
     except Exception as exc:

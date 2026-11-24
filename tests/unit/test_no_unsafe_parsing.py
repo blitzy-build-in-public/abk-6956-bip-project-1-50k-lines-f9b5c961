@@ -1,27 +1,21 @@
 """The tree-wide proof that Foundry never reaches an unsafe deserialiser.
 
-AAP 0.3.2's "Deserialisation safety" control is one rule -- YAML is parsed with ``safe_load``
-only, and configuration, data and cassette content never reach ``eval``, ``exec`` or ``pickle`` --
-and AAP 0.14.3 makes it a mechanism by naming this module. What it guards is the failure the rule
-exists for: one call added later that reads a project-authored file through an unchecked loader
-executes whatever that file names.
+AAP 0.3.2 permits YAML only through ``yaml.safe_load`` and forbids ``eval``, ``exec`` and
+``pickle``; AAP 0.14.3 names this module as the mechanism for it.
 
-*Detection is structural.* Every Python module is parsed with :mod:`ast` and its calls and imports
-are resolved, so a docstring, a comment or a string constant that merely mentions ``yaml.load`` is
-not a finding while the call is one, and ``import yaml as y``, ``from yaml import load as parse``
-and ``import builtins as b`` are followed to the names they bind.
+Detection is structural: every module is parsed with :mod:`ast` and its calls, imports and
+aliases resolved, so a mention in prose is not a finding while the call is one.
 
-*Every hit is reported in one message*, with its path, line and the name that made it a finding,
-sorted so two runs over one tree read identically.
+Four routes stay out of reach and review of the call site closes them: a computed attribute name,
+an alias rebound after its first binding, a loader fetched from a dict, and code inside a string.
 
-*The permitted path is proven.* The two modules AAP 0.3.2 designates as YAML readers must be
-inside the scanned inventory and the data reader must hold a real ``yaml.safe_load`` call, so a
-rename cannot leave the scan above passing on an empty list.
+Every hit is reported once, with its path, line and name, sorted, so two runs read identically.
 
-*There is no exemption list.* AAP 0.3.2 permits none, and a hit anywhere under the roots is a
-finding. The roots are ``src/foundry`` and ``examples`` for Python and ``scripts`` for Python plus
-every other text file, because a shell script must not ``eval`` either. This module lives under
-``tests/``, outside every root, so the names it polices are safe to spell here.
+The permitted path is proven: both designated readers are scanned and call ``safe_load``.
+
+There is no exemption list: a hit anywhere under the roots is a finding. The roots are the
+repository root's own ``*.py`` modules, ``src/foundry``, ``examples`` and every file under
+``scripts``. This module lives under ``tests/``, outside every root.
 """
 
 from __future__ import annotations
@@ -77,6 +71,35 @@ _UNSAFE_SERIALISERS: Final[frozenset[str]] = frozenset(
 )
 """Import roots that rebuild an object graph, which is ``pickle``'s power under any name."""
 
+_FUNCTOOLS_MODULE: Final[str] = "functools"
+_IMPORTLIB_MODULE: Final[str] = "importlib"
+
+_GETATTR_BUILTIN: Final[str] = "getattr"
+"""The builtin that reaches a patrolled attribute under a name written as a string."""
+
+_DYNAMIC_IMPORT_BUILTIN: Final[str] = "__import__"
+"""The builtin that imports a module by name, which is ``importlib.import_module``'s other face."""
+
+_YAML_LOADER_NAMES: Final[frozenset[str]] = _UNSAFE_YAML_LOADERS | frozenset({_SAFE_YAML_LOADER})
+"""Every ``yaml`` attribute yielding a parsed document, the permitted loader included."""
+
+_BUILTIN_ROUTES: Final[frozenset[str]] = _UNSAFE_BUILTINS | frozenset(
+    {_GETATTR_BUILTIN, _DYNAMIC_IMPORT_BUILTIN}
+)
+"""Every builtin name this scan follows, the two that only dispatch a call included."""
+
+_FUNCTOOLS_ROUTES: Final[frozenset[str]] = frozenset({"partial"})
+"""The ``functools`` attribute that wraps a patrolled callable behind another name."""
+
+_IMPORTLIB_ROUTES: Final[frozenset[str]] = frozenset({"import_module"})
+"""The ``importlib`` attribute that imports a module named by a string."""
+
+_PATROLLED_MODULES: Final[frozenset[str]] = (
+    frozenset({_YAML_MODULE, _BUILTINS_MODULE, _FUNCTOOLS_MODULE, _IMPORTLIB_MODULE})
+    | _UNSAFE_SERIALISERS
+)
+"""Every module root this scan follows by name, in an import or in a dynamic import."""
+
 _CACHE_DIRECTORY_NAMES: Final[frozenset[str]] = frozenset(
     {"__pycache__", ".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 )
@@ -87,9 +110,8 @@ _SHELL_EVAL_TOKEN: Final[re.Pattern[str]] = re.compile(r"(?<![\w./-])eval(?![\w.
 
 The lookarounds are what keep ``evaluate``, ``evaluated`` and ``foundry.execution`` out of the
 report, while the word after ``;``, ``&&``, ``|``, ``$(`` or a newline is a hit. ``exec`` is
-deliberately absent: in a shell it replaces the process rather than evaluating code, and a wrapper
-script that ends in ``exec pytest "$@"`` is a legitimate pattern. Python's ``exec`` is caught by
-the AST pass instead, where it really does run code.
+deliberately absent: in a shell it replaces the process rather than evaluating code, so a wrapper
+script ending in ``exec pytest "$@"`` is legitimate; Python's ``exec`` is caught by the AST pass.
 """
 
 _DATA_YAML_LOADER: Final[str] = "src/foundry/data/loaders/yaml.py"
@@ -99,12 +121,15 @@ _CASSETTE_STORE: Final[str] = "src/foundry/cassette/store.py"
 """The cassette module AAP 0.3.2 designates as the other YAML reader.
 
 As generated it persists the JSON cassette document AAP 0.4.6 fixes and names no YAML loader at
-all, so its assertion below is one-sided: it names no loader other than ``safe_load`` -- vacuous
-today, and a finding the moment a recording path parses YAML another way.
+all, so the assertion below is one-sided: ``safe_load`` is the only loader named today, which is
+vacuous but becomes a finding the moment a recording path parses YAML another way.
 """
 
 _SCANNED_PYTHON_ROOTS: Final[tuple[str, ...]] = ("src/foundry", "examples")
 """Roots whose ``.py`` modules are parsed."""
+
+_SCANNED_ROOT_MODULES: Final[str] = "*.py"
+"""The repository root's own modules: a ``.py`` added there is scanned like any other."""
 
 _SCANNED_TEXT_ROOT: Final[str] = "scripts"
 """The root whose files are all read: ``.py`` by parse, everything else as shell text."""
@@ -137,11 +162,13 @@ class ModuleScan:
 
 @dataclass(frozen=True)
 class _Aliases:
-    """The local names one module binds to the patrolled modules and to their loaders."""
+    """The local names one module binds to the patrolled modules and to their callables.
 
-    yaml_modules: frozenset[str]
-    yaml_loaders: Mapping[str, str]
-    builtins_modules: frozenset[str]
+    ``modules`` maps a name to the module root it denotes and ``callables`` a name to the attribute.
+    """
+
+    modules: Mapping[str, str]
+    callables: Mapping[str, tuple[str, str]]
 
 
 def _write(root: Path, relative: str, *lines: str) -> Path:
@@ -152,56 +179,147 @@ def _write(root: Path, relative: str, *lines: str) -> Path:
     return path
 
 
-def _dotted_name(node: ast.expr) -> str | None:
-    """Return ``node`` as a dotted name -- ``yaml`` -- or ``None`` for anything else."""
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        base = _dotted_name(node.value)
-        return None if base is None else f"{base}.{node.attr}"
+def _string_constant(node: ast.expr) -> str | None:
+    """Return the value of ``node`` when it is a string constant, else ``None``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
     return None
+
+
+def _resolve_member(root: str, name: str) -> tuple[str, str] | None:
+    """Resolve ``root.name`` when it names a loader, a builtin route or a serialiser member.
+
+    A root this scan does not follow -- ``os``, ``cursor``, ``json`` -- resolves to ``None``, and so
+    does an attribute of ``yaml`` that parses nothing, such as ``yaml.dump``.
+    """
+    if root == _BUILTINS_MODULE:
+        if name in _UNSAFE_BUILTINS:
+            return "builtin", f"{_BUILTINS_MODULE}.{name}"
+        return ("builtin", name) if name in _BUILTIN_ROUTES else None
+    if root == _YAML_MODULE:
+        return ("yaml", name) if name in _YAML_LOADER_NAMES else None
+    if root == _FUNCTOOLS_MODULE:
+        return ("functools", name) if name in _FUNCTOOLS_ROUTES else None
+    if root == _IMPORTLIB_MODULE:
+        return ("importlib", name) if name in _IMPORTLIB_ROUTES else None
+    return ("serialiser", root) if root in _UNSAFE_SERIALISERS else None
+
+
+def _dynamic_import(node: ast.Call) -> tuple[str, str] | None:
+    """Resolve the module ``import_module`` or ``__import__`` names, by ``name=`` or positionally.
+
+    Only the root segment counts, so a call naming ``json`` resolves to ``None``.
+    """
+    named = [keyword.value for keyword in node.keywords if keyword.arg == "name"]
+    argument = named[0] if named else (node.args[0] if node.args else None)
+    module = None if argument is None else _string_constant(argument)
+    if module is None:
+        return None
+    root = module.split(".", 1)[0]
+    return ("module", root) if root in _PATROLLED_MODULES else None
+
+
+def _resolve_module(node: ast.expr, aliases: _Aliases) -> str | None:
+    """Return the patrolled module root ``node`` denotes, or ``None`` for any other expression."""
+    resolved = _resolve_reference(node, aliases)
+    return resolved[1] if resolved is not None and resolved[0] == "module" else None
+
+
+def _resolve_getattr(node: ast.Call, aliases: _Aliases) -> tuple[str, str] | None:
+    """Resolve ``getattr(<module>, "<name>")`` when the name is a string constant.
+
+    A name computed at run time and an object that is not a patrolled module resolve to ``None``.
+    """
+    if len(node.args) < 2:
+        return None
+    attribute = _string_constant(node.args[1])
+    if attribute is None:
+        return None
+    root = _resolve_module(node.args[0], aliases)
+    return None if root is None else _resolve_member(root, attribute)
+
+
+def _resolve_reference(node: ast.expr, aliases: _Aliases) -> tuple[str, str] | None:
+    """Classify ``node`` by what it denotes, following every name ``aliases`` records.
+
+    A call resolves to what it yields, not what it calls, so one resolver serves alias collection
+    and call detection; anything else, including a computed attribute name, resolves to ``None``.
+    """
+    if isinstance(node, ast.Call):
+        callee = _resolve_reference(node.func, aliases)
+        if callee == ("builtin", _GETATTR_BUILTIN):
+            return _resolve_getattr(node, aliases)
+        if callee == (_FUNCTOOLS_MODULE, "partial"):
+            return None if not node.args else _resolve_reference(node.args[0], aliases)
+        if callee in {("builtin", _DYNAMIC_IMPORT_BUILTIN), (_IMPORTLIB_MODULE, "import_module")}:
+            return _dynamic_import(node)
+        return None
+    if isinstance(node, ast.Name):
+        if node.id in _BUILTIN_ROUTES:
+            return "builtin", node.id
+        bound = aliases.callables.get(node.id)
+        if bound is not None:
+            return bound
+        root = aliases.modules.get(node.id)
+        return None if root is None else ("module", root)
+    if isinstance(node, ast.Attribute):
+        root = _resolve_module(node.value, aliases)
+        return None if root is None else _resolve_member(root, node.attr)
+    return None
+
+
+def _record_assignments(
+    tree: ast.AST, modules: dict[str, str], callables: dict[str, tuple[str, str]]
+) -> bool:
+    """Record every assignment target whose value resolves to a patrolled name, in every scope.
+
+    Returns True when a name was added, so the caller re-reads until an alias of an alias resolves;
+    a name keeps its first binding and the maps only grow, so the loop ends.
+    """
+    aliases = _Aliases(modules, callables)
+    added = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        else:
+            continue
+        resolved = None if value is None else _resolve_reference(value, aliases)
+        if resolved is None:
+            continue
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if resolved[0] == "module" and target.id not in modules:
+                modules[target.id] = resolved[1]
+                added = True
+            elif resolved[0] != "module" and target.id not in callables:
+                callables[target.id] = resolved
+                added = True
+    return added
 
 
 def _collect_aliases(tree: ast.AST) -> _Aliases:
-    """Return the names ``tree`` binds to the patrolled modules and to their loaders."""
-    yaml_modules = {_YAML_MODULE}
-    builtins_modules = {_BUILTINS_MODULE}
-    yaml_loaders: dict[str, str] = {}
+    """Return the names ``tree`` binds to the patrolled modules and to their callables."""
+    modules: dict[str, str] = {_YAML_MODULE: _YAML_MODULE, _BUILTINS_MODULE: _BUILTINS_MODULE}
+    callables: dict[str, tuple[str, str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == _YAML_MODULE:
-                    yaml_modules.add(alias.asname or _YAML_MODULE)
-                elif alias.name == _BUILTINS_MODULE:
-                    builtins_modules.add(alias.asname or _BUILTINS_MODULE)
-        elif isinstance(node, ast.ImportFrom) and node.module == _YAML_MODULE and not node.level:
+                root = alias.name.split(".", 1)[0]
+                if root in _PATROLLED_MODULES:
+                    modules[alias.asname or root] = root
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module is not None:
+            root = node.module.split(".", 1)[0]
             for alias in node.names:
-                if alias.name == _SAFE_YAML_LOADER or alias.name in _UNSAFE_YAML_LOADERS:
-                    yaml_loaders[alias.asname or alias.name] = alias.name
-    return _Aliases(frozenset(yaml_modules), yaml_loaders, frozenset(builtins_modules))
-
-
-def _resolve_callee(func: ast.expr, aliases: _Aliases) -> tuple[str, str] | None:
-    """Classify ``func`` as ``("builtin", name)`` or ``("yaml", loader)``, else ``None``.
-
-    Only the patrolled names resolve: a bare ``eval`` or ``exec``, the same two behind an alias of
-    ``builtins``, a YAML loader behind an alias of ``yaml``, and a loader imported under a name of
-    its own. Every other attribute call -- ``os.path.join``, ``cursor.execute``, ``yaml.dump`` --
-    is left alone, which is what keeps the report to real findings.
-    """
-    if isinstance(func, ast.Name):
-        if func.id in _UNSAFE_BUILTINS:
-            return "builtin", func.id
-        loader = aliases.yaml_loaders.get(func.id)
-        return None if loader is None else ("yaml", loader)
-    if isinstance(func, ast.Attribute):
-        base = _dotted_name(func.value)
-        if base is not None and base in aliases.builtins_modules and func.attr in _UNSAFE_BUILTINS:
-            return "builtin", f"{_BUILTINS_MODULE}.{func.attr}"
-        is_yaml = base is not None and base in aliases.yaml_modules
-        if is_yaml and (func.attr == _SAFE_YAML_LOADER or func.attr in _UNSAFE_YAML_LOADERS):
-            return "yaml", func.attr
-    return None
+                resolved = _resolve_member(root, alias.name)
+                if resolved is not None:
+                    callables[alias.asname or alias.name] = resolved
+    growing = True
+    while growing:
+        growing = _record_assignments(tree, modules, callables)
+    return _Aliases(modules, callables)
 
 
 def _serialiser_root(module: str | None, level: int) -> str | None:
@@ -233,27 +351,33 @@ def _collect_hits(tree: ast.AST, path: str, aliases: _Aliases) -> ModuleScan:
                     if alias.name in _UNSAFE_YAML_LOADERS
                 )
         elif isinstance(node, ast.Call):
-            resolved = _resolve_callee(node.func, aliases)
-            if resolved is None:
-                continue
-            kind, name = resolved
-            if kind == "builtin":
-                hits.append(Hit(path, node.lineno, name))
-                continue
-            loader_calls.append((node.lineno, name))
-            if name != _SAFE_YAML_LOADER:
-                hits.append(Hit(path, node.lineno, f"{_YAML_MODULE}.{name}"))
-    return ModuleScan(path, tuple(sorted(hits)), tuple(sorted(loader_calls)))
+            resolved = _resolve_reference(node.func, aliases)
+            if resolved is not None:
+                kind, name = resolved
+                is_unsafe = kind == "serialiser" or (
+                    kind == "builtin" and name.rsplit(".", 1)[-1] in _UNSAFE_BUILTINS
+                )
+                if is_unsafe:
+                    hits.append(Hit(path, node.lineno, name))
+                elif kind == "yaml":
+                    loader_calls.append((node.lineno, name))
+                    if name != _SAFE_YAML_LOADER:
+                        hits.append(Hit(path, node.lineno, f"{_YAML_MODULE}.{name}"))
+            imported = _resolve_reference(node, aliases)
+            if (
+                imported is not None
+                and imported[0] == "module"
+                and imported[1] in _UNSAFE_SERIALISERS
+            ):
+                hits.append(Hit(path, node.lineno, imported[1]))
+    return ModuleScan(path, tuple(dict.fromkeys(sorted(hits))), tuple(sorted(loader_calls)))
 
 
 def _shell_code(line: str) -> str:
     """Return ``line`` with its quoted literals and its trailing comment removed.
 
-    A shell script is scanned as text, and the positions a command can occupy are unquoted ones.
-    Dropping quoted literals and comments keeps ``printf '%s' "never eval this"`` and ``# do not
-    eval the arguments`` out of the report while ``eval "$command"`` -- the finding -- stays. The
-    residual gap is code carried inside a string handed to another interpreter, which no token
-    scan can see.
+    A command can only occupy an unquoted position, so prose and printed text stay out of the
+    report while ``eval "$command"`` stays.
     """
     code: list[str] = []
     quote: str | None = None
@@ -299,8 +423,12 @@ def _is_in_cache_directory(path: Path, root: Path) -> bool:
 
 
 def _scanned_files(root: Path) -> tuple[Path, ...]:
-    """Return every file the scan reads, sorted, with cache directories skipped."""
-    files: list[Path] = []
+    """Return every file the scan reads, sorted, with cache directories skipped.
+
+    The repository root's own ``*.py`` modules are read first, so a module beside ``pyproject.toml``
+    cannot escape the walk, then the Python roots and the text root.
+    """
+    files: list[Path] = [path for path in root.glob(_SCANNED_ROOT_MODULES) if path.is_file()]
     for relative in _SCANNED_PYTHON_ROOTS:
         base = root / relative
         if base.is_dir():
@@ -330,9 +458,8 @@ def _format_hits(hits: tuple[Hit, ...]) -> str:
 def test_the_scanned_tree_holds_no_unsafe_parsing(repo_root: Path) -> None:
     """A hit anywhere under the scanned roots is a finding (AAP 0.3.2, AAP 0.14.3).
 
-    YAML may be parsed only through ``yaml.safe_load``, and no module may call ``eval`` or ``exec``
-    or import a module that rebuilds a Python object graph. The assertion is on the whole sorted
-    hit list, so one failure names every offending statement rather than the first.
+    YAML may be parsed only through ``yaml.safe_load``, and no module may call ``eval``, ``exec`` or
+    import an object-graph serialiser. One failure names every offending statement, not the first.
     """
     hits = _scan_tree(repo_root)
     assert hits == (), _format_hits(hits)
@@ -368,13 +495,7 @@ def test_the_cassette_store_names_no_loader_but_safe_load(repo_root: Path) -> No
 
 
 def test_the_cassette_store_guard_catches_an_unsafe_loader(tmp_path: Path) -> None:
-    """The one-sided store assertion is not vacuous: a loader other than ``safe_load`` trips it.
-
-    ``src/foundry/cassette/store.py`` names no YAML loader today, so the assertion in
-    :func:`test_the_cassette_store_names_no_loader_but_safe_load` holds on an empty set. This case
-    runs the same condition against a store that parses YAML another way, which is what proves the
-    guard reports a regression instead of passing on nothing.
-    """
+    """The one-sided store assertion is not vacuous: a loader other than ``safe_load`` trips it."""
     _write(tmp_path, _CASSETTE_STORE, "import yaml", "yaml.unsafe_load(text)")
 
     scan = _scan_file(tmp_path / _CASSETTE_STORE, _CASSETTE_STORE)
@@ -445,6 +566,27 @@ def test_docstring_and_string_mentions_are_not_findings(tmp_path: Path) -> None:
         ("src/foundry/__init__.py", "import marshal", "marshal"),
         ("examples/conftest.py", "import _pickle as m", "_pickle"),
         ("scripts/eval_script.sh", 'set -eu\neval "$command"', "eval"),
+        ("src/foundry/assigned_loader.py", "import yaml\nf = yaml.load\nf(t)", "yaml.load"),
+        ("src/foundry/assigned_builtin.py", "e = eval\ne(t)", "eval"),
+        ("src/foundry/getattr_loader.py", 'import yaml\ngetattr(yaml, "load")(t)', "yaml.load"),
+        (
+            "src/foundry/partial_loader.py",
+            "import functools\nimport yaml\nf = functools.partial(yaml.unsafe_load)\nf(t)",
+            "yaml.unsafe_load",
+        ),
+        (
+            "src/foundry/importlib_loader.py",
+            'import importlib\nimportlib.import_module("pickle")',
+            "pickle",
+        ),
+        (
+            "src/foundry/import_module_named.py",
+            'import importlib\nimportlib.import_module(name="pickle")',
+            "pickle",
+        ),
+        ("src/foundry/dunder_import_named.py", '__import__(name="marshal")', "marshal"),
+        ("src/foundry/dunder_import.py", '__import__("marshal")', "marshal"),
+        ("offending_root.py", "import yaml\nyaml.load(t)", "yaml.load"),
     ],
 )
 def test_every_route_to_an_unsafe_loader_is_detected(
@@ -452,12 +594,42 @@ def test_every_route_to_an_unsafe_loader_is_detected(
 ) -> None:
     """Each alias, each unsafe loader name, each file name and a shell ``eval`` reach the report.
 
-    ``src/foundry/__init__.py``, ``examples/conftest.py`` and a ``.sh`` file are listed on purpose:
-    no file name and no file type is exempt from the scan.
+    No file name and no file type is exempt from the scan, and every indirect route a
+    reintroduction would reach for is listed beside the direct ones.
     """
     _write(tmp_path, relative, *source.splitlines())
     hits = _scan_tree(tmp_path)
     assert expected in {hit.name for hit in hits}, _format_hits(hits)
+
+
+def test_the_indirect_routes_report_nothing_on_safe_code(tmp_path: Path) -> None:
+    """The same routes reached for a permitted loader or an ordinary object are not findings.
+
+    ``safe_load`` behind an assignment, a ``getattr`` or a ``partial`` stays silent, as does a
+    dynamic import of ``json``, a computed attribute name and ``yaml.dump``.
+    """
+    _write(
+        tmp_path,
+        "src/foundry/safe_indirection.py",
+        "import functools",
+        "import importlib",
+        "import yaml",
+        'assigned = getattr(yaml, "safe_load")',
+        "wrapped = functools.partial(yaml.safe_load)",
+        "yaml.safe_load(t)",
+        'getattr(yaml, "safe_load")(t)',
+        "functools.partial(yaml.safe_load)(t)",
+        'importlib.import_module("json")',
+        'importlib.import_module(name="json")',
+        '__import__("json", fromlist=("pickle",))',
+        "plain = object()",
+        'getattr(plain, "load")(t)',
+        "getattr(plain, attribute)(t)",
+        "yaml.dump(plain)",
+    )
+
+    hits = _scan_tree(tmp_path)
+    assert hits == (), _format_hits(hits)
 
 
 def test_the_scanner_offers_no_exemption() -> None:

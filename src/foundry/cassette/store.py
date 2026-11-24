@@ -1,49 +1,10 @@
 """The cassette store: the one module that turns captured interactions into a file and back.
 
-``foundry.cassette`` owns record/replay (AAP 0.3.2), and :class:`CassetteStore` is the only
-component that touches the filesystem in it: :meth:`CassetteStore.load` reads the JSON document
-AAP 0.4.6 fixes for one test, :meth:`CassetteStore.save` writes it, and
-:func:`~foundry.cassette.paths.cassette_path` decides where it lives. Nothing else in the package
-opens a file, so a reader looking for what a cassette run does to disk has one class to read.
-
-Redaction happens here, at capture, and nowhere later
-    A recorded cassette must not hold ``Authorization``, ``Proxy-Authorization``, ``Cookie``,
-    ``Set-Cookie``, ``X-Api-Key`` or any name in ``secrets.redact_keys`` (implicit requirement
-    I4, AAP 0.3.2 "Security architecture"). :func:`redact_interaction` therefore replaces every
-    denied header value with :data:`~foundry.obs.redaction.REDACTED` and scrubs a JSON response
-    body structure-first, recording the names it scrubbed in the document's ``redacted_keys``.
-    :class:`~foundry.obs.redaction.Redactor` decides what is secret; no deny-list is restated
-    here, because a second copy of it would drift from the engine every other sink uses.
-
-    Two values deliberately survive untouched. The request body itself is never stored -- only its
-    SHA-256, which is an inherent redaction win -- and that hash is copied from the capture rather
-    than recomputed, so a body holding a secret still matches on replay while the secret is never
-    written. A request's query pairs are stored as recorded, because the matcher compares them:
-    rewriting a value here would make a cassette unplayable for the very request that produced it,
-    so what a capture keeps at all is decided on the capture side, not at this write.
-
-Both directions fail in the way their caller can act on
-    ``load`` fails loudly (AAP 0.14.3): a cassette that is not valid JSON, is not an object, or
-    does not match the documented shape raises :class:`~foundry.core.exceptions.FoundryError`
-    naming the file and the offending key, because a truncated or hand-edited cassette must not
-    replay as an empty recording. ``save`` and ``save_document`` fail by the failure-isolation
-    rule (AAP 0.1.2): a capture that cannot be redacted and an unwritable directory are each
-    reported as exactly one ``WARNING`` on the ``foundry`` logger and the write is abandoned,
-    because a cassette that could not be recorded must never turn a passing test into an error.
-    :class:`~foundry.core.exceptions.CassetteMissError` belongs to replay and is raised by the
-    transport, never here.
-
-Deterministic bytes
-    One serialiser writes every document (:func:`foundry.cassette.models.to_json_text`): sorted
-    keys, two-space indent, readable non-ASCII, exactly one trailing newline, UTF-8 (AAP 0.13.1).
-    Two runs of one recording therefore produce byte-identical files apart from ``recorded_at``.
-
-Import direction and import-time discipline
-    The standard library, :mod:`foundry.core`, :mod:`foundry.obs` and the two sibling modules
-    (AAP 0.4.8). ``foundry.config`` is never imported: the cassette directory and the
-    :class:`~foundry.obs.redaction.Redactor` arrive as constructor arguments, as the resolved
-    configuration reaches every sink. Importing the module performs no I/O, reads no environment
-    variable, configures no logger and keeps no module-level state.
+:class:`CassetteStore` reads and writes the document AAP 0.4.6 fixes and is the one place a capture
+is redacted before it reaches disk (AAP 0.3.2, AAP 0.4.8).
+A denied header value becomes the marker, a header no deny-list names has its value scrubbed as
+free text, a JSON body is scrubbed structure-first, and a query parameter whose name the engine
+redacts is stored as the marker and named in ``redacted_keys`` (AAP 0.2.1, AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -55,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
+from foundry.cassette.matcher import mask_query
 from foundry.cassette.models import (
     CASSETTE_ENCODING,
     CassetteDocument,
@@ -69,7 +31,7 @@ from foundry.cassette.paths import DEFAULT_CASSETTE_DIR, cassette_path
 from foundry.core.exceptions import FoundryError
 from foundry.core.ids import utc_now
 from foundry.obs.events import emit_plumbing_failure
-from foundry.obs.redaction import MAX_DEPTH, REDACTED, Redactor, default_redactor
+from foundry.obs.redaction import MAX_DEPTH, Redactor, default_redactor
 
 __all__: Final[tuple[str, ...]] = (
     "CassetteStore",
@@ -107,31 +69,33 @@ fault is a fault in Foundry's own plumbing, so it may not change a test's outcom
 def _redact_headers(
     headers: Mapping[str, str], redactor: Redactor, *, found: set[str]
 ) -> dict[str, str]:
-    """Return ``headers`` with every secret-bearing value replaced by the marker.
+    """Return ``headers`` with every secret-bearing header masked, and no secret left anywhere else.
 
-    The replacement and the recording of the scrubbed name happen in the same loop, so a name can
-    never be reported as redacted without being redacted. What counts as secret is asked of the
-    redactor, never restated here, and the marker is :data:`~foundry.obs.redaction.REDACTED` --
-    the exact form the acceptance criteria require in every produced file. Names are recorded
-    case-folded, because a header name's case is not significant and one run spelling it
-    ``Authorization`` and another ``authorization`` must record the same ``redacted_keys``.
+    A name the redactor considers secret-bearing holds :data:`~foundry.obs.redaction.REDACTED` --
+    the exact form the acceptance criteria require in every produced file -- and one it does not
+    recognise still has its value scrubbed as free text by
+    :meth:`~foundry.obs.redaction.Redactor.header`, because a deny-list cannot enumerate every
+    header a peer invents: a credential a peer echoes back in an unlisted header reaches no file
+    (AAP 0.3.2 "Security architecture", AAP 0.14.3). A value that holds no credential is stored
+    exactly as it was captured.
 
-    Args:
-        headers: The header mapping as captured. It is never mutated.
-        redactor: The redaction engine built from ``secrets.redact_keys``.
-        found: The accumulator the scrubbed names are added to.
+    The replacement and the recording of the scrubbed name happen in one loop, so a name is never
+    reported as redacted without being redacted. What counts as secret is asked of the redactor,
+    never restated here, ``found`` gains a name whenever the engine changed its value - masked
+    whole or scrubbed in part - and names are recorded case-folded because a header name's
+    case is not significant.
 
     Returns:
         A new mapping of the same header names, case-insensitively ordered, with every
-        secret-bearing value replaced.
+        secret-bearing value replaced and every other value free-text scrubbed.
     """
     redacted: dict[str, str] = {}
     for name in sorted(headers, key=str.casefold):
-        if redactor.redacts(name):
+        value = headers[name]
+        masked = redactor.header(name, value)
+        if masked != value:
             found.add(name.strip().casefold())
-            redacted[name] = REDACTED
-        else:
-            redacted[name] = headers[name]
+        redacted[name] = masked
     return redacted
 
 
@@ -141,15 +105,9 @@ def _collect_secret_names(
     """Add the secret-bearing key names anywhere inside a JSON value to ``found``.
 
     The walk mirrors :meth:`~foundry.obs.redaction.Redactor.json_value`, which is what scrubs the
-    values: the same maximum depth, the same recursion over mappings and sequences, and the same
-    question asked of every key. Names are recorded case-folded for the reason
-    :func:`_redact_headers` gives.
-
-    Args:
-        value: A JSON-shaped value, as :func:`json.loads` returned it.
-        redactor: The redaction engine that decides whether a key is secret-bearing.
-        found: The accumulator the scrubbed names are added to.
-        depth: The current recursion depth; a caller leaves it at ``0``.
+    values: the same maximum depth, the same recursion, the same question asked of every key, and
+    the same reading of a two-element ``[name, value]`` pair whose name answers it.
+    Names are recorded case-folded for the reason :func:`_redact_headers` gives.
     """
     if depth >= MAX_DEPTH:
         return
@@ -161,6 +119,11 @@ def _collect_secret_names(
             _collect_secret_names(item, redactor, found=found, depth=depth + 1)
         return
     if isinstance(value, list | tuple):
+        if len(value) == 2 and isinstance(value[0], str) and redactor.redacts(value[0]):
+            # The engine replaced this pair's second element whole, so nothing inside it survived
+            # to be named; walking on would report the key names of a value the file does not hold.
+            found.add(value[0].strip().casefold())
+            return
         for item in value:
             _collect_secret_names(item, redactor, found=found, depth=depth + 1)
 
@@ -178,17 +141,10 @@ def _redact_body(body: str, redactor: Redactor) -> tuple[str, frozenset[str]]:
     """Return the response body to store and the key names scrubbed out of it.
 
     A body that parses as JSON is redacted structure-first, so a secret-bearing key loses its value
-    however deeply it is nested, and the scrubbed key names are reported for ``redacted_keys``. A
-    body that is not JSON -- empty, HTML, plain text -- carries no keys to name, so it goes through
+    however deeply it is nested. A body that is not JSON -- empty, HTML, plain text -- goes through
     the redactor's text path, which scrubs header lines, ``Bearer`` credentials, embedded URLs and
-    ``name=value`` pairs.
-
-    A JSON body in which nothing secret was found is stored exactly as the peer sent it: rewriting
-    every recorded body would make a replay differ from the live response for no benefit.
-
-    Args:
-        body: The response body as text.
-        redactor: The redaction engine to scrub it with.
+    ``name=value`` pairs. A JSON body in which nothing secret was found is stored exactly as the
+    peer sent it: rewriting every recorded body would make a replay differ from the live response.
 
     Returns:
         The body to persist and the frozenset of key names that were scrubbed from it.
@@ -212,12 +168,10 @@ def _scrub_interaction(
 ) -> tuple[Interaction, frozenset[str]]:
     """Return one interaction with every secret-bearing value replaced, and the names scrubbed.
 
-    The single place a capture is redacted and the single place its scrubbed names are collected,
-    so ``redacted_keys`` can never disagree with the document it describes.
-
-    Args:
-        interaction: The interaction as captured.
-        redactor: The redaction engine to scrub it with.
+    The single place a capture is redacted and the single place its scrubbed names are collected, so
+    ``redacted_keys`` can never disagree with the document it describes. The request's query pairs
+    go through :func:`foundry.cassette.matcher.mask_query`, the helper the replay lookup masks
+    the arriving request with as well (AAP 0.2.1).
 
     Returns:
         The redacted interaction and the frozenset of names that were scrubbed.
@@ -236,7 +190,7 @@ def _scrub_interaction(
             request=RecordedRequest(
                 method=request.method,
                 path=request.path,
-                query=request.query,
+                query=mask_query(request.query, redactor, found=found),
                 body_sha256=request.body_sha256,
                 headers_subset=_redact_headers(request.headers_subset, redactor, found=found),
             ),
@@ -270,12 +224,7 @@ def redact_interactions(
     """Redact a capture and return it with the sorted, de-duplicated names it scrubbed.
 
     Both values a cassette needs come out of one pass, which is why
-    :meth:`CassetteStore.save_document` has a single call to make: the redacted interactions in
-    recording order, and the ``redacted_keys`` that belong with them.
-
-    Args:
-        interactions: The interactions in the order the test issued them.
-        redactor: The redaction engine built from ``secrets.redact_keys``.
+    :meth:`CassetteStore.save_document` has a single call to make.
 
     Returns:
         The redacted interactions as a tuple, and the sorted tuple of scrubbed names.
@@ -313,11 +262,10 @@ class CassetteStore:
     """The cassette documents of one run, read and written through one directory.
 
     A store holds the resolved ``cassette.dir`` and the redactor every write passes through, and
-    answers the three questions the record/replay paths ask: where a test's cassette lives
-    (:meth:`path_for`), whether it exists (:meth:`exists`) and what it holds (:meth:`load`). The
-    two write methods funnel into :meth:`save_document`, so the tree has exactly one place that
-    creates a directory, redacts a capture and writes a cassette file (AAP 0.4.8 "Where state may
-    be held"), and no public write path can store an unredacted capture.
+    answers where a test's cassette lives (:meth:`path_for`), whether it exists (:meth:`exists`) and
+    what it holds (:meth:`load`). Both write methods funnel into :meth:`save_document`, so the tree
+    has exactly one place that creates a directory, redacts a capture and writes a cassette file
+    (AAP 0.4.8).
 
     Attributes:
         _cassette_dir: The directory the documents live in, as given to the constructor.
@@ -336,8 +284,8 @@ class CassetteStore:
 
         Args:
             cassette_dir: The resolved ``cassette.dir``. A relative value is resolved against the
-                invocation directory when a path is built, so nothing is resolved here. Defaults
-                to :data:`~foundry.cassette.paths.DEFAULT_CASSETTE_DIR`.
+            invocation
+                directory when a path is built, so nothing is resolved here.
             redactor: The redaction engine built from ``secrets.redact_keys``. Defaults to
                 :func:`~foundry.obs.redaction.default_redactor`, which carries the built-in
                 deny-lists, so a store always redacts even when a caller passes nothing.
@@ -353,24 +301,29 @@ class CassetteStore:
         """The cassette directory this store reads and writes, as given."""
         return self._cassette_dir
 
+    @property
+    def redactor(self) -> Redactor:
+        """The redaction engine every document this store writes is masked with.
+
+        A caller that must mask a value the store will later compare -- the replay lookup's query
+        fingerprint, whose marker has to equal the one written beside it -- asks for exactly this
+        engine rather than building a second one, so one run masks one way. Reading the property
+        cannot change what the store does: the :class:`~foundry.obs.redaction.Redactor` resolved by
+        the constructor is immutable, and this hands out that same object.
+        """
+        return self._redactor
+
     def path_for(self, nodeid: str) -> Path:
         """Return the resolved path of ``nodeid``'s cassette document.
 
         Delegated to :func:`~foundry.cassette.paths.cassette_path`, so the store, the replay
-        transport's miss error and every message name the same file and the single containment
+        transport's miss error and every message name the same file, and the single containment
         check in :mod:`foundry.core.paths` is the only one applied.
-
-        Args:
-            nodeid: The pytest node id of the item.
-
-        Returns:
-            The resolved absolute path of the document, inside the cassette directory.
 
         Raises:
             FoundryError: ``nodeid`` is empty or whitespace-only.
-            ArtifactError: The resolved path escapes the cassette directory, which only a
-                symlinked directory can cause. The error carries the rejected path and the
-                directory.
+            ArtifactError: The resolved path escapes the cassette directory, which only a symlinked
+                directory can cause.
         """
         return cassette_path(nodeid, cassette_dir=self._cassette_dir)
 
@@ -386,24 +339,22 @@ class CassetteStore:
     def load(self, nodeid: str) -> CassetteDocument:
         """Read ``nodeid``'s cassette document, or an empty document when there is none.
 
-        A missing file is not an error: a test that made no request has no recording, and a
-        replay of it succeeds because no request is ever matched. Any request the test then makes
-        produces the typed :class:`~foundry.core.exceptions.CassetteMissError` naming this path,
-        raised by the replay transport rather than here. A file that exists but cannot be read or
-        does not hold a cassette is an error: a truncated or hand-edited recording must not replay
-        as if nothing had been recorded (AAP 0.14.3).
-
-        Args:
-            nodeid: The pytest node id of the item.
+        A missing file is not an error: a test that made no request has no recording, and a replay
+        of it succeeds because no request is ever matched. Any request the test then makes produces
+        the typed :class:`~foundry.core.exceptions.CassetteMissError` naming this path, raised by
+        the replay transport rather than here. A file that exists but cannot be read or does not
+        hold a cassette is an
+        error: a truncated or hand-edited recording must not replay as if nothing had been recorded.
 
         Returns:
             The stored document, or :func:`~foundry.cassette.models.empty_document` when the file
             does not exist.
 
         Raises:
-            FoundryError: ``nodeid`` is empty, the file cannot be read or decoded, or its content
-                is not a valid cassette. The message names the file and the offending key, and
-                never quotes a stored value, which may be a secret.
+            FoundryError: ``nodeid`` is empty, the file cannot be read or decoded, or its content is
+            not a
+                valid cassette. The message names the file and the offending key, and never quotes a
+                stored value, which may be a secret.
             ArtifactError: The resolved path escapes the cassette directory.
         """
         path = self.path_for(nodeid)
@@ -445,22 +396,10 @@ class CassetteStore:
 
         The interactions are handed on as captured: :meth:`save_document` redacts them before
         serialisation, so no denied header value and no secret-bearing JSON key reaches the file
-        (implicit requirement I4). There is one redaction pass and one write, and the document
-        records the sorted names that were scrubbed, which is what AAP 0.4.6 publishes as
-        ``redacted_keys``.
-
-        Failure isolation (AAP 0.1.2, AAP 0.14.3): a capture that cannot be turned into a document
-        and a write that cannot be redacted or completed each produce exactly one ``WARNING`` on
-        the ``foundry`` logger and a ``None`` return. The method never raises for those, because a
-        cassette that could not be recorded must not change a test's outcome or the run's exit
-        code.
-
-        Args:
-            nodeid: The pytest node id of the item whose capture this is.
-            interactions: The interactions to record, in the order the test issued them, as
-                captured.
-            recorded_at: The moment to stamp the document with. Defaults to
-                :func:`~foundry.core.ids.utc_now`, which is the only clock read on this path.
+        (implicit requirement I4). A capture that cannot be turned into a document and a write that
+        cannot be redacted or completed each produce exactly one ``WARNING`` on the ``foundry``
+        logger and a ``None`` return, never an exception, because a cassette that could not be
+        recorded must not change a test's outcome (AAP 0.1.2, AAP 0.14.3).
 
         Returns:
             The path the document was written to, or ``None`` when it could not be written.
@@ -485,30 +424,15 @@ class CassetteStore:
         """Redact ``document``, write it as ``nodeid``'s cassette and return its path.
 
         This is the single write funnel and therefore the single redaction point: the document's
-        interactions go through :func:`redact_interactions` here, before serialisation, so no
-        denied header value and no secret-bearing JSON key reaches the file however the document
-        was built (implicit requirement I4, AAP 0.3.2 "Security architecture"). No public write
-        path can store an unredacted capture.
+        interactions go through :func:`redact_interactions` here, before serialisation, so no public
+        write path can store an unredacted capture (implicit requirement I4, AAP 0.3.2).
 
-        The written document's ``redacted_keys`` is the sorted, de-duplicated union of the names
-        this pass scrubbed and the names the incoming document already carried, so a document
-        redacted elsewhere keeps its record and the file can never disagree with the
-        ``redacted_keys`` written beside it (AAP 0.4.6, AAP 0.13.1). A capture is redacted once:
-        :meth:`save` builds a document from the raw interactions and delegates here. Re-redacting
-        an already-redacted document changes nothing, because a scrubbed value holds no secret the
-        engine could still find.
-
-        The directory is created when it does not exist, and the text comes from the single
-        serialiser in :mod:`foundry.cassette.models`, so two runs of one recording produce
-        byte-identical files apart from ``recorded_at`` (AAP 0.13.1).
-
-        Failure isolation (AAP 0.1.2, AAP 0.14.3): a redaction fault and an ``OSError`` -- an
-        unwritable directory, a full disk, a path that is not a directory -- each produce exactly
-        one ``WARNING`` and a ``None`` return instead of raising.
-
-        Args:
-            nodeid: The pytest node id of the item whose capture this is.
-            document: The document to redact and write, as captured or as already redacted.
+        The written ``redacted_keys`` is the sorted, de-duplicated union of the names this pass
+        scrubbed and the names the incoming document already carried, so the file can never disagree
+        with the record written beside it (AAP 0.4.6, AAP 0.13.1). The directory is created when it
+        does not exist, and the text comes from the single serialiser in
+        :mod:`foundry.cassette.models`. A redaction fault and an ``OSError`` each produce exactly
+        one ``WARNING`` and a ``None`` return instead of raising (AAP 0.1.2, AAP 0.14.3).
 
         Returns:
             The path the document was written to, or ``None`` when it could not be written.

@@ -1,24 +1,6 @@
-"""Schema documents: where they live, how they are parsed, what they may reference.
+"""Schema documents: where a schema lives, how it is parsed and what it may reference (AAP 0.4.7).
 
-:func:`load_schema` turns any of the three :data:`SchemaSource` shapes into a JSON Schema
-document: ``.json`` through :mod:`json`, ``.yaml``/``.yml`` through ``yaml.safe_load``, and every
-other extension refused with :data:`SUPPORTED_SCHEMA_SUFFIXES` named in the failure.
-
-Two safety rules hold here rather than in the validator, on every path. YAML is reachable only
-through ``yaml.safe_load``, imported inside that branch, so importing this module costs the
-standard library alone. A ``$ref``, ``$dynamicRef`` or ``$recursiveRef`` must be a fragment of
-the same document: anything else would make :mod:`jsonschema` retrieve a document, which means
-opening a socket, and Foundry runs offline.
-
-Every fault is a :class:`foundry.core.exceptions.ContractError` carrying ``json_path="$"``: that
-attribute locates a violation inside an *instance* and a schema fault has none, so the summary goes
-in the message, the actionable text in ``detail`` and the next step in ``hint``. No builtin or
-third-party exception crosses this module's boundary, and ``$id`` is not inspected, since it names
-the document and triggers no retrieval. Importing this module reads no file, consults no
-environment variable, caches no document and configures no logger, so a second load reflects the
-bytes on disk; its one ``DEBUG`` record, naming path and suffix before the read, goes through
-:func:`foundry.obs.events.log_event`, imported inside :func:`_parse_by_suffix` so that module-scope
-imports stay inside the set AAP 0.4.8 lists for ``foundry.contract``.
+YAML loads only via ``yaml.safe_load``; a reference must be a same-document fragment (AAP 0.14.3).
 """
 
 from __future__ import annotations

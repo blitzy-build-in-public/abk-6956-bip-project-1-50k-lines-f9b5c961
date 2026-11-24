@@ -1,12 +1,9 @@
 """Structured lifecycle events: the one module Foundry writes log records through.
 
 No other module calls a logger directly, and :func:`log_event` demotes anything above ``WARNING``.
-Emitters take scalars only; the two that take free text scrub it through
-:meth:`foundry.obs.redaction.Redactor.text` with the session's ``secrets.redact_keys`` engine, else
-the built-in deny-lists when it passes ``None``, because pytest prints these records in a
-captured-log block: a node id is scrubbed and a ``path`` is sanitised, so no redacted name
-returns in the clear. Fields are sorted by key with no timestamp, so two runs log identical lines,
-and the only imports are the standard library plus ``obs.logging`` and ``obs.redaction``.
+Emitters take scalars only, and the two that take free text scrub it through
+:meth:`foundry.obs.redaction.Redactor.text` with the session's engine, because pytest prints these
+records in a captured-log block (AAP 0.3.2, AAP 0.13.1).
 """
 
 from __future__ import annotations

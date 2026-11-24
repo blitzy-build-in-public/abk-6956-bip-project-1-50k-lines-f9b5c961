@@ -1,73 +1,49 @@
 """Engine construction and deterministic disposal for the in-memory sqlite fixture.
 
 ``foundry_db`` (AAP 0.4.3) promises a transactional session on "a fresh in-memory sqlite schema
-built from the models the test registers", rolled back at teardown. This module is the engine half
-of that promise -- the connection that owns the database, the pool that holds it and the disposal
-that ends it -- while :mod:`foundry.db.session` owns the transaction half.
-
-**How the fixture drives it.** ``foundry_db`` calls :func:`create_engine` during setup, runs
-``create_all`` for the models the test registered, yields a session bound to that engine, and calls
-:func:`dispose_engine` during teardown whatever happened in between. Both calls live in one place,
-:mod:`foundry.db.session`, so a test never builds or disposes an engine itself and a teardown that
-runs after a failed setup still closes the connection setup opened.
-
-Each test gets its own engine, which also means each xdist worker gets its own private database:
-there is no shared file, no shared server and nothing to coordinate between processes, so sharded
-and serial runs behave identically. Disposal per test is what keeps a long parallel run from
-accumulating connections in a worker that never exits.
+built from the models the test registers", rolled back at teardown. This module is the engine half:
+the connection that owns the database, the pool that holds it and the disposal that ends it, while
+:mod:`foundry.db.session` owns the transaction half. ``foundry_db`` calls :func:`create_engine`
+during setup and :func:`dispose_engine` during teardown whatever happened in between -- both calls
+live in the session module, so a teardown that follows a failed setup still closes the connection
+setup opened. Each test gets its own engine, so each xdist worker gets a private database: no shared
+file, no shared server, nothing to coordinate between processes. Disposal per test is what keeps a
+long parallel run from accumulating connections in a worker that never exits.
 
 **Why** ``StaticPool``. An sqlite ``:memory:`` database belongs to the single connection that
 created it: no other connection can see it, and closing that connection destroys it. The default
 pool for ``sqlite:///:memory:`` (``SingletonThreadPool``) reuses one connection per thread and so
-appears to work in a single-threaded suite, but the moment anything asks the engine for a second
-connection it receives a *new, empty* database and the DDL from ``create_all`` becomes invisible.
-``StaticPool`` holds exactly one connection for the engine's lifetime, which states that sharing
-explicitly and is SQLAlchemy's documented answer for an in-memory sqlite database.
+appears to work in a single-threaded suite, but anything that asks the engine for a second
+connection receives a *new, empty* database and the DDL from ``create_all`` becomes invisible.
+``StaticPool`` holds exactly one connection for the engine's lifetime, which is SQLAlchemy's
+documented answer for an in-memory sqlite database.
 
 **What the session relies on** (AAP 0.4.3, AAP 0.7.1). ``isolation_level`` and ``autocommit`` are
-deliberately left unset. pysqlite's default isolation sends DML inside an implicit transaction, so
-a test's writes are rollback-able, while the DDL that ``create_all`` emits is in place before the
+deliberately left unset: pysqlite's default isolation sends DML inside an implicit transaction, so
+a test's writes are rollback-able, while the DDL ``create_all`` emits is in place before the
 session's transaction begins and survives its rollback. Together with ``StaticPool`` that is
 exactly the "schema and data survive the transaction" behaviour the fixture promises.
-
-The engine therefore hands out one connection and only one. :mod:`foundry.db.session` is what
-begins the transaction on it, creates the schema for the models a test passed in and ends the
-test's row set at teardown. This module owns none of that: it exports no sessionmaker, no session
-factory, no repository base class and no migration step, and a caller that wants a session asks
-the session module for one.
-
-``check_same_thread=False`` is deliberately not passed either. The fixture lifecycle is
+``check_same_thread=False`` is deliberately not passed either: the fixture lifecycle is
 single-threaded (AAP 0.4.8, "Fixture lifecycle rule"), and a connection used from a second thread
 should fail loudly rather than silently appear to work.
 
 **Foreign keys.** pysqlite leaves ``PRAGMA foreign_keys`` off, so a schema built from declarative
-models would silently accept an insert that violates a declared foreign key. When ``foreign_keys``
-is true, the connect listener below turns enforcement on for every new DBAPI connection.
+models would silently accept an insert that violates a declared foreign key; with ``foreign_keys``
+true, the connect listener below turns enforcement on for every new DBAPI connection.
 
 **sqlite only, in memory only.** Both restrictions are validation rather than documentation. A
-second backend would bring server lifecycle, driver installation and network behaviour that
-Foundry does not promise (AAP 0.9.2), and a file-backed database would let one test see another
-test's rows and would write a database file outside the ignored tree. :data:`SUPPORTED_BACKENDS`
-exists as data rather than as an ``if`` inside the check so that the accepted set is one named
-value a reader and a test can both point at, and so that widening it would be a deliberate edit to
-a documented constant.
+second backend would bring server lifecycle, driver installation and network behaviour Foundry
+does not promise (AAP 0.9.2), and a file-backed database would let one test see another test's
+rows and would write a database file outside the ignored tree. :data:`SUPPORTED_BACKENDS` exists
+as data rather than as an ``if`` so the accepted set is one named value a reader and a test can
+both point at.
 
-**Credentials.** A database URL can carry ``user:password@host``. Every message this module builds
-names the backend, the driver or the database path and never the URL, so a rejected URL cannot
-leak a credential into the terminal, a CI log, ``results.json`` or a report (AAP 0.3.2 Security).
-
-Importing this module defines names and nothing else (AAP 0.4.8): no I/O, no environment read, no
-logger configuration and no module-level mutable state beyond the constants below. SQLAlchemy is
-imported inside the functions that use it because ``foundry.plugin`` is imported at every pytest
-start and must stay inside the 150 ms startup budget (implicit requirement I5), while the database
-fixture is requested by a minority of tests.
-
-Example:
-    Build an engine for a declarative schema and close it deterministically::
-
-        engine = create_engine()
-        Base.metadata.create_all(engine)
-        dispose_engine(engine)
+**Credentials and import cost.** A database URL can carry ``user:password@host``, so every message
+this module builds names the backend, the driver or the database path and never the URL (AAP 0.3.2
+Security). Importing this module defines names and nothing else (AAP 0.4.8), and SQLAlchemy is
+imported inside the functions that use it, since ``foundry.plugin`` loads at every pytest start and
+must stay inside the 150 ms startup budget (implicit requirement I5) while the database fixture is
+requested by a minority of tests.
 """
 
 from __future__ import annotations
@@ -108,21 +84,16 @@ _FOREIGN_KEY_PRAGMA: Final[str] = "PRAGMA foreign_keys=ON"
 def _enable_foreign_keys(dbapi_connection: Any, connection_record: Any) -> None:
     """Turn foreign-key enforcement on for one freshly opened DBAPI connection.
 
-    Registered as an SQLAlchemy ``connect`` listener, so it runs once per new connection rather
-    than once per statement. The cursor is closed in a ``finally`` because a failing ``PRAGMA``
-    must not leave the cursor open on a connection the pool is about to hand to a session.
-
-    It has to run on ``connect`` rather than just before the first insert: pysqlite ignores
-    ``PRAGMA foreign_keys`` when the statement is issued inside a transaction, and the session this
-    engine serves begins one immediately. Connecting is the last moment the setting takes effect.
+    Registered as an SQLAlchemy ``connect`` listener, so it runs once per new connection, and on
+    ``connect`` rather than before the first insert because pysqlite ignores ``PRAGMA foreign_keys``
+    inside a transaction, which the session this engine serves begins immediately. The cursor is
+    closed in a ``finally`` so a failing PRAGMA cannot leave it open on a pooled connection.
 
     Args:
-        dbapi_connection: The raw DBAPI connection the driver just opened. It is untyped at this
-            boundary -- SQLAlchemy hands over whatever object the driver returned, which for
-            pysqlite is an ``sqlite3.Connection`` -- and this handler is private, so annotating it
-            ``Any`` keeps the "no ``Any`` in a public signature" rule (AAP 0.13.1) intact.
-        connection_record: The pool's record for that connection. Unused: the PRAGMA belongs to
-            the connection itself, but the event signature requires the parameter.
+        dbapi_connection: The raw DBAPI connection the driver just opened, untyped at this boundary
+            because SQLAlchemy hands over whatever object the driver returned.
+        connection_record: The pool's record for that connection; unused, but the event signature
+            requires it.
     """
     cursor = dbapi_connection.cursor()
     try:
@@ -134,8 +105,8 @@ def _enable_foreign_keys(dbapi_connection: Any, connection_record: Any) -> None:
 def _reject_unsupported_backend(url: URL) -> None:
     """Raise when ``url`` addresses a backend other than sqlite.
 
-    The message names the backend only. It never includes the URL, because a URL is a credential
-    carrier and this check runs on values a user typed by hand.
+    The message names the backend only, never the URL, which is a credential carrier and comes here
+    as a value a user typed by hand.
 
     Args:
         url: The parsed database URL to check.
@@ -178,39 +149,30 @@ def create_engine(database_url: str = DEFAULT_DATABASE_URL, *, foreign_keys: boo
     """Build the engine whose single connection owns the test's in-memory sqlite database.
 
     The name mirrors ``sqlalchemy.create_engine`` because every caller in the tree uses it
-    (AAP 0.7.1); SQLAlchemy's own factory is imported inside this function under a private alias
-    so the two never collide. The returned engine is not connected yet -- ``StaticPool`` opens its
-    one connection on first use, and the connect listener therefore applies to it.
-
-    The engine is created with ``echo`` at its default of ``False``: SQL echo would write
-    statements into the captured stdout of whichever test happened to trigger the connection,
-    which is non-deterministic noise in a report and is not a knob this contract exposes.
-
-    Accepted URL forms (``:memory:`` is the only database this function will take)::
-
-        sqlite+pysqlite:///:memory:   # the default, and what foundry_db passes
-        sqlite:///:memory:            # the same driver named implicitly
-        sqlite+pysqlite://            # no database named: the driver's in-memory default
-
-    Anything else -- another backend, a database path, a string the driver cannot parse -- is
-    rejected before an engine is built, so a caller never holds a half-configured engine.
+    (AAP 0.7.1); SQLAlchemy's own factory is imported inside this function under a private alias so
+    the two never collide. The engine is not connected yet -- ``StaticPool`` opens its one
+    connection on first use, so the connect listener applies to it -- and ``echo`` keeps its default
+    ``False``, since SQL echo would write statements into the captured stdout of whichever test
+    triggered the connection. The accepted URL forms name the default driver, the same driver
+    implicitly, or no database at all (``sqlite+pysqlite:///:memory:``, ``sqlite:///:memory:``,
+    ``sqlite+pysqlite://``); anything else -- another backend, a database path, a string the driver
+    cannot parse -- is rejected before an engine is built, so a caller never holds a half-configured
+    engine.
 
     Args:
-        database_url: A sqlite URL naming an in-memory database. The default is
-            :data:`DEFAULT_DATABASE_URL`; a caller overrides it only to select a different
-            synchronous sqlite driver.
-        foreign_keys: Whether to enforce declared foreign keys. Defaults to ``True`` so a fixture
-            that builds a schema from declarative models behaves like the database it models;
-            ``False`` exists for a test that deliberately inserts orphaned rows.
+        database_url: A sqlite URL naming an in-memory database; the default is
+            :data:`DEFAULT_DATABASE_URL`, overridden only to select another synchronous driver.
+        foreign_keys: Whether to enforce declared foreign keys, ``True`` so a declarative schema
+            behaves like the database it models and ``False`` for a test inserting orphaned rows.
 
     Returns:
-        An engine over one shared connection to a private in-memory database, to be passed to
+        An engine over one shared connection to a private in-memory database, for
         :func:`dispose_engine` at teardown.
 
     Raises:
-        FoundryError: If the URL cannot be parsed, names a backend other than sqlite, names a
-            database on disk, or names a driver the interpreter cannot load. No message includes
-            the URL or its userinfo.
+        FoundryError: If the URL cannot be parsed, names another backend, names a database on disk,
+            or names a driver the interpreter cannot load. No message includes the URL or its
+            userinfo.
     """
     # Imported here rather than at module scope: pytest imports `foundry.plugin` at every start,
     # and SQLAlchemy costs far more than the whole 150 ms startup budget allows (I5).

@@ -1,42 +1,9 @@
 """The inlined stylesheet and script of Foundry's self-contained HTML report.
 
-``report.html`` has to open on a machine with no network, so every byte of presentation it
-needs is a constant here rather than a file beside the template: no stylesheet to ship, no
-script to load, no font to fetch and no CDN to reach. The renderer inlines :data:`CSS` inside a
-``<style>`` element and :data:`JS` inside a ``<script>`` element, and those two strings are the
-whole of the report's styling and behaviour (AAP 0.3.2, AAP 0.7.4).
-
-The stylesheet is light-themed and English-only (assumption A14): one inline stylesheet, a
-system font stack with no web font, no icon font, no preprocessor and no build step. It carries
-a summary strip of per-outcome count chips, a results table with a sticky header, one badge
-class per result outcome (all nine values of the outcome enum), a quarantined block, failure
-panels, a monospace log tail, the artifacts-disabled banner, the no-tests empty state and a
-footer, plus a print block that drops the sticky header and the shadows.
-
-The report is complete and usable with JavaScript disabled: native ``<details>`` elements do
-every expansion, so the script is progressive enhancement only. It adds a text filter over the
-results table and an expand-all / collapse-all pair, and it discovers those hooks by attribute,
-so a template that omits them degrades to the no-script behaviour instead of throwing:
-
-* ``[data-foundry-filter]`` -- the filter ``<input>``;
-* ``[data-foundry-action="expand-all"]`` and ``[data-foundry-action="collapse-all"]`` -- buttons;
-* the results table, found by ``#foundry-results`` or, failing that, ``table.results``.
-
-The script sets ``data-foundry-js="enabled"`` on ``<html>``, which is how the stylesheet reveals
-the script-only controls: without it they stay hidden, so a no-script reader never sees a filter
-that cannot filter.
-
-:func:`contains_external_reference` and :func:`assert_self_contained` turn the self-contained
-property into something checkable: every constant here passes that scan, and a rendered document
-that pulls anything in from outside -- an ``https`` stylesheet, a protocol-relative ``url``, a
-``<link>`` element -- fails it, which is the assertion the report-render test of AAP 0.14.1
-makes.
-
-Import direction and import-time discipline (AAP 0.4.8): the standard library plus
-:class:`foundry.core.exceptions.FoundryError`, the contracted type the guard raises. Importing
-this module performs no I/O, reads no environment variable, configures no logger and mutates
-nothing; the bundle is built once and is immutable, so rendering five hundred result records
-never rebuilds its assets.
+:data:`CSS` and :data:`JS` are every byte of the report's presentation and behaviour, inlined by
+:mod:`foundry.reporting.html` so ``report.html`` opens with no network;
+:func:`contains_external_reference` and :func:`assert_self_contained` make that property checkable.
+AAP 0.3.2, 0.4.8, 0.7.4, 0.14.1.
 """
 
 from __future__ import annotations
@@ -324,18 +291,13 @@ JS: Final[str] = """\
 })();
 """
 
-# The two spellings of an absolute reference: a document containing either is not self-contained.
-# Both values are assembled from fragments so that this file's own source carries no literal
-# absolute-scheme spelling: the source tree is scanned for exactly those spellings while the
-# report's self-contained property is verified, and the checker has to pass the scan it performs.
-# The runtime values are unchanged.
+# The two spellings of an absolute reference. Assembled from fragments so this file carries no
+# literal absolute-scheme spelling, which the source tree is scanned for.
 SELF_CONTAINED_FORBIDDEN: Final[tuple[str, ...]] = ("http" + "://", "https" + "://")
 
 # Markers of an asset fetched from somewhere else. ``url(`` alone is deliberately absent: a
-# ``data:`` URI is a self-contained asset and stays permitted, while ``url(http``, ``url(//`` and
-# the rest of this tuple are the forms that reach outside the document. ``<link`` covers a
-# stylesheet or icon element that a self-contained file may never contain. The first marker is
-# assembled for the same reason as the two above.
+# ``data:`` URI is self-contained and stays permitted. The first marker is assembled for the same
+# reason as the two above.
 EXTERNAL_REFERENCE_MARKERS: Final[tuple[str, ...]] = (
     "@" + "import",
     "url(http",
@@ -349,18 +311,15 @@ EXTERNAL_REFERENCE_MARKERS: Final[tuple[str, ...]] = (
 class AssetsBundle:
     """The inlined presentation assets one report is rendered with.
 
-    Both strings are constants owned by this module: no other source may inject styles, so the
-    rendered document's self-contained property is a property of this file alone. The bundle is
-    frozen and hashable, which lets the renderer hold a single instance for every record and
-    lets a test compare one bundle with another without copying it.
+    Both strings are constants owned by this module, so the rendered document's self-contained
+    property is a property of this file alone, and the frozen bundle is hashable and reusable.
 
     Attributes:
         css: The stylesheet, inlined verbatim inside the report's ``<style>`` element.
         js: The script, inlined verbatim inside the report's ``<script>`` element. It is
             progressive enhancement only: the report is complete without it.
-        version: The asset schema version. It starts at ``1`` and is raised only when the markup
-            the assets target changes shape, so a renderer can tell an older bundle from a
-            current one.
+        version: The asset schema version, raised only when the markup the assets target changes
+            shape, so a renderer can tell an older bundle from a current one.
     """
 
     css: str
@@ -375,9 +334,8 @@ def default_assets() -> AssetsBundle:
     """Return the one shared bundle of inlined assets.
 
     The instance is built once at import and never rebuilt, so rendering five hundred result
-    records costs no more than rendering one (AAP 0.14.2). The bundle is frozen, so a caller
-    cannot mutate the shared instance; a caller that needs different assets -- a test asserting
-    the self-contained guard, a future renderer -- constructs its own :class:`AssetsBundle`.
+    records costs no more than rendering one (AAP 0.14.2); being frozen, it cannot be mutated by
+    a caller that needs different assets.
 
     Returns:
         The module-level :data:`DEFAULT_ASSETS` instance.
@@ -388,12 +346,9 @@ def default_assets() -> AssetsBundle:
 def _first_external_reference(text: str) -> str | None:
     """Return the first external-reference marker in ``text``, or ``None`` when there is none.
 
-    The scan is case-insensitive, because a document may spell a reference in any case, and it
-    walks :data:`SELF_CONTAINED_FORBIDDEN` before :data:`EXTERNAL_REFERENCE_MARKERS`, so the
-    marker a caller is told about is the same one on every run.
-
-    Args:
-        text: The asset constant or document to scan.
+    The scan is case-insensitive, and it walks :data:`SELF_CONTAINED_FORBIDDEN` before
+    :data:`EXTERNAL_REFERENCE_MARKERS`, so the marker a caller is told about is the same on every
+    run.
 
     Returns:
         The marker as this module spells it, or ``None`` when ``text`` is self-contained.
@@ -408,13 +363,10 @@ def _first_external_reference(text: str) -> str | None:
 def contains_external_reference(text: str) -> bool:
     """Report whether ``text`` pulls in anything from outside itself.
 
-    Args:
-        text: The asset constant or document to scan. Comparison is case-insensitive.
-
     Returns:
         ``True`` when any marker of :data:`SELF_CONTAINED_FORBIDDEN` or
-        :data:`EXTERNAL_REFERENCE_MARKERS` appears in ``text``, ``False`` otherwise. An empty
-        string is self-contained.
+        :data:`EXTERNAL_REFERENCE_MARKERS` appears in ``text`` -- compared case-insensitively --
+        ``False`` otherwise. An empty string is self-contained.
     """
     return _first_external_reference(text) is not None
 
@@ -423,15 +375,10 @@ def assert_self_contained(text: str) -> None:
     """Raise unless ``text`` pulls in nothing from outside itself.
 
     The asset tests call this on :data:`CSS` and :data:`JS`; the renderer may call it on a
-    finished document, which is the strictest use and holds for a report whose interpolated
-    values are escaped. A finding is reported as :class:`FoundryError`, the only type this module
-    raises, so a caller handles it like any other Foundry failure.
-
-    Args:
-        text: The asset constant or rendered document to check.
+    finished document, which holds for a report whose interpolated values are escaped.
 
     Raises:
-        FoundryError: When ``text`` contains a marker from :data:`SELF_CONTAINED_FORBIDDEN` or
+        FoundryError: ``text`` contains a marker from :data:`SELF_CONTAINED_FORBIDDEN` or
             :data:`EXTERNAL_REFERENCE_MARKERS`. The message names the marker and the hint says
             what to do instead.
     """

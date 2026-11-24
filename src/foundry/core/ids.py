@@ -29,15 +29,9 @@ __all__: Final[tuple[str, ...]] = (
     "utc_now",
 )
 
-# --- The clock seam --------------------------------------------------------
-
 
 def utc_now() -> datetime:
-    """Return the current instant as a timezone-aware UTC datetime.
-
-    Returns:
-        The current instant, timezone-aware and in UTC.
-    """
+    """Return the current instant as a timezone-aware UTC datetime."""
     return datetime.now(UTC)
 
 
@@ -48,26 +42,16 @@ def _as_utc(moment: datetime) -> datetime:
     return moment.astimezone(UTC)
 
 
-# --- ISO 8601 timestamps ---------------------------------------------------
-
-
 def to_iso8601(moment: datetime) -> str:
-    """Render a datetime as a fixed-shape ISO 8601 UTC timestamp.
-
-    Returns:
-        The timestamp at millisecond precision with an explicit ``+00:00`` offset, never ``Z``.
-    """
+    """Render a datetime as an ISO 8601 UTC timestamp at millisecond precision, never ``Z``."""
     return _as_utc(moment).isoformat(timespec="milliseconds")
 
 
 def parse_iso8601(text: str) -> datetime:
     """Read an ISO 8601 timestamp, accepting a trailing ``Z`` and no offset.
 
-    Returns:
-        The instant the text names, timezone-aware and in UTC.
-
-    Raises:
-        FoundryError: The text is not an ISO 8601 timestamp (AAP 0.14.3).
+    Returns it timezone-aware and in UTC, and raises FoundryError when the text is not an ISO 8601
+    timestamp (AAP 0.14.3).
     """
     try:
         parsed = datetime.fromisoformat(text)
@@ -79,8 +63,6 @@ def parse_iso8601(text: str) -> datetime:
     return _as_utc(parsed)
 
 
-# --- The run id ------------------------------------------------------------
-
 RUN_ID_FORMAT: Final[str] = "%Y%m%dT%H%M%S"
 """The ``strftime`` pattern the timestamp half of a run id is rendered with, in UTC."""
 
@@ -88,8 +70,7 @@ RUN_ID_TOKEN_HEX_DIGITS: Final[int] = 6
 """The number of lowercase hexadecimal characters a run id suffix carries (AAP 0.4.3)."""
 
 RUN_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\d{8}T\d{6}-[0-9a-f]{6}$")
-"""The shape of a run id (AAP 0.4.6): a compact UTC timestamp, a hyphen and six lowercase hex
-digits; the id is also the artifact directory name."""
+"""The shape of a run id (AAP 0.4.6): a UTC timestamp, a hyphen and six lowercase hex digits."""
 
 _RUN_ID_TOKEN_BYTES: Final[int] = RUN_ID_TOKEN_HEX_DIGITS // 2
 """Bytes a suffix source must produce; every byte renders as two hex characters."""
@@ -105,10 +86,8 @@ def run_id(
 ) -> str:
     """Build a run identifier of the form ``YYYYmmddTHHMMSS-<6 hex>``.
 
-    Both inputs are seams, so a reproducible id is a fixed ``now`` and suffix (AAP 0.4.6).
-
-    Returns:
-        The run id, for example ``20250102T030405-9f3c1a``.
+    A reproducible id is a fixed ``now`` and suffix, both of which are injected seams (AAP 0.4.6),
+    and the result reads ``20250102T030405-9f3c1a``.
 
     Raises:
         FoundryError: The injected suffix is not six lowercase hexadecimal characters.
@@ -130,15 +109,8 @@ def run_id(
 
 
 def is_valid_run_id(value: str) -> bool:
-    """Report whether a string has the shape of a run id.
-
-    Returns:
-        ``True`` when the value matches :data:`RUN_ID_PATTERN`, otherwise ``False``.
-    """
+    """Report whether a string matches :data:`RUN_ID_PATTERN`."""
     return RUN_ID_PATTERN.fullmatch(value) is not None
-
-
-# --- Stable case ids -------------------------------------------------------
 
 
 def _require_stem(stem: str) -> None:
@@ -176,13 +148,12 @@ def _canonical_json(value: object, axis: str) -> str:
 
 
 def case_id_for_row(stem: str, row_index: int) -> str:
-    """Build the stable id of one row of a tabular data file, such as ``cart-0``.
+    """Return the case id of one row of a tabular data file, such as ``cart-0``.
 
-    Returns:
-        The case id, from the file stem and the 0-based row index.
+    The id is the file stem and the 0-based row index.
 
     Raises:
-        FoundryError: The stem is blank or the row index is negative (``Case.line`` is 1-based,
+        FoundryError: The stem is blank, or the row index is negative (``Case.line`` is 1-based,
             AAP 0.7.2).
     """
     _require_stem(stem)
@@ -195,10 +166,9 @@ def case_id_for_row(stem: str, row_index: int) -> str:
 
 
 def case_id_for_matrix(stem: str, values: Mapping[str, object]) -> str:
-    """Build the stable id of one expanded matrix case, axes sorted by name.
+    """Return the case id of one expanded matrix case, such as ``matrix-colour="red"-size="L"``.
 
-    Returns:
-        The case id, such as ``matrix-colour="red"-size="L"``, each value canonical JSON.
+    The axes are sorted by name and each value is canonical JSON.
 
     Raises:
         FoundryError: The stem is blank, an axis name is not a string, or a value is not JSON.

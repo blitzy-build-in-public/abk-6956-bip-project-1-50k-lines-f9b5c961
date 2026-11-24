@@ -1,22 +1,9 @@
 """Bounded per-test log capture for Foundry: a ring of the last N ``logging`` records.
 
 Foundry retains at most ``logging.capture_lines`` records per test, so a failed test carries a
-readable tail into ``log_tail.log``, the record's ``artifacts`` list and the report's failure panel
-(AAP 0.4.6; AAP 0.14.2 budgets the tail at "200 lines from ``logging.capture_lines``").
-:class:`LogRing` -- a :class:`logging.Handler` over a :class:`collections.deque` bounded at
-construction -- and :func:`format_record` are its only storage and formatter, so the artifact, the
-report panel and the ``user_properties`` ferry cannot render a record three ways. Formatting happens
-only when read, with no timestamp, host, thread or address, so two runs write identical tails
-(AAP 0.14.3); one line is capped at :data:`MAX_TAIL_LINE_LENGTH` and a multi-line message collapsed
-onto one, so a tail's line count equals its record count and stays bounded. The capacity belongs to
-the caller -- ``foundry.execution.session`` resolves it and :mod:`foundry.core.limits` holds its
-default and bounds -- so ``0`` retains nothing and nothing escapes :meth:`LogRing.emit` (AAP 0.4.8).
-
-It captures no stdout or stderr (pytest does, and ``foundry.obs.artifacts`` persists
-``report.capstdout``), holds no module-level state (the ring rides ``item.stash``, AAP 0.4.8),
-starts no thread, attaches nothing at import, and never raises out of :meth:`LogRing.emit`: a fault
-is silent, changes neither an outcome nor an exit code (AAP 0.1.2), and skips
-:meth:`logging.Handler.handleError`, whose traceback would pollute a captured artifact.
+readable tail into ``log_tail.log`` and the report's failure panel (AAP 0.4.6; AAP 0.14.2 budgets
+that tail at 200 lines). :class:`LogRing` and :func:`format_record` are its only storage and
+formatter, and formatting happens only when read, so two runs write identical tails (AAP 0.14.3).
 """
 
 import logging

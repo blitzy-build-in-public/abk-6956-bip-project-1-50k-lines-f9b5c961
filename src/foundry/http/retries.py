@@ -1,58 +1,7 @@
 """The retry engine of ``foundry.http``: the policy, the predicates, the backoff and the loop.
 
-One :meth:`foundry.http.FoundrySession.request` call is one logical request, and this module
-decides how often it is put on the wire, how long the caller waits between attempts and what
-the caller sees once every attempt has failed (AAP 0.3.2, AAP 0.7.3)::
-
-    runner = RetryRunner(policy, sleep=recording_sleep, redactor=redactor)
-    outcome = runner.execute(lambda: transport.send(request), method="GET", path="/orders/1")
-    outcome.attempts  # one AttemptRecord per attempt, in order
-    outcome.response  # the last response, whatever its status
-
-Predicates (AAP 0.7.3)
-    ``timeout`` is an :class:`httpx.TimeoutException`, ``connect`` an :class:`httpx.ConnectError`,
-    ``status_5xx`` any status of 500 or above and ``status_429`` exactly 429. :func:`classify`
-    maps a fault or a status to one of :data:`RETRY_PREDICATES`, and :func:`should_retry` is the
-    evaluation ``foundry.execution.retry`` shares with this package: it takes plain strings and
-    holds no ``httpx`` state, because ``execution`` may import ``http`` and never the reverse
-    (AAP 0.3.2, AAP 0.4.8).
-
-A response is returned, never raised
-    Every status reaches the caller as an :class:`httpx.Response` inside a
-    :class:`RetriedResponse`, the retried ones included: a third 503 is the answer to the
-    request, not an exception. Only a fault below the protocol raises --
-    :class:`foundry.core.exceptions.TransportError` for a kind the policy does not retry,
-    :class:`foundry.core.exceptions.RetryExhaustedError` for one that outlasted every attempt --
-    and neither is ever raised for a status.
-
-Attempt counting (assumption A2)
-    ``max_attempts`` is the *total* count, so ``http.retries.max_attempts = 3`` and
-    ``--foundry-retries 2`` describe the same three attempts and the same ``attempts: 3`` in
-    ``results.json``. ``execution.retries`` counts only the repeats, so ``max_attempts =
-    retries + 1`` belongs to whoever reads that key, not here.
-
-Nothing is caught blindly, nothing sleeps here
-    :meth:`RetryRunner.execute` catches ``httpx`` exceptions only. A
-    :class:`foundry.core.exceptions.CassetteMissError` from the replay transport is a
-    ``FoundryError``, not an ``httpx`` one, so it propagates untouched: a replay miss must reach
-    the test as the typed error naming the method, the path and the cassette document, and an
-    ``except Exception`` here would rewrite it as a transport fault and hide why nothing
-    matched (AAP 0.4.7). Every wait goes through the injected
-    :data:`foundry.core.types.Sleep`, so a test asserts on the delays a backoff produces instead
-    of paying them, which is what keeps every sleep in Foundry's suite under 100 ms
-    (AAP 0.14.3). Every message that reaches an
-    :class:`foundry.core.types.AttemptRecord` passes through
-    :meth:`foundry.obs.redaction.Redactor.text` first, because a transport exception quotes the
-    URL it failed on and that URL can carry a token (AAP 0.3.2).
-
-Layering and import time
-    Only :mod:`foundry.core` and :mod:`foundry.obs.redaction` come from Foundry: ``http`` may
-    not import ``config``, ``reporting``, ``cli``, ``plugin`` or ``execution`` (AAP 0.4.8). The
-    predicates are configuration values whose enum lives in ``foundry.config``, which is not
-    importable here, so a member arrives as an ordinary object and
-    :func:`normalise_predicates` reads its ``value`` -- a ``StrEnum`` member already is it.
-    Importing this module defines names only: no I/O, no environment read, no logger
-    configuration and no mutable module state.
+``RetryRunner`` puts one logical request on the wire up to ``max_attempts`` times; the predicates,
+the backoff formula and the exhausted-attempt records are AAP 0.7.3's.
 """
 
 from __future__ import annotations

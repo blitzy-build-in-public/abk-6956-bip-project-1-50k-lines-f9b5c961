@@ -1,28 +1,7 @@
 """The persisted shapes of a record/replay cassette.
 
-A cassette is one JSON document per test, and this module is the only place its shape is
-defined: :class:`CassetteDocument` holds an ordered list of :class:`Interaction` values, each
-pairing a :class:`RecordedRequest` with a :class:`RecordedResponse` (AAP 0.4.6 "Cassette
-document", AAP 0.7.2 "Cassette models"). The field names are part of the published
-compatibility promise: a later release may add to a cassette but may never rename or remove one
-of them (AAP 0.4.9), so ``as_dict`` and ``from_dict`` are symmetrical and round-trip exactly.
-
-Three properties of the shape are deliberate. Matching is decided by the decoded query pairs and
-the body hash rather than by raw bytes, so parameter order, percent-encoding and the bytes a
-serialiser chose cannot make two identical requests look different (AAP 0.2.1, AAP 0.4.6);
-:func:`normalise_query` and :func:`body_sha256_of` are the single implementations of those rules,
-used by capture and replay alike. Every mapping field is re-frozen as a ``MappingProxyType`` in
-``__post_init__``, so a store that hands a document to a caller cannot have it altered afterwards.
-And nothing here reads the clock, the environment or the filesystem: ``recorded_at`` comes from the
-caller, normally :func:`foundry.core.ids.utc_now`, so it round-trips to the millisecond and two
-runs of one suite serialise to identical text (AAP 0.13.1).
-
-The import list is the standard library plus :mod:`foundry.core` and nothing else -- no ``httpx``,
-``yaml``, ``pydantic`` or ``jsonschema`` -- so the store, the matcher and their tests need neither
-a client nor a heavy dependency (AAP 0.4.8). A malformed document is reported as
-:class:`foundry.core.exceptions.FoundryError` naming the offending key, including the interaction's
-position, because a bare ``KeyError`` or ``JSONDecodeError`` out of a hand-edited cassette would
-tell the person reading it nothing (AAP 0.14.3).
+One JSON document per test: ``recorded_at``, ``redacted_keys`` and ordered ``{request, response}``
+entries, with the field names AAP 0.4.6 and AAP 0.7.2 publish; none may be renamed (AAP 0.4.9).
 """
 
 from __future__ import annotations
@@ -79,23 +58,19 @@ def normalise_query(
     """Return a query in any stored form as decoded pairs sorted by name and then value.
 
     One normaliser serves capture and replay, which is what makes parameter order and
-    percent-encoding irrelevant to matching (AAP 0.2.1, AAP 0.4.6): the recorder stores what this
-    returns and the matcher compares what this returns.
+    percent-encoding irrelevant to matching (AAP 0.2.1, AAP 0.4.6).
 
     Args:
         value: The query as ``httpx.URL.query`` bytes, a query string with or without its leading
-            ``?``, a mapping of parameter names to values (``httpx.QueryParams`` is one), or
-            decoded ``(name, value)`` pairs. Pairs are taken as already decoded, so
-            ``[("q", "a b")]`` and ``"q=a+b"`` produce equal results.
+            ``?``, a mapping of parameter names to values, or decoded ``(name, value)`` pairs.
 
     Returns:
-        The pairs sorted by name and then value, with blank values kept because ``?flag=`` and
-        ``?flag`` are both real spellings of a present parameter.
+        The pairs sorted by name and then value, with blank values kept because ``?flag=`` is a
+        present parameter.
 
     Raises:
-        FoundryError: The text cannot be parsed as a query string, or an entry is not a
-            two-element sequence of strings. No message quotes the query, which may carry a value
-            the redaction rules protect.
+        FoundryError: The text cannot be parsed as a query string, or an entry is not a two-element
+            sequence of strings. No message quotes the query, which may carry a protected value.
     """
     if isinstance(value, bytes):
         # A query is percent-encoded ASCII in practice; a stray byte becomes U+FFFD rather than
@@ -114,12 +89,8 @@ def normalise_query(
 def body_sha256_of(content: bytes) -> str | None:
     """Return the hexadecimal SHA-256 of a body, or ``None`` when there is no body.
 
-    An empty body is ``None`` rather than the hash of the empty string, because a request that
-    carries no body and one that carries a zero-length body are the same request. Capture and
-    matching both go through this function, so neither side can disagree about that rule.
-
-    Args:
-        content: The raw body bytes, as they went on the wire or came back.
+    An empty body is ``None`` rather than the hash of the empty string, so a request with no body
+    and one with a zero-length body are the same request.
 
     Returns:
         The 64-character lowercase hexadecimal digest, or ``None`` when ``content`` is empty.
@@ -200,8 +171,8 @@ def _require_mapping(value: object, *, where: str) -> Mapping[str, object]:
 def _entries(value: object, *, where: str) -> Iterable[object]:
     """Return a value that must be readable as a list of entries.
 
-    Text and mappings are refused explicitly: ``str`` is iterable, so a bare string where a list
-    belongs would be read one entry per character, and a mapping as its keys.
+    Text and mappings are refused explicitly: ``str`` is iterable, so a bare string would be read
+    one entry per character, and a mapping as its keys.
     """
     if isinstance(value, str | bytes | Mapping) or not isinstance(value, Iterable):
         raise FoundryError(f"{where} must be a list, got {_type_name(value)}", hint=_RECORD_HINT)
@@ -237,8 +208,7 @@ def _require_str(data: Mapping[str, object], key: str, *, where: str) -> str:
 def _optional_str(data: Mapping[str, object], key: str, *, where: str) -> str | None:
     """Return the string stored under ``key``, or ``None`` when it is absent or null.
 
-    An absent key and an explicit ``null`` mean the same thing for an optional field, so neither is
-    an error.
+    An absent key and an explicit ``null`` mean the same thing for an optional field.
     """
     value = data.get(key)
     if value is None:
@@ -270,8 +240,8 @@ def _frozen_method(value: object) -> str:
 def _frozen_status(value: object) -> int:
     """Return a recorded HTTP status, refusing a boolean.
 
-    The recorded status is whatever the peer sent, so it is not range-checked; ``bool`` is refused
-    because ``True`` is an ``int`` in Python.
+    The status is whatever the peer sent, so it is not range-checked; ``bool`` is refused because
+    ``True`` is an ``int`` in Python.
     """
     if isinstance(value, bool) or not isinstance(value, int):
         raise FoundryError(
@@ -284,8 +254,7 @@ def _frozen_moment(value: object, *, where: str) -> datetime:
     """Return a datetime at the precision a cassette stores it, timezone-aware and in UTC.
 
     A cassette stores milliseconds (:func:`foundry.core.ids.to_iso8601`), so the value is truncated
-    to that precision through the same writer and reader a stored document uses; otherwise a
-    document built from :func:`foundry.core.ids.utc_now` would not equal itself after a round trip.
+    through the same writer and reader a stored document uses and a round trip is lossless.
     """
     if not isinstance(value, datetime):
         raise FoundryError(
@@ -298,8 +267,8 @@ def _frozen_moment(value: object, *, where: str) -> datetime:
 def _frozen_headers(value: object, *, where: str) -> Mapping[str, str]:
     """Return a header mapping as a read-only copy ordered by name.
 
-    The copy keeps a captured request unalterable, and ordering the keys here rather than at
-    serialisation keeps a direct iteration deterministic too (AAP 0.13.1).
+    The copy keeps a captured request unalterable, and ordering the keys here keeps direct iteration
+    deterministic too (AAP 0.13.1).
     """
     frozen: dict[str, str] = {}
     for name, header in _require_mapping(value, where=where).items():
@@ -316,7 +285,7 @@ def _frozen_names(value: object, *, where: str) -> tuple[str, ...]:
     """Return the redacted key names, sorted and de-duplicated.
 
     A redactor reports the names it scrubbed as an unordered set, so the document sorts them at
-    construction and two runs over one suite record the same tuple (AAP 0.13.1).
+    construction (AAP 0.13.1).
     """
     names: set[str] = set()
     for entry in _entries(value, where=where):
@@ -331,9 +300,8 @@ def _frozen_names(value: object, *, where: str) -> tuple[str, ...]:
 def _frozen_interactions(value: object, *, where: str) -> tuple[Interaction, ...]:
     """Return the interactions as a tuple, in the order they were recorded.
 
-    The order is preserved rather than sorted, because replay serves the recorded interactions in
-    the order the test issued them: a test that creates an entity and then reads it back needs both,
-    in that sequence (AAP 0.4.6).
+    Replay serves them in the order the test issued them: a test that creates an entity and then
+    reads it back needs both, in that sequence (AAP 0.4.6).
     """
     interactions: list[Interaction] = []
     for index, entry in enumerate(_entries(value, where=where), start=1):
@@ -359,21 +327,15 @@ def _stored_interaction(entry: object, *, index: int) -> Interaction:
 class RecordedRequest:
     """The request half of one recorded interaction (AAP 0.4.6, AAP 0.7.2).
 
-    Only what matching needs is stored: the method, the path, the decoded query pairs and the
-    body's hash. Headers are kept as a ``headers_subset`` and never take part in the match, because
-    a header the client adds for itself (``host``, ``content-length``) would otherwise make a
-    recording unplayable on another machine.
+    Only what matching needs is stored; ``headers_subset`` is kept for a reader and never matched,
+    because a header the client adds for itself would make a recording unplayable elsewhere.
 
     Attributes:
-        method: The request method, upper-cased at construction so ``get`` and ``GET`` record the
-            same way.
+        method: The request method, upper-cased at construction so ``get`` and ``GET`` record alike.
         path: The request path without its query string, as the recorded URL carried it.
-        query: The decoded query parameters as ``(name, value)`` pairs sorted by name and then
-            value, with blank values kept.
-        body_sha256: The lowercase hexadecimal SHA-256 of the body, or ``None`` when the body was
-            empty (see :func:`body_sha256_of`).
-        headers_subset: The kept request headers, every secret-bearing value already redacted,
-            frozen to a read-only mapping ordered by name.
+        query: The decoded pairs sorted by name and then value, with blank values kept.
+        body_sha256: The lowercase hexadecimal SHA-256 of the body, or ``None`` when it was empty.
+        headers_subset: The kept request headers, every secret-bearing value already redacted.
     """
 
     method: str
@@ -407,7 +369,7 @@ class RecordedRequest:
         """Return this request as the ``request`` object of a cassette document (AAP 0.4.6).
 
         ``query`` becomes a list of two-element lists and ``headers_subset`` an object of sorted
-        keys, so two identical requests produce identical text.
+        keys.
         """
         return {
             "method": self.method,
@@ -425,8 +387,9 @@ class RecordedRequest:
         loads (AAP 0.4.9). ``where`` names the location in an error message.
 
         Raises:
-            FoundryError: A documented key is missing, the object is not a mapping, the query is
-                not a list of pairs or a header is not a string.
+            FoundryError: A documented key is missing, the object is not a mapping, the query is not
+            a list
+                of pairs or a header is not a string.
         """
         fields = _require_mapping(data, where=where)
         method = _require_str(fields, "method", where=where)
@@ -453,13 +416,12 @@ class RecordedRequest:
 class RecordedResponse:
     """The response half of one recorded interaction (AAP 0.4.6, AAP 0.7.2).
 
-    The body is stored as text, because every assertion a cassette serves -- status, JSON subset,
-    JSON Schema -- reads text and a binary body would not survive the JSON document. It is the
-    body as the peer sent it, with no assertion applied: a recorded 500 replays as a 500.
+    The body is stored as text, because every assertion a cassette serves reads text and it is the
+    body as the peer sent it: a recorded 500 replays as a 500.
 
     Attributes:
         status: The status the peer sent.
-        headers: The response headers a person needs, sorted by name and read-only.
+        headers: The response headers, sorted by name and read-only.
         body: The response body as text, empty when the peer sent none.
     """
 
@@ -539,7 +501,8 @@ class Interaction:
 
         Raises:
             FoundryError: ``request`` or ``response`` is missing or is not an object, or a half
-                holds a key of the wrong type.
+            holds a key
+                of the wrong type.
         """
         fields = _require_mapping(data, where=where)
         return cls(
@@ -560,11 +523,8 @@ class CassetteDocument:
     """One test's recorded interactions, and what was redacted from them (AAP 0.4.6, AAP 0.7.2).
 
     Attributes:
-        recorded_at: When the cassette was written, timezone-aware UTC at millisecond precision --
-            the precision the stored text carries, so a document read back equals the one written.
-        redacted_keys: The names whose values were scrubbed at capture time, sorted and
-            de-duplicated. Redaction happens before the write (AAP 0.2.1), so a cassette holds no
-            secret value.
+        recorded_at: When the cassette was written, timezone-aware UTC at millisecond precision.
+        redacted_keys: The names whose values were scrubbed at capture, sorted and de-duplicated.
         interactions: One :class:`Interaction` per recorded request, in recording order.
     """
 
@@ -594,7 +554,7 @@ class CassetteDocument:
         """Return the document as the JSON object AAP 0.4.6 fixes.
 
         The keys are ``recorded_at``, ``redacted_keys`` and ``interactions``, and there are no
-        others: no ``schema_version``, no host and no per-interaction timestamp.
+        others.
         """
         return {
             "recorded_at": to_iso8601(self.recorded_at),
@@ -606,13 +566,13 @@ class CassetteDocument:
     def from_dict(cls, data: Mapping[str, object]) -> CassetteDocument:
         """Build a document from a stored cassette object.
 
-        Keys beyond the documented three are ignored, so a cassette written by a later release
-        still loads (AAP 0.4.9).
+        Keys beyond the documented three are ignored, so a cassette written by a later release still
+        loads (AAP 0.4.9).
 
         Raises:
-            FoundryError: A documented key is missing, ``recorded_at`` is not an ISO 8601
-                timestamp, ``redacted_keys`` is not a list of names, or an interaction is
-                malformed. An interaction error names its 1-based position.
+            FoundryError: A documented key is missing, ``recorded_at`` is not an ISO 8601 timestamp,
+                ``redacted_keys`` is not a list of names, or an interaction is malformed. That error
+                names the interaction's 1-based position.
         """
         fields = _require_mapping(data, where=_DOCUMENT)
         recorded_at = parse_iso8601(_require_str(fields, "recorded_at", where=_DOCUMENT))
@@ -640,9 +600,8 @@ class CassetteDocument:
 def empty_document(recorded_at: datetime) -> CassetteDocument:
     """Return a document with nothing recorded yet.
 
-    This is what a record-mode store starts from before it appends the interactions a test produced,
-    and what a replay reads when the cassette holds none: a present but empty cassette is the
-    recording of a test that made no request, which is not the same as a missing file.
+    What a replay reads when the cassette holds none: a present but empty cassette is the recording
+    of a test that made no request, which is not the same as a missing file.
     """
     return CassetteDocument(recorded_at=recorded_at)
 
@@ -651,9 +610,7 @@ def to_json_text(document: CassetteDocument) -> str:
     """Return the JSON text a cassette file holds, without touching the filesystem.
 
     Keys are sorted and non-ASCII text is left readable, so two runs of one recording produce
-    identical bytes and a cassette diffs line by line. The text is indented by
-    :data:`_JSON_INDENT` and ends with one newline. The store owns the file; this function is pure,
-    so a test can serialise a document without a temporary directory.
+    identical bytes; the text is indented by :data:`_JSON_INDENT` and ends with one newline.
     """
     rendered = json.dumps(
         document.as_dict(), indent=_JSON_INDENT, sort_keys=True, ensure_ascii=False
@@ -663,8 +620,6 @@ def to_json_text(document: CassetteDocument) -> str:
 
 def from_json_text(text: str) -> CassetteDocument:
     """Read the JSON text of a cassette file into a document, without touching the filesystem.
-
-    ``text`` is the file's content, decoded with :data:`CASSETTE_ENCODING`.
 
     Raises:
         FoundryError: The text is not valid JSON, or the object it holds is not a cassette. A syntax

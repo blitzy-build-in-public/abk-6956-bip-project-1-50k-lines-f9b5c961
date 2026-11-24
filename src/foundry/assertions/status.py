@@ -1,43 +1,9 @@
 """The ``assert_status`` helper: one HTTP status assertion, one redacted failure message.
 
-:func:`assert_status` does one job. It compares a response's status code against the set of
-codes a test accepts, returns when the status is one of them, and otherwise raises
-``AssertionError`` naming the received status, the expected set and a bounded, redacted excerpt
-of the response body (AAP 0.4.3, AAP 0.7.3).
-
-What it raises is fixed by the exception boundary of AAP 0.14.3: ``AssertionError`` and nothing
-else -- never a Foundry error, never another builtin, never a new exception class. A misused
-``expected`` argument surfaces as ``AssertionError`` too, carrying the prefix
-``foundry.assertions.assert_status:`` so a misuse is unmistakable against a mismatched status.
-
-The excerpt comes from the single redaction engine, :mod:`foundry.obs.redaction`, so it is
-scrubbed before it is shown and is bounded by
-:data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` (200 bytes). :func:`assert_status` takes an
-optional ``redactor``: a caller holding the configured ``secrets.redact_keys`` passes the engine
-it built from them, so a configured key the built-in deny-lists do not recognise is scrubbed as
-well, and a caller that passes ``None`` gets those built-in deny-lists. Response headers are never
-rendered at all: a message that cannot hold a header value cannot leak one, which is the
-structural reason a configured secret header cannot reach ``results.json``, ``junit.xml``,
-``report.html`` or the terminal through this helper.
-
-A non-2xx response is an ordinary value rather than a fault: the HTTP layer of AAP 0.4.3
-returns every status in a ``FoundryResponse`` and raises only on a transport error, so a 500
-arrives here intact and is asserted against like any other code.
-
-The name, the parameter shape and the behaviour are part of Foundry's compatibility promise
-(AAP 0.4.9): a later release may add to them, never rename or remove them. The response
-parameter is annotated with :class:`foundry.core.types.HttpResponseLike` rather than with
-``FoundryResponse`` because the layering contract of AAP 0.4.8 keeps this package from
-importing :mod:`foundry.http`; the real response type satisfies that protocol structurally.
-
-Importing this module defines names and constants and nothing else -- no I/O, no environment
-read, no logger configuration and no module-level mutable state (AAP 0.4.8).
-
-Example:
-    Accept either success code for a created resource::
-
-        response = foundry_api.post("/carts", json={"items": []})
-        assert_status(response, {200, 201})
+:func:`assert_status` returns when the response's status is one of the accepted codes and otherwise
+raises ``AssertionError`` naming the received status, the expected set and a bounded, redacted body
+excerpt (AAP 0.4.3, AAP 0.7.3, AAP 0.14.3): ``AssertionError`` is the only type it raises, and
+response headers are never rendered. Its name and parameter shape are fixed by AAP 0.4.9.
 """
 
 from __future__ import annotations
@@ -233,37 +199,11 @@ def assert_status(
     *,
     redactor: Redactor | None = None,
 ) -> None:
-    """Assert that a response's status code is one of the expected codes.
+    """Assert that a response's status code is one of the expected codes (AAP 0.4.3).
 
-    This is Foundry's public status assertion (AAP 0.4.3): it accepts every status the HTTP
-    layer returns, including 4xx and 5xx, and it raises ``AssertionError`` rather than a Foundry
-    error so that any test runner reports an ordinary assertion failure (AAP 0.14.3).
-
-    Args:
-        response: The response to check. Anything satisfying
-            :class:`~foundry.core.types.HttpResponseLike` is accepted, which includes
-            ``foundry.http.FoundryResponse``.
-        expected: One status code, or a ``set``, ``frozenset``, ``list``, ``tuple``, ``range``
-            or one-shot iterable of them.
-        redactor: The run's redaction engine, normally the one the fixture layer built from
-            ``secrets.redact_keys``, so a configured key is scrubbed out of the body excerpt
-            too. ``None`` builds one carrying only the built-in deny-lists. Additive over the
-            signature AAP 0.4.3 publishes and permitted by AAP 0.4.9.
-
-    Returns:
-        ``None`` when the status is one of the expected codes. Nothing else is read on that
-        path: a passing assertion touches neither the body nor the redaction engine, because
-        this helper sits on the hot path of every user test and the engine is resolved only once
-        the status has disagreed.
-
-    Raises:
-        AssertionError: When the status is not one of the expected codes. The message names the
-            received status, the expected set, where the response came from when it reports a
-            documented source, and a redacted body excerpt of at most
-            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes. It is also raised, with
-            the same ``foundry.assertions.assert_status:`` prefix, when ``expected`` is a
-            ``bool``, a string, an iterable holding a non-int or an out-of-range code, or an
-            iterable holding no code at all.
+    Returns ``None`` on a match. Otherwise it raises ``AssertionError`` naming the received status,
+    the expected set and a redacted, bounded body excerpt (AAP 0.14.3, AAP 0.7.3); ``redactor`` is
+    additive over the AAP 0.4.3 signature (AAP 0.4.9).
 
     Example:
         Accept either success code for a created resource::

@@ -1,52 +1,24 @@
 """Node-id set verification, worker-loss records, and the two xdist channel names.
 
 Foundry verifies a distributed run; it never distributes one. pytest-xdist owns the scheduling, and
-this module's whole job is to prove that the set of node ids the workers ran is exactly the set the
-controller collected -- the observation AAP 0.14.1 makes for criterion 7 -- and to turn a worker
-that never reported into the ``run_error`` record the AAP 0.4.6 result document carries. No
-distribution algorithm, worker count, load-balancing mode or work queue lives here, because
-AAP 0.9.2 places reimplementing any of them out of scope: where this module would be tempted to
-decide which worker runs which item, the answer is no.
+this module proves that the node ids the workers ran are exactly the set the controller collected --
+the observation AAP 0.14.1 makes for criterion 7 -- and turns a worker that never reported into the
+``run_error`` record AAP 0.4.6 carries. No distribution algorithm, worker count, load-balancing mode
+or work queue lives here, because AAP 0.9.2 places reimplementing any of them out of scope.
 
-The three channels
-    A distributed run shares state only through what xdist already provides, and each channel has
-    one owner. :data:`WORKER_INPUT_KEY` names the ``config.workerinput`` entry that carries the
-    payload :func:`foundry.execution.session.worker_payload` produces, which is how a worker learns
-    the run id, the artifacts root and the resolved configuration. :data:`WORKER_OUTPUT_KEY` names
-    the ``config.workeroutput`` entry a worker fills with the node ids it ran, read on the
-    controller in ``pytest_testnodedown`` through :func:`record_worker_output`, because a gateway
-    that died has no ``workeroutput`` attribute to read at all. Per-test state does not travel here
-    either: it rides ``TestReport.user_properties`` as the wire format
-    :mod:`foundry.execution.state` defines. Everything crossing a channel is serialisable -- a
-    ``tuple[str, ...]`` of node ids, or a plain dataclass of strings -- because a value that is not
-    cannot cross the worker boundary at all (implicit requirement I3).
+A distributed run shares state only through what xdist provides, and each channel has one owner:
+:data:`WORKER_INPUT_KEY` names the ``config.workerinput`` entry carrying the payload
+:func:`foundry.execution.session.worker_payload` produces, :data:`WORKER_OUTPUT_KEY` names the
+``config.workeroutput`` entry a worker fills with the node ids it ran, and per-test state rides
+``TestReport.user_properties`` as :mod:`foundry.execution.state` defines. Everything crossing a
+channel is serialisable (implicit requirement I3).
 
-Why ``run_error`` is a payload here and not a reporting import
-    ``foundry.execution`` may never import ``foundry.reporting`` (AAP 0.4.8), so the element this
-    module produces is :class:`foundry.execution.state.RunErrorPayload` -- the same frozen dataclass
-    whose ``as_dict`` renders exactly the ``{record_type, run_id, recorded_at, worker_id, message}``
-    shape AAP 0.4.6 fixes. ``plugin.py`` appends those elements after every result record when it
-    writes the result document; naming the shape here is what keeps the reporting layer out of the
-    execution layer.
-
-Items that never ran (assumption A12)
-    A worker lost mid-run leaves collected items with no result at all.
-    :meth:`ShardingService.verify` records the controller's serial collection in the ledger, and
-    :meth:`ShardingService.missing_after_run` names the sorted node ids that produced no report, so
-    ``session.py`` can emit one ``not_run`` record per missing item with the partial data it has
-    rather than dropping the item from the document.
-
-State and import discipline
-    Importing this module defines two channel names, two ledgers, one frozen report, one service and
-    one channel reader; it performs no I/O, reads no environment variable, opens no socket, starts
-    no thread, configures no logger and holds no module-level mutable state. The ledgers are
-    instance state, created per session by ``session.py`` behind the typed ``SESSION_NODES`` and
-    ``SESSION_RUN_ERRORS`` stash keys, and the service is a frozen view over them. The imports below
-    are ``foundry.core.ids``, ``foundry.obs.events``, ``foundry.obs.redaction`` and the sibling
-    ``foundry.execution.state`` -- all inside the AAP 0.4.8 allow-list for this package, and no
-    import of ``pytest`` or ``xdist`` is needed because the plugin passes plain values in. Nothing
-    here raises: a ``run_error`` is a record, not an exception, and every collection this module
-    returns is sorted, so two runs and two workers serialise one shape.
+``foundry.execution`` may never import ``foundry.reporting`` (AAP 0.4.8), so the element this module
+produces is :class:`foundry.execution.state.RunErrorPayload`, and ``plugin.py`` appends those
+elements when it writes the result document. A lost worker leaves collected items with no result at
+all (assumption A12), so :meth:`ShardingService.missing_after_run` names them for ``session.py`` to
+emit as ``not_run`` records. Nothing here raises: a ``run_error`` is a record, not an exception, and
+every collection the module returns is sorted, so two runs serialise one shape.
 """
 
 from __future__ import annotations
@@ -149,10 +121,9 @@ def _clean(values: Iterable[object]) -> list[str]:
 class NodeLedger:
     """The node ids each worker collected, and the controller's own serial collection.
 
-    One instance per session, created by ``session.py`` and stored behind
-    ``foundry.execution.state.SESSION_NODES``. Each worker's node ids keep the order they were first
-    recorded in and are exposed sorted, so a repeated ``pytest_testnodedown`` for the same gateway
-    cannot double-count a node id and no set iteration reaches a report.
+    One instance per session, behind ``foundry.execution.state.SESSION_NODES``. Each worker's node
+    ids keep first-seen order and are exposed sorted, so a repeated ``pytest_testnodedown`` for one
+    gateway cannot double-count a node id and no set iteration reaches a report.
     """
 
     __slots__ = ("_by_worker", "_expected", "_expected_seen", "_seen")
@@ -169,7 +140,7 @@ class NodeLedger:
 
         A blank worker id names no worker, so nothing is recorded for it: the ``run_error`` record
         that reports a lost worker names that worker, and an entry no gateway answers to would be a
-        second, empty worker in every count the report makes.
+        second, empty worker in every count.
         """
         worker = _text(worker_id)
         if not worker:
@@ -239,11 +210,10 @@ class NodeLedger:
 class RunErrorLedger:
     """The run's own failures, kept in insertion order and de-duplicated.
 
-    One instance per session, stored behind ``foundry.execution.state.SESSION_RUN_ERRORS``.
-    Insertion order is deterministic because gateway ids arrive in xdist's own order. Two payloads
+    One instance per session, behind ``foundry.execution.state.SESSION_RUN_ERRORS``. Two payloads
     are the same run error when the worker they name and the message they carry match, and only the
-    first of them is kept: ``pytest_testnodedown`` can fire again for one crash, and a second entry
-    with its own timestamp would report one lost worker twice while changing no other count.
+    first is kept: ``pytest_testnodedown`` can fire again for one crash, and a second entry would
+    report one lost worker twice.
     """
 
     __slots__ = ("_entries", "_keys")
@@ -285,15 +255,9 @@ def record_worker_output(
 ) -> tuple[str, ...]:
     """Record the node ids a finished worker published under :data:`WORKER_OUTPUT_KEY`.
 
-    A worker that died never published ``config.workeroutput`` at all -- on that path the gateway
-    has no such attribute, so reading it raises and the controller's teardown fails with it -- which
-    is why the mapping arrives here as ``None`` or as a mapping whose key is absent. Every one of
-    those states records nothing instead of raising, and the node ids now held for ``worker_id`` are
-    returned so the caller can log their count.
-
-    Returns:
-        The sorted node ids the ledger holds for ``worker_id`` after the call, empty when the worker
-        published nothing usable.
+    A worker that died never published ``config.workeroutput`` at all, so the mapping arrives here
+    as ``None`` or without the key; both record nothing instead of raising, and the node ids now
+    held for ``worker_id`` are returned so the caller can log their count.
     """
     if not isinstance(worker_output, Mapping):
         return ledger.nodes_for(worker_id)
@@ -310,9 +274,9 @@ class ShardingReport:
     """What one comparison of the serial and the distributed node-id sets found.
 
     ``missing`` is in the controller's collection but in no worker's, ``duplicate`` was reported by
-    more than one worker, ``extra`` was reported by a worker but never collected by the controller,
-    and ``worker_losses`` names the workers the run recorded a ``run_error`` for. Every collection
-    is sorted and de-duplicated on construction, so two runs of one suite produce one shape.
+    more than one worker, ``extra`` was reported by a worker and never collected, and
+    ``worker_losses`` names the workers the run recorded a ``run_error`` for. Every collection is
+    sorted and de-duplicated on construction, so two runs produce one shape.
     """
 
     serial_count: int
@@ -383,8 +347,8 @@ class ShardingService:
     """The controller's view of a distributed run: compare the sets, record the lost workers.
 
     Frozen and read-only over two session-scoped ledgers, so the plugin holds it behind the session
-    state and every call is a query. ``redactor`` defaults to the built-in deny-lists and is widened
-    by the session with the configured ``secrets.redact_keys`` engine when one is available.
+    state and every call is a query. ``redactor`` defaults to the built-in deny-lists and the
+    session widens it with the configured ``secrets.redact_keys``.
     """
 
     nodes: NodeLedger
@@ -397,18 +361,13 @@ class ShardingService:
 
         The controller's collection is recorded in the ledger as a side effect, so a worker lost
         after this point still leaves its items nameable by :meth:`missing_after_run`. A run with no
-        recorded worker, and no lost one, is a serial run: the controller ran every item itself, so
-        the serial set is compared with itself and the report holds.
+        recorded worker and no lost one is serial: the serial set is compared with itself.
 
-        An empty ``expected_nodeids`` beside one or more reporting workers is not divergence but an
-        absent input: xdist's own distribution leaves the controller's ``session.items`` empty, so
-        the workers' union becomes the verified universe and the report compares it with itself
-        rather than reporting every node id as extra. Divergence is then reported by ``duplicate``
-        -- one node id a worker ran twice, or two workers ran once each -- which is the defect this
-        check exists for.
-
-        One ``DEBUG`` ``sharding_decision`` event per worker carries that worker's count and never a
-        node id, which is what keeps a sharded run's log free of the collected node id list.
+        An empty ``expected_nodeids`` beside one or more reporting workers is an absent input rather
+        than divergence, because xdist's distribution leaves the controller's ``session.items``
+        empty; the workers' union then becomes the verified universe, and divergence is reported by
+        ``duplicate`` -- the defect this check exists for. One ``DEBUG`` ``sharding_decision`` event
+        per worker carries that worker's count and never a node id.
         """
         serial = tuple(sorted(_clean(expected_nodeids)))
         self.nodes.record_expected(serial)

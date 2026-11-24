@@ -1,37 +1,7 @@
 """The four credential strategies of Foundry's HTTP layer and the rule that keeps them safe.
 
-``http.auth.strategy`` selects how the ``foundry_api`` fixture authenticates the requests it
-issues (AAP 0.3.3): ``none`` sends no credential, ``bearer`` sends ``Authorization: Bearer
-<token>``, ``basic`` sends ``Authorization: Basic <base64(user:password)>`` per RFC 7617, and
-``header`` sends a configured header name with a value read from the environment.
-
-Configuration holds the *names* of the environment variables that carry the secrets --
-``http.auth.token_env``, ``http.auth.user_env``, ``http.auth.password_env``,
-``http.auth.header_value_env`` -- and never the secrets themselves, so a configuration echo, a
-``results.json`` record, a JUnit property or a rendered report cannot leak one (AAP 0.3.2
-"Secret indirection", implicit requirement I9). :func:`resolve_auth` reads the named variables
-once, at session start, and returns an :class:`AuthHeader` whose value is excluded from every
-representation the object offers.
-
-Two consequences follow from the layering contract (AAP 0.4.8) and are deliberate:
-
-- this module imports :mod:`foundry.core.exceptions` for :class:`~foundry.core.exceptions.
-  ConfigError` and :mod:`foundry.obs.redaction` for the mask marker, and nothing else from
-  Foundry. It cannot import :mod:`foundry.config`, where ``AuthStrategy`` lives, so
-  :func:`normalise_strategy` accepts the enum member structurally through its ``value``;
-- together with :mod:`foundry.config.env` it is one of exactly two modules permitted to read
-  ``os.environ``, and it reads it only inside :func:`resolve_auth`. Importing this module
-  performs no environment read, resolves no credential, configures no logger and holds no
-  mutable state.
-
-``foundry_http`` deliberately passes no settings at all (``resolve_auth(None)`` returns
-``None``), so a test can drive a login flow itself and keep the credential it obtains.
-
-Example:
-    Send a bearer token that the ``FOUNDRY_TOKEN`` variable holds::
-
-        header = resolve_auth(AuthSettings(strategy="bearer", token_env="FOUNDRY_TOKEN"))
-        pairs = header_pairs(header)  # (("Authorization", "Bearer <token>"),)
+Configuration holds only the *names* of the environment variables carrying the secrets (AAP 0.3.2):
+:func:`resolve_auth` reads them once at session start, and no representation prints the value.
 """
 
 from __future__ import annotations

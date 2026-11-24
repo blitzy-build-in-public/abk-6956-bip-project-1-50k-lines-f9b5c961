@@ -1,24 +1,9 @@
 """Logging for Foundry: one logger name, one ``NullHandler``, no host reconfiguration.
 
 Every Foundry module logs through the single logger named :data:`LOGGER_NAME` (``"foundry"``) and
-its children: :func:`get_logger` obtains one, :func:`configure` applies the level, and
-:func:`attach_handler` and :func:`detach_handler` are the only code that mutates its handler list.
-
-Import-time behaviour
-    One :class:`logging.NullHandler` is added to the ``foundry`` logger at import, guarded by a
-    membership check so a repeated import never duplicates it; it is the only import-time side
-    effect in :mod:`foundry.obs`. Without it, ``logging.lastResort`` would print every ``WARNING``
-    and above to ``stderr``.
-
-What this module must never do
-    A library does not reconfigure the logging of the application hosting it, so this module never
-    calls :func:`logging.basicConfig`, :func:`logging.disable` or :func:`logging.captureWarnings`,
-    changes root level or handlers, sets ``propagate`` to ``False`` (pytest captures ``foundry``
-    records through propagation), adds a second handler, or touches another package's logger -- a
-    project suppressing httpx's lines sets that on the ``httpx`` logger, as ``README.md`` documents.
-    Levels: ``DEBUG`` for resolution (the key, never a secret value), cassette mode, sharding and
-    per-attempt detail; ``INFO`` once per run; ``WARNING`` only for failure isolation and the
-    documented HTML fallback, never above ``WARNING`` from library code.
+its children, and :func:`attach_handler` and :func:`detach_handler` are the only code that mutates
+its handler list. A library does not reconfigure its host (AAP 0.4.8): no ``basicConfig``, no root
+logger change, and ``propagate`` stays on, which pytest's captured-log blocks depend on.
 """
 
 from __future__ import annotations

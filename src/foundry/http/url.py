@@ -1,40 +1,7 @@
 """The single place a request target is resolved and a URL is made safe to dump.
 
-``foundry.http`` is the capability layer that AAP 0.3.2 sizes as six modules, and this is the
-one that owns URL arithmetic. :func:`join_url` is step 1 of the request pipeline fixed by
-AAP 0.7.3: it resolves a request ``path`` against ``http.base_url`` and raises
-:class:`~foundry.core.exceptions.ConfigError` when a relative path is issued with no base URL
-configured. :func:`redact_url` is the counterpart the security architecture of AAP 0.3.2 and
-the state table of AAP 0.4.7 require: userinfo and token query parameters are gone from a URL
-before anything writes it to a log line, an artifact, a cassette, a result record or a report.
-
-The two halves belong together because they must read the same string the same way. One
-authority parser serves joining, error messages, session logging and redaction, so nothing
-holds a second opinion about where the host ends and the port begins.
-
-``foundry_http`` has no base URL and is issued absolute URLs; ``foundry_api`` carries one and
-is issued relative paths. :func:`join_url` accepts both -- an absolute target passes through
-after scheme validation, a relative one is resolved against the base -- which is what lets a
-single session class serve both fixtures (AAP 0.4.3).
-
-Redaction is delegated, never re-implemented
-    :func:`redact_url` removes userinfo itself, because userinfo is structural and must leave
-    the string whether or not anything is configured, and then hands the result to
-    :meth:`foundry.obs.redaction.Redactor.url`, the single engine AAP 0.3.2 places in front of
-    every sink. No deny-list is built here: a second list would be the one place a configured
-    key could fail to apply, and the sentinel assertion of
-    ``tests/integration/test_redaction_end_to_end.py`` depends on there being exactly one.
-
-Import direction and import-time discipline
-    Only :mod:`foundry.core.exceptions` and :mod:`foundry.obs.redaction` are imported, the
-    edges AAP 0.4.8 allows this package to the foundation rung. Importing the module defines
-    names and constants and executes nothing else: no I/O, no environment read, no logger
-    configuration, no module-level mutable state, no socket. Every function is pure and
-    deterministic -- no clock, no randomness, no host-dependent behaviour -- so two runs of
-    the same suite log and persist identical URLs.
-
-    Nothing here follows a redirect. A hand-built ``httpx.Request`` does not, and the session
-    returns a 3xx as an ordinary response, so there is no redirect-aware joining to do.
+:func:`join_url` is step 1 of AAP 0.7.3's pipeline and raises ``ConfigError`` with no base URL;
+:func:`redact_url` strips userinfo and token parameters before a URL reaches any sink (AAP 0.3.2).
 """
 
 from __future__ import annotations
@@ -357,27 +324,20 @@ def path_and_query(url: str) -> str:
 def require_base_url(base_url: str | None) -> str:
     """Return ``base_url`` when a session can resolve relative paths against it, raising otherwise.
 
-    This is the check ``foundry_api`` performs. A session that resolves relative paths needs an
-    absolute ``http``/``https`` URL to resolve them against; ``foundry_http`` carries no base
-    URL and never calls this.
-
-    A base URL may not carry userinfo. Credentials belong in the environment variables that
-    ``http.auth.*_env`` names, never in a configuration value, because ``http.base_url`` is
-    echoed by ``foundry config show``, stored in every result record and shown in
-    ``report.html``, so a credential written into it would reach all three (AAP 0.4.8;
-    implicit requirement I9, a configuration holds secret variable *names* only).
-
-    Args:
-        base_url: The configured ``http.base_url``, or ``None``.
+    This is the check ``foundry_api`` performs; ``foundry_http`` carries no base URL and never calls
+    it. A base URL may not carry userinfo: credentials belong in the environment variables that
+    ``http.auth.*_env`` names, because ``http.base_url`` is echoed by ``foundry config show``,
+    stored in every result record and shown in ``report.html`` (AAP 0.4.8; implicit requirement I9).
 
     Returns:
-        ``base_url`` unchanged when it is an absolute ``http`` or ``https`` URL with a host and
-        no userinfo.
+        ``base_url`` unchanged when it is an absolute ``http`` or ``https`` URL with a host and no
+        userinfo.
 
     Raises:
-        ConfigError: With ``key="http.base_url"`` when the value is absent or blank, when it is
-            not an absolute ``http``/``https`` URL, when it has no host, or when it carries
-            userinfo. The message names the key and never quotes a credential.
+        ConfigError: With ``key="http.base_url"`` when the value is absent or blank, is not an
+        absolute
+            ``http``/``https`` URL, has no host, or carries userinfo. No message quotes a
+            credential.
     """
     if base_url is None or not base_url.strip():
         raise _base_url_not_set()
@@ -392,35 +352,22 @@ def require_base_url(base_url: str | None) -> str:
 def join_url(base_url: str | None, path: str) -> str:
     """Resolve a request target against ``http.base_url``.
 
-    The resolution rule, with every row exercised by the tests:
+    * an absolute ``http``/``https`` target is returned unchanged, its scheme validated even though
+      ``base_url`` is never consulted, so ``foundry_http`` can issue absolute URLs with no base URL;
+    * an absolute path replaces the base URL's path: ``"/orders"`` against ``"http://h:8080/api"``
+    gives
+      ``"http://h:8080/orders"``;
+    * a relative path is appended with exactly one ``/`` between the two, and the query travels with
+    it; * a relative path with ``base_url`` unset raises :class:`ConfigError`.
 
-    * an absolute ``http``/``https`` target such as ``"https://example.test/x"`` is returned
-      unchanged, and its scheme is validated even though ``base_url`` is never consulted -- so
-      ``foundry_http`` can issue absolute URLs with no base URL configured at all;
-    * ``"/orders"`` against ``"http://h:8080/api"`` gives ``"http://h:8080/orders"``: an
-      absolute path replaces the base URL's path;
-    * ``"orders"`` against ``"http://h:8080/api"`` gives ``"http://h:8080/api/orders"``: a
-      relative path is appended with exactly one ``/`` between the two;
-    * ``"orders?x=1"`` against ``"http://h:8080/api/"`` gives
-      ``"http://h:8080/api/orders?x=1"``: no doubled slash, and the query travels with the path;
-    * a relative path with ``base_url`` unset raises :class:`ConfigError`.
-
-    A fragment is dropped from either side, because a request never sends one, and the base
-    URL's own query is not inherited. ``"//host/path"`` is treated as a path rather than as a
-    scheme-relative URL, since Foundry's targets are absolute URLs or paths and nothing else.
-
-    Args:
-        base_url: The configured ``http.base_url``, or ``None`` for a session without one.
-        path: The request target: an absolute URL or a path relative to ``base_url``.
-
-    Returns:
-        The absolute URL to request, carrying the base URL's scheme, host and port and never
-        its userinfo.
+    A fragment is dropped from either side, because a request never sends one, the base URL's own
+    query is not inherited, and ``"//host/path"`` is treated as a path rather than as a
+    scheme-relative URL.
 
     Raises:
-        ConfigError: When ``path`` is relative and ``base_url`` is unusable, with the message
-            :func:`require_base_url` documents; when ``path`` is absolute but its scheme is not
-            ``http`` or ``https``; or when ``path`` is absolute and has no host.
+        ConfigError: ``path`` is relative and ``base_url`` is unusable, its scheme is not ``http``
+        or
+            ``https``, or it is absolute and has no host.
     """
     target = path.partition("#")[0]
     if has_scheme(target):
@@ -487,18 +434,9 @@ def redact_url(url: str, redactor: Redactor | None = None) -> str:
     """Return ``url`` safe to write to a log, an artifact, a cassette, a result or a report.
 
     Userinfo is stripped structurally, so it leaves the string whether or not anything is
-    configured, and the result is then handed to the single redaction engine:
-    :meth:`foundry.obs.redaction.Redactor.url` masks every deny-listed query parameter --
-    including the names configured through ``secrets.redact_keys`` -- and emits the query in a
-    stable order. No deny-list is duplicated here, so a key configured once applies at every
-    sink that dumps a URL (AAP 0.3.2).
-
-    Args:
-        url: The URL to make safe.
-        redactor: The run's redactor, built once from the resolved configuration. ``None``
-            builds the built-in one, which still strips userinfo and applies the default
-            deny-lists; it is the fallback for a call site that runs before configuration has
-            resolved.
+    configured, and the result is then handed to :meth:`foundry.obs.redaction.Redactor.url`, which
+    masks every deny-listed query parameter and emits the query in a stable order. No deny-list is
+    duplicated here, so a key configured once applies at every sink that dumps a URL (AAP 0.3.2).
 
     Returns:
         The redacted URL.

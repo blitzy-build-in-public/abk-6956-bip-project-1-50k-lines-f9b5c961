@@ -1,33 +1,9 @@
 """Subset assertions over decoded JSON values, reported at the first mismatching path.
 
-:func:`assert_json_subset` proves that a decoded JSON document *contains* an expected
-fragment. Containment is not equality: keys that only ``actual`` carries are ignored, so a
-fragment may name a handful of fields out of a large response body, while a mapping in
-``expected`` must appear in ``actual`` with the same keys and values, a list must match element
-for element and with the same length, and a scalar must match under type-aware equality - a JSON
-``true`` never satisfies an expected ``1``, even though Python's ``True == 1``.
-
-Whatever goes wrong, the failure names the *first* mismatching JSON path. Mappings are walked in
-sorted key order and lists in index order, so "first" depends on the two values alone: the same
-document and fragment report the same path on every run and on every xdist worker, which is what
-makes a failure reproducible in CI.
-
-Every value quoted in a message is rendered through the redaction engine the caller supplies --
-the one the fixture layer built from ``secrets.redact_keys`` -- and bounded by
-:data:`_RENDER_LIMIT`, a character budget kept in step with the engine's byte cap, because a
-response body under test often carries a token and a subset failure must not print one. A caller
-that supplies no engine gets :func:`foundry.obs.redaction.default_redactor`, which carries the
-built-in deny-lists. A value sitting under a secret-bearing key is reported as ``***`` outright:
-a bare string carries no name for the engine to match on, so rendering it verbatim would print
-the credential.
-
-``actual`` and ``expected`` are annotated ``object`` rather than ``Any``. AAP 0.4.3 writes the
-signature with ``Any``, while AAP 0.4.1 and 0.13.1 forbid ``Any`` in a public signature and
-require a clean ``mypy --strict``; the JSON-shape rule - ``None``, ``bool``, ``int``, ``float``,
-``str``, ``list`` or a mapping with ``str`` keys - is therefore documented here and enforced at
-runtime instead. The name, the parameter shape including the keyword-only ``path`` and the
-``None`` return are the ones AAP 0.4.3 and 0.4.9 fix for ``0.1.0``; the keyword-only
-``redactor`` is additive, which the same stability statement permits.
+:func:`assert_json_subset` proves that a decoded JSON document *contains* the expected fragment:
+keys only ``actual`` carries are ignored, a list matches element for element, and a scalar matches
+under type-aware equality; sorted key and index order make the first mismatch depend on the two
+values alone (AAP 0.4.3). Every quoted value is scrubbed, a secret key shows ``***`` (AAP 0.3.2).
 """
 
 from __future__ import annotations
@@ -70,41 +46,10 @@ def assert_json_subset(
     """Assert that ``actual`` contains the JSON fragment ``expected``.
 
     ``expected`` is a fragment, not a whole document: keys and list elements it does not mention
-    are never inspected, while every key and element it does mention must match. A failure names
-    the first disagreement in sorted traversal order, so two runs over the same values produce
-    the same message.
-
-    Args:
-        actual: The decoded JSON value under test, typically ``FoundryResponse.json()``.
-        expected: The JSON fragment that must be contained in ``actual``.
-        path: Rendering prefix for every reported path. It must be a ``str`` beginning with
-            ``"$"``, so ``path="$.data"`` makes a nested check report ``$.data.items[0].price``.
-        redactor: The run's redaction engine, normally the one the fixture layer built from
-            ``secrets.redact_keys``, applied to every value and key quoted in a message.
-            ``None`` builds one carrying only the built-in deny-lists. It is resolved once here
-            and handed down, so every value in one message is scrubbed by the same engine.
-            Additive over the signature AAP 0.4.3 publishes and permitted by AAP 0.4.9.
-
-    Returns:
-        None. The call reports its result through the exception it raises, which is what lets a
-        test use it as a bare statement.
-
-    Raises:
-        AssertionError: When ``actual`` does not contain ``expected``. The message begins
-            ``foundry.assertions.assert_json_subset: JSON subset mismatch at <path>:`` and quotes
-            only redacted, bounded values.
-        AssertionError: When the call itself is wrong - a ``path`` that is not a ``str``
-            beginning with ``"$"``, an ``expected`` value that is not JSON (a ``set``, ``bytes``,
-            a dataclass), or a mapping in ``expected`` with a non-``str`` key. The message begins
-            ``foundry.assertions.assert_json_subset:`` and names what is wrong.
-
-    Examples:
-        With ``response`` holding ``{"id": 7, "items": [{"sku": "a", "price": 9.99}]}`` plus a
-        ``trace`` object the fragment never mentions:
-
-            assert_json_subset(response, {"id": 7, "items": [{"sku": "a"}]})  # returns None
-            assert_json_subset(response, {"items": [{"price": 1.0}]})
-            # raises AssertionError naming $.items[0].price: expected 1.0, actual 9.99
+    are never inspected. Returns ``None`` when it is contained, and otherwise raises
+    ``AssertionError`` naming the first disagreement in sorted traversal order; a ``path`` that
+    does not begin with ``"$"``, an expected value that is not JSON and a non-``str`` mapping key
+    raise it too. ``redactor`` is additive over the AAP 0.4.3 signature (AAP 0.4.9).
     """
     scrub = default_redactor() if redactor is None else redactor
     if not isinstance(path, str) or not path.startswith("$"):

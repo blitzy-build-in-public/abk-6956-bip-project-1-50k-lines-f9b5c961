@@ -1,37 +1,13 @@
 """The reporting package: a run's report built from immutable result records.
 
-``foundry.reporting`` is the one place a run's report is produced, and this module is the barrel
-every other Foundry package reaches it through. :mod:`foundry.reporting.record` defines the frozen
-result record, the nine outcome values and the run-error element; :mod:`foundry.reporting.store`
-writes and reads ``results.json``; :mod:`foundry.reporting.junit` renders ``junit.xml``;
-:mod:`foundry.reporting.html` renders the self-contained ``report.html`` from
-:mod:`foundry.reporting.assets` and :mod:`foundry.reporting.panels`; and
-:mod:`foundry.reporting.compare` diffs two result documents.
-
-**The reporting boundary** (AAP 0.4.8). This package imports ``foundry.core`` and ``foundry.obs``
-and no capability package, and it consumes result records exclusively: by the time a record
-arrives here the secrets it carries are already scrubbed, so capture and rendering stay
-independently testable and no renderer inherits a redaction decision made while a test was
-running.
-
-**Who writes.** :func:`foundry.reporting.store.write_text` is this package's only file writer; the
-JUnit writer and the HTML renderer hand it their documents as text instead of opening a file
-themselves (AAP 0.4.8).
-
-**Where state lives.** :mod:`foundry.reporting.renderers` holds the single import-time
-registration table the package is permitted -- the report formats a run writes -- and nothing else
-here mutates module state. Importing this module therefore does no work beyond defining names: no
-I/O, no environment read, no logger configuration and no template-engine import, which keeps it
-inside the pytest plugin's startup budget (AAP 0.14.2, implicit requirement I5).
-
-The names re-exported below are the stable import surface (AAP 0.4.3): additive in a later
-release, never renamed or removed (AAP 0.4.9).
+Barrel for the record, store, JUnit, HTML, assets, panels, compare and renderers modules; the
+result record is the only input, and :func:`foundry.reporting.store.write_text` the only file
+writer. Layering and state: AAP 0.4.8. Stable import surface: AAP 0.4.3, 0.4.9.
 """
 
 from typing import Final
 
-# The self-contained report's inline CSS and JS, and the check that a document references no
-# external asset.
+# The self-contained report's inline CSS and JS, and the no-external-asset check.
 from .assets import DEFAULT_ASSETS as DEFAULT_ASSETS
 from .assets import AssetsBundle as AssetsBundle
 from .assets import assert_self_contained as assert_self_contained
@@ -86,8 +62,7 @@ from .renderers import renderer_for as renderer_for
 from .renderers import write_all as write_all
 from .renderers import write_html_report as write_html_report
 
-# The result document's writer and reader, aliased so a call site that also imports the JUnit and
-# HTML writers says which document it addresses.
+# The result document's writer and reader, aliased so a call site says which document it addresses.
 from .store import loads as loads
 from .store import read as read_results
 from .store import write as write_results

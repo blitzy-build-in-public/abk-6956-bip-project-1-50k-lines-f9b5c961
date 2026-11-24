@@ -1,50 +1,12 @@
 """The response object of Foundry's HTTP layer, and the record of the exchange it closes.
 
-Every request a :class:`foundry.http.FoundrySession` issues ends here, and the object it returns is
-the whole of what a test sees of an exchange. Four obligations fix its shape.
-
-**The published members (AAP 0.4.3, AAP 0.4.9).** ``status_code``, ``headers``, ``text``,
-``elapsed_ms``, ``source``, ``json()`` and ``request_dump()`` are part of the compatibility promise:
-a later release may add to them, never rename or remove one.
-
-**A non-2xx status is a value.** AAP 0.7.3 and AAP 0.4.3 promise that every status, 4xx and 5xx
-included, is *returned* rather than raised, and this module is where that promise becomes
-structural: no constructor, property, method or ``__repr__`` below inspects ``status_code`` and
-raises. Only a fault below the protocol escapes a request, as
-:class:`~foundry.core.exceptions.TransportError` or
-:class:`~foundry.core.exceptions.RetryExhaustedError` from :mod:`foundry.http.retries`.
-
-**The two artifact payloads (AAP 0.4.6).** ``request_dump()`` is ``request.json`` -- method, the
-request path without its query string, the query in a field of its own, headers with secrets
-redacted, the raw body's hash and a redacted body excerpt -- and ``response_dump()`` is its additive
-counterpart (AAP 0.4.9 permits additions): status, redacted headers, a redacted body excerpt and
-``source``. Path and query are separate fields carrying the meaning the cassette document gives
-them, so a consumer of AAP 0.4.6 reads the query once from either document. Both come from the
-object that held the exchange rather than being re-derived by the artifact writer, so a dump cannot
-describe an exchange that did not happen.
-
-**Redaction before serialisation (AAP 0.3.2).** The injected
-:class:`~foundry.obs.redaction.Redactor` is the single route a header value, a query value or a body
-excerpt takes into a dump or into ``__repr__``, and it runs before a dict is built rather than over
-one afterwards. ``json()`` on a body that is not JSON reports the row of the state table in
-AAP 0.4.7 that fixes it: :class:`~foundry.core.exceptions.ContractError` carrying a redacted,
-bounded excerpt.
-
-``source`` is read from the tag :mod:`foundry.cassette.transport` puts on every reply it returns, so
-a replayed exchange reports ``"cassette"`` and a live one ``"live"`` without this module knowing
-which transport ran (AAP 0.4.3), and a reply carrying no tag at all is ``"live"`` rather than a
-fault. The three constants are imported rather than re-typed: they are a published value whose one
-definition site is that module.
-
-Layering, import time and determinism (AAP 0.4.8, AAP 0.13.1)
-    ``foundry.http`` may import ``core``, ``obs``, ``contract`` and ``cassette``, and nothing else
-    from Foundry -- never ``config``, ``reporting``, ``cli``, ``plugin`` or ``execution``.
-    ``httpx`` is imported at module scope because nothing on ``foundry.plugin``'s import path
-    reaches this package. Importing the module defines names and types only: no I/O, no environment
-    read, no logger configuration, no mutable module state. Nothing here reads a clock --
-    ``elapsed_ms`` is measured by the session with :func:`time.monotonic` and handed in -- and every
-    collection a dump carries is sorted, so the same exchange serialises to identical bytes on two
-    runs.
+``status_code``, ``headers``, ``text``, ``elapsed_ms``, ``source``, ``json()`` and
+``request_dump()`` are the published members, part of the compatibility promise (AAP 0.4.3,
+AAP 0.4.9). No member inspects ``status_code`` and raises: every status, 4xx and 5xx included,
+is returned. The two dumps are ``request.json`` and its additive counterpart (AAP 0.4.6),
+produced by the object that held the exchange and redacted before the mapping is built
+(AAP 0.3.2). ``source`` comes from the tag :mod:`foundry.cassette.transport` puts on a reply,
+and a reply carrying none is ``"live"``.
 """
 
 from __future__ import annotations
@@ -98,18 +60,14 @@ class _FrozenHeaders(Mapping[str, str]):
     """An immutable, case-insensitive view of the headers a peer returned.
 
     ``FoundryResponse.headers`` is published as ``Mapping[str, str]`` (AAP 0.4.3), but a header
-    lookup has to ignore case: a test that reads ``response.headers["Content-Type"]`` must see the
-    header whatever casing the peer chose, and ``httpx``'s own ``Headers`` is the object that
-    already implements that rule over its normalized name list. This class is the thin immutable
-    view that exposes it as a ``Mapping`` -- read-only, no method that adds, replaces or removes a
-    header -- so the published annotation and the behaviour a test relies on are both true.
-    ``get``, ``__contains__`` and ``items`` come from :class:`collections.abc.Mapping` over the
-    three methods below, so every one of them matches a name in any casing and ``items()`` yields
-    the pairs in the order the peer sent them.
+    lookup has to ignore case, and ``httpx``'s own ``Headers`` already implements that over its
+    normalized name list. This is the read-only view that exposes it as a ``Mapping`` -- no method
+    that adds, replaces or removes a header -- so the published annotation and the behaviour a test
+    relies on both hold. ``get``, ``__contains__`` and ``items`` come from
+    :class:`collections.abc.Mapping`.
 
-    Every value this class renders passes through the injected
-    :class:`~foundry.obs.redaction.Redactor`, so a header the configuration masks is masked in
-    ``repr()`` too, and no code path here renders a header value otherwise (AAP 0.3.2, AAP 0.14.3).
+    Every value rendered here passes through the injected
+    :class:`~foundry.obs.redaction.Redactor` (AAP 0.3.2, AAP 0.14.3).
     """
 
     __slots__ = ("_headers", "_redactor")
@@ -171,11 +129,15 @@ class _FrozenHeaders(Mapping[str, str]):
         return _folded(self) == _folded(other)
 
     def __repr__(self) -> str:
-        """Render the headers with every value the redaction engine masks shown as its marker.
+        """Render the headers with every value in the form the redaction engine gives it.
+
+        A value under a name the engine masks is shown as its marker, and a value under any other
+        name is shown free-text scrubbed, so the same echo a peer answers with cannot reach a log
+        line or a terminal through a header's representation (AAP 0.3.2, AAP 0.14.3).
 
         Returns:
-            ``_FrozenHeaders({'<name>': '<value-or-***>', ...})``, sorted by name so two runs
-            render the same text.
+            ``_FrozenHeaders({'<name>': '<value>', ...})``, sorted by name so two runs render the
+            same text.
         """
         shown = ", ".join(
             f"{name!r}: {self._redactor.header(name, value)!r}"
@@ -253,23 +215,17 @@ class FoundryResponse:
     def json(self) -> Any:
         """Decode the body as JSON.
 
-        This is the one place in this module where ``Any`` is the honest annotation: the body is an
+        The one place in this module where ``Any`` is the honest annotation: the body is an
         arbitrary JSON tree, and :func:`foundry.assertions.assert_json_subset` consumes it as one
         (AAP 0.4.3).
 
         Returns:
-            The decoded value: a ``dict``, a ``list``, a ``str``, a number, a ``bool`` or ``None``,
-            exactly as the body spelled it.
+            The decoded value: a ``dict``, a ``list``, a ``str``, a number, a ``bool`` or ``None``.
 
         Raises:
-            ContractError: The body is not JSON. ``json_path`` is ``$``, because the whole document
-                is the violation, and ``detail`` is a single-line redacted excerpt whose body
-                prefix is at most :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, followed
-                by the ``...`` marker :func:`foundry.contract.excerpt` appends when anything was
-                cut, so a truncated excerpt occupies at most ``MAX_EXCERPT_BYTES + len("...")`` --
-                never the bare budget. A reader sees the shape of what arrived without a secret in
-                it (AAP 0.4.7). The message names the decoder's fault and its position and quotes
-                no part of the body.
+            ContractError: The body is not JSON. ``json_path`` is ``$``, the whole document being
+                the violation, and ``detail`` is a single-line redacted excerpt bounded as
+                :func:`_dumped_body` bounds it; the message quotes no part of the body (AAP 0.4.7).
         """
         try:
             return json.loads(self.text)
@@ -284,32 +240,30 @@ class FoundryResponse:
         """Return the redacted ``request.json`` payload of this exchange (AAP 0.4.6).
 
         Every value passes through the redaction engine before the mapping is built, so the dump
-        itself never holds a header, query or body value the configuration masks: header names in
-        ``secrets.redact_keys``, the engine's own deny-lists and a secret query parameter all render
-        as the marker. The ``body_sha256`` is the exception and deliberately so -- it is the digest
-        of the *raw* bytes, which is what the cassette matcher compares, and a redacted body would
-        hash differently on every configuration change (implicit requirement I4).
+        never holds a header, query or body value the configuration masks; a value under a name the
+        engine does not redact is free-text scrubbed as well, so a credential pasted into an
+        unlisted header or parameter is masked too (AAP 0.3.2, AAP 0.14.3). The ``body_sha256`` is
+        the exception and deliberately so: it is the digest of the *raw* bytes, which is what the
+        cassette matcher compares, and a redacted body would hash differently on every configuration
+        change (implicit requirement I4).
 
         Returns:
-            A JSON-serialisable mapping with exactly the keys ``method`` (upper-case), ``path``
-            (the request path without its query string, anything the engine masks scrubbed, which
-            is the meaning the cassette document gives that field), ``query`` (the decoded pairs,
-            sorted, as ``[name, value]`` lists, the one place the query appears), ``headers`` (a
-            dict ordered by name, with names lower-cased as ``httpx`` normalises them and values
-            redacted), ``body_sha256`` (a lower-case hex digest, or ``None`` when the request
-            carried no body) and ``body`` (a redacted excerpt whose body is at most
-            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, followed by
-            :data:`~foundry.obs.redaction.TRUNCATION_MARKER` when anything was cut -- at most the
-            budget plus the marker -- or ``None`` when empty).
+            A JSON-serialisable mapping with exactly the keys ``method`` (upper-case), ``path`` (the
+            request path without its query string, anything the engine masks scrubbed), ``query``
+            (the decoded pairs, sorted, as ``[name, value]`` lists), ``headers`` (ordered by name,
+            lower-cased, each value masked by name and scrubbed as free text), ``body_sha256`` (a
+            lower-case hex digest, or ``None`` without a body) and ``body`` (a redacted excerpt, or
+            ``None`` when empty).
         """
         redactor = self._redactor
         snapshot = self._request
         return {
             "method": snapshot.method.upper(),
             "path": redactor.url(snapshot.path),
-            # ``header`` is the engine's one name-keyed masking method: a value under a name it
-            # considers secret-bearing comes back as the marker and every other value unchanged,
-            # so this module holds no redaction rule of its own that could drift from the engine.
+            # ``header`` is the engine's one method for a value that travels under a name: the name
+            # decides whether the whole value is masked, and a value the name does not mask is
+            # scrubbed as free text. This module therefore holds no redaction rule of its own that
+            # could drift from the engine.
             "query": [
                 [name, redactor.header(name, value)] for name, value in sorted(snapshot.query)
             ],
@@ -322,17 +276,15 @@ class FoundryResponse:
         """Return the redacted ``response.json`` payload of this exchange (AAP 0.4.6).
 
         The additive counterpart of :meth:`request_dump`, and the reason the artifact writer holds
-        no redaction rule of its own: both payloads are produced by the object that held the
-        exchange, through the one engine AAP 0.3.2 places in front of every sink.
+        no redaction rule of its own: a header value under a name the deny-lists do not carry is
+        scrubbed as free text exactly as the body is, so an echoed credential reaches neither
+        ``response.json`` nor the cassette document recorded from the same exchange (AAP 0.14.3).
 
         Returns:
-            A JSON-serialisable mapping with exactly the keys ``status`` (the integer status),
-            ``headers`` (a dict ordered by name, with names lower-cased as ``httpx`` normalises
-            them and values redacted), ``body`` (a redacted excerpt whose body is at most
-            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, followed by
-            :data:`~foundry.obs.redaction.TRUNCATION_MARKER` when anything was cut -- at most the
-            budget plus the marker -- or ``None`` when the body is empty) and ``source``
-            (``"live"`` or ``"cassette"``).
+            A JSON-serialisable mapping with exactly the keys ``status``, ``headers`` (ordered by
+            name, lower-cased, each value masked by name and scrubbed as free text), ``body`` (a
+            redacted excerpt, or ``None`` when empty) and ``source`` (``"live"`` or
+            ``"cassette"``).
         """
         return {
             "status": self.status_code,
@@ -363,17 +315,10 @@ class FoundryResponse:
 def _dumped_body(body: str | bytes, redactor: Redactor) -> str | None:
     """Return the redacted excerpt a dump reports for ``body``, or ``None`` when there is none.
 
-    Args:
-        body: The raw body, as text or as the bytes that came off the wire.
-        redactor: The run's redaction engine.
-
-    Returns:
-        A single-line redacted excerpt whose body is at most
-        :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, followed by
-        :data:`~foundry.obs.redaction.TRUNCATION_MARKER` when anything was cut, so a truncated
-        excerpt occupies at most the budget plus the marker -- or ``None`` when the body is empty:
-        a request with no body and one with a zero-length body are the same request, which is the
-        rule :func:`foundry.cassette.models.body_sha256_of` applies to the hash beside it.
+    A single-line excerpt of at most :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes,
+    followed by :data:`~foundry.obs.redaction.TRUNCATION_MARKER` when anything was cut, so a
+    truncated excerpt occupies at most the budget plus the marker; an empty body yields ``None``,
+    which is the rule :func:`foundry.cassette.models.body_sha256_of` applies to the hash beside it.
     """
     if not body:
         return None

@@ -7,34 +7,26 @@ methods. The class also publishes ``faker`` -- the instance, for a caller that w
 reference -- and ``seed``, the value it was seeded with.
 
 **Seeded per instance, never globally.** The fixture seeds the instance it builds with
-``faker.seed_instance(seed)`` and never with ``Faker.seed``. ``Faker.seed()`` reseeds the
-module-wide shared :class:`random.Random` that every Faker instance draws from, so one test's draws
-would shift every later test's values in the same worker and two workers would interleave from one
-sequence (AAP 0.2.1). ``seed_instance`` gives the instance a generator of its own, which is what
-makes a test's values depend on nothing another test does, in this process or in another xdist
-worker.
+``faker.seed_instance(seed)`` and never with ``Faker.seed``, which reseeds the module-wide shared
+:class:`random.Random` every Faker instance draws from: one test's draws would then shift every
+later test's values in the same worker and two workers would interleave from one sequence
+(AAP 0.2.1). ``seed_instance`` gives the instance a generator of its own.
 
 **What reproducibility depends on.** The seed comes from :func:`_seed_for`: the first eight bytes of
-SHA-256 over ``"<run_id>:<nodeid>"`` read as a big-endian unsigned integer. It is therefore stable
-across processes, Python versions and ``PYTHONHASHSEED`` values, and identical on a serial run and
-on any worker (implicit requirements I3, I6): every test has its own node id, so no two tests share
-a sequence. The *values* a seed produces additionally require the Faker release pinned as a runtime
-dependency (25.9.2, AAP 0.5.1) and the same call order, which is why that release is pinned and why
-the fixture body draws nothing itself: the test's own calls are the whole order.
+SHA-256 over ``"<run_id>:<nodeid>"`` read as a big-endian unsigned integer, which is stable across
+processes, Python versions and ``PYTHONHASHSEED`` values, and identical on a serial run and on any
+worker (implicit requirements I3, I6). The *values* a seed produces additionally require the Faker
+release pinned as a runtime dependency (25.9.2, AAP 0.5.1) and the same call order, which is why the
+fixture body draws nothing itself.
 
-**No clock, no locale, no environment.** Nothing here reads the wall clock, the locale or
-``os.environ`` (AAP 0.14.3), so a factory never makes ``results.json`` or ``report.html`` differ
-between two otherwise identical runs. Faker's default locale is used and is not chosen here.
+**No clock, no locale, no environment** (AAP 0.14.3). Nothing here reads the wall clock, the locale
+or ``os.environ``, so a factory never makes ``results.json`` or ``report.html`` differ between two
+otherwise identical runs.
 
-**Imported lazily.** ``faker`` is imported inside the fixture body and nowhere at module scope: the
-plugin imports this module at every pytest start inside the 150 ms budget (AAP 0.14.2, implicit
-requirement I5), while only a minority of suites request a factory, and importing Faker costs far
-more than the budget allows.
-
-Importing this module defines names only -- the seed helper, the class and the fixture. It holds no
-module-level state, performs no I/O, reads no environment variable and configures no logger
-(AAP 0.4.8); it imports the standard library and :mod:`pytest`, plus :mod:`faker` under
-``TYPE_CHECKING`` for the annotation alone, and no other Foundry package (AAP 0.4.8).
+**Imported lazily** (AAP 0.14.2, implicit requirement I5). ``faker`` is imported inside the fixture
+body and nowhere at module scope, because the plugin imports this module at every pytest start
+inside the 150 ms budget. Importing this module defines names only, holds no module-level state and
+imports the standard library, :mod:`pytest` and, under ``TYPE_CHECKING``, :mod:`faker` (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -59,12 +51,8 @@ def _seed_for(run_id: str, nodeid: str) -> int:
     """Return the Faker seed of one test, derived from the run id and that test's node id only.
 
     The derivation takes no worker id, host name, clock reading or random source, so a test draws
-    the same values serially and under ``-n`` (implicit requirements I3, I6), and two runs of the
-    same suite within one session cannot collide because node ids differ.
-
-    Args:
-        run_id: The session's run id, ``YYYYmmddTHHMMSS-<6 hex>``.
-        nodeid: The requesting item's pytest node id, unsanitised.
+    the same values serially and under ``-n`` (implicit requirements I3, I6), and two tests cannot
+    collide because their node ids differ.
 
     Returns:
         Eight bytes of SHA-256 over ``"<run_id>:<nodeid>"`` read as a big-endian unsigned integer,
@@ -81,14 +69,12 @@ class FoundryFactory:
 
     ``foundry_factory`` returns one of these per test (AAP 0.4.3). ``faker`` exposes the underlying
     instance for a caller that wants a typed reference, ``seed`` the value the instance was seeded
-    with, and every other attribute is proxied to the instance, so ``factory.name()``,
-    ``factory.email()`` and ``factory.uuid4()`` resolve to Faker's own provider methods.
+    with, and every other attribute is proxied to the instance.
 
-    The class seeds nothing itself: :func:`foundry_factory` calls ``seed_instance`` on the instance
-    before wrapping it, so constructing a factory never touches Faker's module-wide random state
+    The class seeds nothing itself: :func:`foundry_factory` calls ``seed_instance`` before wrapping
+    the instance, so constructing a factory never touches Faker's module-wide random state
     (AAP 0.2.1). The representation names the seed alone, never a generated value, so logging a
-    factory cannot put generated data -- or a value derived from a secret -- into a log, a report or
-    an artifact.
+    factory cannot put generated data into a log, a report or an artifact.
     """
 
     faker: Faker
@@ -111,20 +97,15 @@ class FoundryFactory:
         Faker builds its providers at instance construction from the enabled locales, so what a name
         resolves to is known only at run time; this is the file's one deliberate ``Any``, since
         ``factory.name()`` answers a ``str``, ``factory.pyint()`` an ``int`` and
-        ``factory.profile()`` a mapping, and no annotation in this module can say which.
-
-        Args:
-            name: The attribute or provider name the caller asked for.
+        ``factory.profile()`` a mapping, and no annotation here can say which.
 
         Returns:
-            Whatever the instance holds under ``name`` -- normally a bound provider method, which
-            the caller then calls.
+            Whatever the instance holds under ``name`` -- normally a bound provider method.
 
         Raises:
             AttributeError: The instance has no such attribute. An unknown provider is an ordinary
                 ``AttributeError`` rather than a Foundry error, so ``hasattr()`` reports ``False``
-                and ``dir()``, ``getattr()`` with a default and every other introspection protocol
-                behave as they do for any Python object.
+                and the other introspection protocols behave as they do for any Python object.
         """
         # Read from __dict__, not through self.faker: a factory whose __init__ never ran would
         # otherwise re-enter this method for "faker" itself, recursing until the stack ends.
@@ -152,14 +133,9 @@ def foundry_factory(request: pytest.FixtureRequest, foundry_run_id: str) -> Foun
     draws nor its seeding reach any other test.
 
     The instance is seeded with ``seed_instance`` and never with ``Faker.seed``, which would reseed
-    the module-wide shared generator and shift every other test's values in this worker (AAP 0.2.1).
-    Two runs of the same test with the same run id therefore draw the same sequence in the same call
-    order, while two tests always differ; keeping those values identical across Faker releases
-    depends on the pinned version (AAP 0.5.1) and on the test making its calls in the same order.
-
-    Args:
-        request: The requesting item, whose node id is half of the seed.
-        foundry_run_id: The session's run id, the other half.
+    the module-wide shared generator (AAP 0.2.1). Keeping drawn values identical across Faker
+    releases depends on the pinned version (AAP 0.5.1) and on the test making its calls in the same
+    order.
 
     Returns:
         A :class:`FoundryFactory` wrapping a Faker instance already seeded for this test.

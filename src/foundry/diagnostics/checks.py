@@ -1,51 +1,12 @@
 """The five required ``foundry doctor`` probes and the runner that reports every row.
 
-AAP 0.7.1 places the environment probes of ``foundry doctor`` here -- the interpreter, the
-``pytest11`` entry point, configuration validity, artifact-directory writability and
-cassette-directory state -- and each of them answers with a
-:class:`~foundry.diagnostics.report.ProbeResult`, so the table of AAP 0.7.4 and the ``checks``
-array of AAP 0.7.3 cannot disagree about what a probe found.
-
-**Five required probes, one optional row.** AAP 0.4.4 lists six probes for ``foundry doctor``:
-the five above plus socket-guard state. AAP 0.7.1 gives the guard its own module. Both hold as
-follows: :data:`REQUIRED_PROBES` are the five defined here, each reported with ``required=True``
-so a ``FAIL`` makes ``foundry doctor`` exit ``2``; the sixth row comes from
-:func:`foundry.diagnostics.socket_guard.check_socket_guard` with ``required=False`` and therefore
-cannot change that code. :func:`run_checks` reports all six in one fixed order -- interpreter,
-plugin, configuration, artifacts, cassettes, socket_guard -- which is both the order the table
-prints and the order the JSON document serialises.
-
-**Exit codes** (AAP 0.4.4). Only a ``FAIL`` on a required probe fails the command;
-:attr:`~foundry.diagnostics.report.DoctorReport.ok` is the value the CLI maps to ``0`` or ``2``,
-so a ``WARN`` -- an unsupported platform, a cassette directory not created yet -- never moves it.
-
-**Failure isolation** (AAP 0.1.2). A probe that cannot run returns a ``FAIL`` row carrying the
-exception's class name alone. :func:`run_checks` calls every probe through :func:`_guarded`, which
-logs one ``WARNING`` on the ``foundry`` logger through
-:func:`foundry.obs.events.emit_plumbing_failure` and never lets a traceback reach the command. The
-exception's message stays out of the detail: it can embed a path or a credential, and the detail
-is serialised into the published document.
-
-**No network** (AAP 0.9.2). Nothing here opens a socket. The plugin probe reads installed
-distribution metadata, the configuration probe resolves through :mod:`foundry.config`, and the
-directory probes touch the filesystem only.
-
-**Determinism** (AAP 0.13.1). Details carry absolute resolved paths, sorted names and integer
-counts, never a timestamp, a duration or an object ``repr``, so two runs on an unchanged machine
-report identical text.
-
-**Import-time discipline** (AAP 0.4.8). Importing this module runs no probe, reads no environment
-variable, configures no logger and imports nothing heavy. :mod:`foundry.config.errors` is the one
-exception: the stdlib-only module holding the pinned message templates, imported at module scope so
-the configuration row and ``foundry config validate`` share one definition site rather than two
-copies of the text. :class:`~foundry.config.models.FoundryConfig` enters only under
-:data:`typing.TYPE_CHECKING`, and :func:`foundry.config.resolve` only inside
-:func:`_resolve_configuration`, because the configuration package's models pull pydantic onto the
-``foundry doctor`` path.
-
-Every probe accepts its observation through a keyword, so a test drives it without touching the
-real environment: an :class:`~foundry.diagnostics.report.InterpreterInfo`, the discovered
-entry-point pairs, a resolved configuration, a directory and a working directory.
+AAP 0.7.1 places the environment probes here, and each answers with a
+:class:`~foundry.diagnostics.report.ProbeResult`, so the table of AAP 0.7.4 and the ``checks`` array
+of AAP 0.7.3 cannot disagree. :data:`REQUIRED_PROBES` are the five defined here, each reported with
+``required=True`` so a ``FAIL`` makes ``foundry doctor`` exit ``2`` (AAP 0.4.4); the sixth row, the
+socket-guard state, comes from :func:`foundry.diagnostics.socket_guard.check_socket_guard` with
+``required=False`` and cannot change that code. A probe that raises is isolated into a ``FAIL`` row
+naming the exception's class alone, after one ``WARNING`` (AAP 0.1.2). Importing runs no probe.
 """
 
 from __future__ import annotations
@@ -322,18 +283,14 @@ def _resolve_configuration(
 ) -> tuple[FoundryConfig | None, ProbeResult]:
     """Return the configuration a doctor run reports on, together with its probe row.
 
-    The pair form exists because :func:`run_checks` needs the resolved model itself, to hand the
-    artifact and cassette probes their configured directories, and resolving the four layers of
-    AAP 0.4.5 exactly once per invocation is what keeps the report internally consistent.
-
-    A supplied ``config`` is taken as given and nothing is verified: the caller already holds a
-    validated model. Its profile is rendered with ``str`` rather than read as an enum member, so a
-    configuration whose ``model_copy`` installs the name as a plain string -- the override
-    :func:`foundry.fixtures.config.foundry_config` documents -- is reported rather than faulting.
-    An absent one is resolved through :func:`foundry.config.resolve`, whose
-    :class:`~foundry.core.exceptions.ConfigError` becomes the row's detail -- its message names
-    the key, the variable or the file and never a secret value (implicit requirement I9). Any
-    other exception propagates to the caller's isolation boundary.
+    The pair form lets :func:`run_checks` hand the artifact and cassette probes the model's
+    configured directories, so the four layers of AAP 0.4.5 are resolved exactly once per
+    invocation. A supplied ``config`` is taken as given; its profile is rendered with ``str``
+    rather than read as an enum member, so a configuration whose ``model_copy`` installs the name
+    as a plain string is reported rather than faulting. An absent one is resolved through
+    :func:`foundry.config.resolve`, whose :class:`~foundry.core.exceptions.ConfigError` becomes the
+    row's detail -- naming the key, the variable or the file and never a secret value (implicit
+    requirement I9) -- and any other exception propagates to the caller's isolation boundary.
 
     Args:
         config: the configuration to report on, or ``None`` to resolve one now.

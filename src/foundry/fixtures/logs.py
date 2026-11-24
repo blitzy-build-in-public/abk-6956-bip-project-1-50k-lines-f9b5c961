@@ -1,63 +1,43 @@
 """The ``foundry_log_capture`` fixture: one bounded ``foundry`` log ring per test.
 
 ``foundry_log_capture`` is one of Foundry's twelve public fixtures (AAP 0.4.3). It is function
-scoped and yields a :class:`FoundryLogCapture` over a
-:class:`foundry.obs.capture.LogRing` attached to the ``foundry`` logger for the length of one test,
-so a test can assert on the lines its own code logged and on nothing another test logged::
+scoped and yields a :class:`FoundryLogCapture` over a :class:`foundry.obs.capture.LogRing` attached
+to the ``foundry`` logger for the length of one test, so a test can assert on the lines its own code
+logged and on nothing another test logged::
 
-    import logging
-
-    def test_the_retry_warns_once(foundry_log_capture: FoundryLogCapture) -> None:
-        logging.getLogger("foundry.http").warning("retrying")
-        assert foundry_log_capture.tail(1) == ("WARNING foundry.http: retrying",)
-
-    def test_only_what_happened_here(foundry_log_capture: FoundryLogCapture) -> None:
-        foundry_log_capture.clear()
-        ...  # both assertions below see only the records this step emitted
+    logging.getLogger("foundry.http").warning("retrying")
+    assert foundry_log_capture.tail(1) == ("WARNING foundry.http: retrying",)
 
 Three readers of one ring
     :meth:`FoundryLogCapture.tail` is the fixture's view of the same bounded ring the report's
-    last-N-lines failure panel and the ``log_tail.log`` artefact read (AAP 0.4.6, implicit
+    last-N-lines failure panel and the ``log_tail.log`` artifact read (AAP 0.4.6, implicit
     requirement I7). :func:`foundry.obs.capture.format_record` is the only formatter, so a test
     asserting on ``capture.tail(2)`` asserts on the text a failing run would have persisted. A line
     carries the level, the logger name and the message only -- no timestamp, thread, host or
-    address -- which is what makes two runs' tails identical (AAP 0.14.3). That format is owned by
-    :mod:`foundry.obs.capture` and is deliberately not restated here.
+    address -- which is what makes two runs' tails identical (AAP 0.14.3).
 
 Capacity
     The ring retains exactly ``logging.capture_lines`` records (AAP 0.4.5: default ``200``, accepted
     range ``0..10000``), read from the resolved configuration through the ``foundry_config`` fixture
-    argument. Nothing here re-validates the value beyond the clamp :class:`LogRing` already applies,
-    nothing grows the ring past that number and no second list is kept beside it, so a test that
-    logs ten thousand times costs the same memory as one that logs twice. ``capture_lines = 0``
-    disables capture: the fixture then yields a capture reporting no records and attaches no handler
-    at all.
+    argument, and no second list is kept beside it. ``capture_lines = 0`` disables capture: the
+    fixture yields a capture reporting no records and attaches no handler at all.
 
 Attach and detach
-    Setup builds the ring and attaches it; teardown detaches it, so no record a later test emits can
-    reach this test's ring and no record this test emitted survives into the next one. The ring is
-    the only handler this fixture adds to the ``foundry`` logger, it is added through
+    Setup builds the ring and attaches it; teardown detaches it, so no record outlives the test. The
+    ring is the only handler this fixture adds, it is added through
     :func:`foundry.obs.logging.attach_handler` -- the sole writer of that handler list -- and
-    ``propagate`` is never touched, which is why pytest's ``caplog`` and its captured-log block keep
-    seeing every record the ring also sees.
+    ``propagate`` is never touched, which is why pytest's ``caplog`` keeps seeing every record.
 
 Failure isolation
     A fault while attaching or detaching changes neither the test's outcome nor the run's exit code
-    (AAP 0.1.2): setup yields a usable, empty capture when the ring could not be attached, teardown
-    never raises, and the fault is reported as exactly one ``WARNING`` line through
-    :func:`foundry.obs.events.emit_plumbing_failure`. That report happens only after the ring is
-    detached, because a record emitted while the ring was still attached would be captured by the
-    very ring that just failed.
+    (AAP 0.1.2): setup yields a usable, empty capture, teardown never raises, and the fault is
+    reported as exactly one ``WARNING`` line through
+    :func:`foundry.obs.events.emit_plumbing_failure`, only after the ring is detached.
 
-Importing this module defines two public names and nothing else, performs no I/O, reads no
-environment variable, configures no logger and holds no module-level state (AAP 0.4.8). Its module
-scope imports are :mod:`pytest`, the standard library and :mod:`foundry.core`; the ring and the
-``WARNING`` emitter are imported inside the fixture body, because ``foundry.plugin`` imports this
-package during ``pytest_configure`` at every start and the budget for that is 150 ms (implicit
-requirement I5, AAP 0.14.2). ``foundry.config`` is reached only through the ``foundry_config``
-fixture argument -- the one mention of it below is an annotation under ``TYPE_CHECKING``, which
-never executes -- and the package imports :mod:`foundry.core`, plus :mod:`foundry.obs` inside the
-fixture body, and nothing else of Foundry (AAP 0.4.8).
+Importing this module defines two public names and nothing else, and its module-scope imports are
+:mod:`pytest`, the standard library and :mod:`foundry.core`; the ring and the emitter are imported
+inside the fixture body, because ``foundry.plugin`` imports this package during ``pytest_configure``
+at every start inside a 150 ms budget (implicit requirement I5, AAP 0.14.2).
 """
 
 from __future__ import annotations
@@ -100,16 +80,16 @@ class FoundryLogCapture:
     """The bounded ``foundry`` log ring one test reads, and the operations it offers.
 
     An instance belongs to one test: the fixture builds a fresh ring per item and detaches it at
-    teardown, which is what keeps a test that logged from affecting any other test or any xdist
-    worker. The class reads the ``foundry`` logger only -- never root logging, and never pytest's
-    ``caplog``, which an ordinary test keeps using beside it. The ring holds
-    :class:`logging.LogRecord` objects exactly as the ``foundry`` logger emitted them; formatting
-    happens when :meth:`tail` reads, through the one formatter the ``log_tail.log`` artefact and the
-    report's failure panel also use, so an assertion here and a persisted tail cannot disagree.
+    teardown, which keeps a test that logged from affecting any other test or xdist worker. The
+    class reads the ``foundry`` logger only -- never root logging, and never pytest's ``caplog``,
+    which an ordinary test keeps using beside it. The ring holds :class:`logging.LogRecord` objects
+    exactly as they were emitted; formatting happens when :meth:`tail` reads, through the one
+    formatter the ``log_tail.log`` artifact and the report's failure panel also use, so an assertion
+    here and a persisted tail cannot disagree.
 
     Frozen and slotted: the capture is a handle onto the ring, so nothing about it is assignable,
-    and a test that wants to forget what it has seen calls :meth:`clear` rather than replacing the
-    ring. Instances are hashable by the ring they hold.
+    and a test that wants to forget what it has seen calls :meth:`clear`. Instances are hashable by
+    the ring they hold.
     """
 
     ring: LogRing
@@ -128,13 +108,12 @@ class FoundryLogCapture:
     def records(self) -> tuple[logging.LogRecord, ...]:
         """Return the retained records, oldest first, as an immutable snapshot.
 
-        A tuple rather than the ring's own storage, so a caller cannot append to or reorder what
-        the ring holds and a record emitted after the call never changes what the caller read.
+        A tuple rather than the ring's own storage, so a caller cannot append to or reorder what the
+        ring holds and a record emitted after the call never changes what the caller read.
 
         Returns:
-            Zero or more records, in the order the ``foundry`` logger emitted them; ``()`` when
-            nothing has been logged yet, when the ring was never attached or when
-            ``logging.capture_lines`` is ``0``.
+            Zero or more records, in the order they were emitted; ``()`` when nothing has been
+            logged yet, when the ring was never attached or when ``logging.capture_lines`` is ``0``.
         """
         return tuple(self.ring.records)
 

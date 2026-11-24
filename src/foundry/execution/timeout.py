@@ -1,71 +1,28 @@
 """The per-item timeout policy, and the one seam ``execution.timeout`` is enforced through.
 
-``execution.timeout`` -- ``60.0`` seconds by default, accepted range ``0 < t <= 3600`` -- is an
-enforced limit rather than a documented one, and it is enforced exactly once: through
-pytest-timeout's own per-item timer hookspec (AAP 0.3.2, AAP 0.7.1). Foundry starts no thread,
-arms no signal alarm and keeps no watchdog of its own. A second timer beside pytest-timeout's
-would fire twice on the same item, cancel the wrong one at teardown and leave the interpreter's
-``SIGALRM`` handler in a state neither plugin expects, which is why the folder's "one enforcement
-path" rule forbids a parallel timeout system. A worker that dies outright is not this module's
-business either: :mod:`foundry.execution.sharding` reports it through the ``run_error`` record.
+``execution.timeout`` -- ``60.0`` by default, accepted range ``0 < t <= 3600`` -- is enforced
+exactly once, through pytest-timeout's own per-item timer hookspec (AAP 0.3.2, AAP 0.7.1).
+Foundry starts no thread, arms no signal alarm and keeps no watchdog, because a second timer
+beside the peer's would fire twice on one item and leave ``SIGALRM`` in a state neither plugin
+expects. A worker that dies outright belongs to :mod:`foundry.execution.sharding`, which reports
+it as a ``run_error``.
 
-How the seam is wired
-    pytest-timeout declares ``pytest_timeout_set_timer(item, settings)`` and
-    ``pytest_timeout_cancel_timer(item)`` as ``firstresult`` hookspecs whose own implementations
-    are ``trylast``, explicitly so that another plugin can substitute the strategy (AAP 0.2.1).
-    The plugin hook module, ``plugin.py`` -- the only module allowed to implement a pytest
-    hookspec -- registers both hooks only while ``config.pluginmanager.hasplugin("timeout")`` holds
-    (AAP 0.4.2), and each hook body is a one-line delegation to :func:`apply_timer` or
-    :func:`cancel_timer`. Returning
-    ``False`` from the set-timer hook is meaningful: the ``firstresult`` chain then falls through
-    to pytest-timeout's own ``trylast`` implementation, so a switched-off policy, or a Foundry
-    fault, leaves the project's timer exactly as pytest-timeout would have set it.
+The plugin registers ``pytest_timeout_set_timer`` and ``pytest_timeout_cancel_timer``, both
+``firstresult`` hookspecs, as one-line delegations to :func:`apply_timer` and
+:func:`cancel_timer` while ``config.pluginmanager.hasplugin("timeout")`` holds (AAP 0.2.1,
+AAP 0.4.2). Returning ``False`` lets the chain fall through to the peer's own ``trylast``
+implementation, which is what a disabled policy or a Foundry fault must do. The resolved
+:class:`TimeoutPolicy` is authoritative rather than the settings the peer passes into the hook,
+and the plugin seeds the peer's timeout from ``execution.timeout`` during session configuration
+so that a project which set no ``--timeout`` of its own still reaches the substitution.
 
-    The settings pytest-timeout passes into the hook describe its own view of the limit, derived
-    from ``--timeout``, ``PYTEST_TIMEOUT``, the ini file and the item's ``timeout`` marker. The
-    resolved ``execution.timeout`` key is what Foundry promises to enforce (AAP 0.4.5), so the
-    :class:`TimeoutPolicy` is authoritative here and those incoming settings are not reused.
-
-    One precondition comes with that: pytest-timeout's own wrappers call the hook only while its
-    own session settings resolve a positive limit, so a project with no ``--timeout`` of its own
-    would never reach this code and ``execution.timeout`` would quietly stop being enforced. The
-    plugin seeds pytest-timeout's timeout from ``execution.timeout`` while it configures the
-    session, which is what makes the substitution reach every item.
-
-Why pytest-timeout is called directly rather than through the hook
-    Calling ``config.pluginmanager.hook.pytest_timeout_set_timer(...)`` from inside Foundry's own
-    implementation of that hookspec re-enters the hook, which recurses: ``firstresult`` stops at
-    Foundry's implementation, and Foundry's plugin is registered after pytest-timeout's. Calling
-    pytest-timeout's function object with the settings derived here is also the only way those
-    values reach the timer.
-
-Lazy import of an optional peer
-    pytest-timeout is an optional peer, so nothing here imports it until a hook actually runs:
-    importing this module costs one stdlib import and leaves ``pytest_timeout`` out of
-    ``sys.modules``, which the 150 ms plugin-startup budget depends on (implicit requirement I5).
-    The module is looked up by name because the distribution ships a single module whose name has
-    differed between releases; ``pytest_timeout`` (the name the pinned 2.4.0 installs) is tried
-    first and ``_pytest_timeout`` second, so a release that relocates it keeps working.
-
-Failure isolation
-    Foundry's own plumbing never changes a test's outcome or the run's exit code (AAP 0.1.2). A
-    pytest-timeout that cannot be imported, or that refuses the derived settings because a release
-    renamed a field, is reported as one ``WARNING`` on the ``foundry`` logger through
-    :func:`foundry.obs.events.emit_plumbing_failure`, and the function returns ``False``. One
-    ``WARNING`` covers the run's whole process, however many items the peer fails on: both hook
-    bodies run once per item, so :func:`_announce_once` latches each distinct fault and the level
-    policy that reserves ``WARNING`` for failure isolation is met without flooding the log (AAP
-    0.13.1). Nothing here raises into a test, and the message it logs carries no path, no node id
-    and no secret.
-
-Layer and import discipline
-    The imports below are :mod:`foundry.core.exceptions`, :mod:`foundry.core.limits` and
-    :mod:`foundry.obs.events`, all below this package in the AAP 0.4.8 table, plus the standard
-    library. Importing this module performs no I/O, reads no environment variable, configures no
-    logger and arms no timer. The one piece of module-level state it holds is
-    :func:`_announce_once`'s memo, which records which peer faults have already been announced:
-    diagnostic bookkeeping only, carrying no configuration value, no path, no node id and no
-    outcome, and read by nothing that decides behaviour. It holds nothing else.
+pytest-timeout is an optional peer, so nothing here imports it until a hook runs, which keeps it
+out of ``sys.modules`` for the 150 ms startup budget (implicit requirement I5); it is looked up
+by name because the distribution has shipped both ``pytest_timeout`` and ``_pytest_timeout``.
+A peer that cannot be imported, or that refuses the derived settings, is reported as one
+``WARNING`` per process through :func:`_announce_once`, and the call returns ``False``, so
+Foundry's own plumbing never changes a test's outcome or the exit code (AAP 0.1.2, AAP 0.13.1).
+Importing this module performs no I/O and arms no timer.
 """
 
 from __future__ import annotations
@@ -106,18 +63,15 @@ TIMEOUT_METHOD_THREAD: Final[str] = "thread"
 DEFAULT_TIMEOUT_METHOD: Final[str] = TIMEOUT_METHOD_SIGNAL
 """The method Foundry asks for, which is pytest-timeout's own default.
 
-The choice stays pytest-timeout's: it downgrades ``signal`` to ``thread`` by itself when the timer
-is armed off the main thread or the platform has no ``SIGALRM``, and it is free to change that
-rule. Foundry selects no method of its own because AAP 0.4.5 fixes no key for one.
+The peer downgrades ``signal`` to ``thread`` by itself off the main thread or without ``SIGALRM``,
+and AAP 0.4.5 fixes no key for a method, so Foundry selects none of its own.
 """
 
 FUNC_ONLY: Final[bool] = True
 """Whether the timer covers the test's call phase only.
 
-``True`` is what makes the failure a ``call``-phase failure with the timeout named in its message,
-which is the ``execution.timeout`` row of the AAP 0.4.7 state table. Fixture setup and teardown
-therefore stay unbounded, so a slow session fixture is reported by the fixture rather than
-mislabelled as a timed-out test.
+``True`` makes a timeout a ``call``-phase failure, the ``execution.timeout`` row of AAP 0.4.7, and
+leaves fixture setup and teardown unbounded so a slow fixture is reported by the fixture.
 """
 
 MIN_TIMEOUT_SECONDS: Final[float] = TIMEOUT_MIN
@@ -136,10 +90,9 @@ Defined once, in :data:`foundry.core.limits.TIMEOUT_MAX`.
 TIMEOUT_RANGE_TEXT: Final[str] = TIMEOUT_RANGE
 """The accepted range as the message states it: ``0 < t <= 3600``.
 
-Quoted verbatim from :data:`foundry.core.limits.TIMEOUT_RANGE`, the one spelling of the range. It
-matches the constraint :class:`foundry.config.keys.KeySpec` declares for ``execution.timeout`` and
-the text the documented ``foundry config validate`` failure carries, so the same sentence appears
-whichever surface reports the fault.
+Quoted from :data:`foundry.core.limits.TIMEOUT_RANGE`, the one spelling of the range, and it
+matches the constraint :class:`foundry.config.keys.KeySpec` declares for ``execution.timeout``, so
+the same sentence appears whichever surface reports the fault.
 """
 
 TIMEOUT_KEY: Final[str] = "execution.timeout"
@@ -148,9 +101,9 @@ TIMEOUT_KEY: Final[str] = "execution.timeout"
 TIMEOUT_MARKER: Final[str] = "Timeout ("
 """The literal prefix pytest-timeout puts in its own failure message.
 
-pytest-timeout reports a timed-out test as ``Timeout (>60.0s) from pytest-timeout.``, and that
-prefix is the stable part of the text across the releases in the declared range. It is only ever
-evidence for labelling an attempt: the outcome itself still comes from pytest's own report.
+It reports a timed-out test as ``Timeout (>60.0s) from pytest-timeout.``, and the prefix is the
+stable part of that text across the releases in the declared range. It is only evidence for
+labelling an attempt; the outcome itself still comes from pytest's own report.
 """
 
 TIMEOUT_METHODS: Final[frozenset[str]] = frozenset({TIMEOUT_METHOD_SIGNAL, TIMEOUT_METHOD_THREAD})
@@ -390,33 +343,14 @@ class TimeoutPolicy:
 def apply_timer(config: object, item: object, policy: TimeoutPolicy) -> bool:
     """Arm pytest-timeout's per-item timer for ``item`` from ``policy``.
 
-    This is the body the plugin hook ``pytest_timeout_set_timer`` delegates to, so it is called once
-    per timed item and must never raise: Foundry's own plumbing cannot change a test's outcome or
-    the run's exit code (AAP 0.1.2).
-
-    A disabled policy returns ``False`` before the optional peer is even looked up, so switching the
-    timer off costs nothing. Otherwise the installed pytest-timeout is imported, the settings are
-    built at :func:`_build_settings`, and its own ``pytest_timeout_set_timer`` is called directly --
-    never through ``config.pluginmanager.hook``, which would re-enter Foundry's implementation of
-    the same ``firstresult`` hookspec and recurse.
-
-    Args:
-        config: The pytest ``Config`` the hook runs under, normally ``item.config``. It is read for
-            the timer method the project chose on pytest-timeout itself and for nothing else.
-        item: The pytest ``Item`` being timed. Typed ``object`` so this module needs no runtime
-            pytest import; the peer duck-types it and stores its cancel callable on the item.
-        policy: The resolved limit to enforce.
-
-    Returns:
-        ``True`` when pytest-timeout accepted the settings and the timer is armed, ``False`` when
-        nothing was armed -- the policy is disabled, the peer is not importable, or it refused the
-        settings. ``False`` lets the ``firstresult`` chain fall through to pytest-timeout's own
-        implementation, which leaves the project's timer as the peer would have set it.
-
-    Raises:
-        Nothing. A fault in the optional peer is announced once for the run's process, through
-        :func:`_announce_once` and :func:`foundry.obs.events.emit_plumbing_failure`, and turned
-        into ``False``; a second item that meets the same fault logs nothing further.
+    The body the plugin hook ``pytest_timeout_set_timer`` delegates to, called once per timed item,
+    and it must never raise: Foundry's own plumbing cannot change a test's outcome or the run's
+    exit code (AAP 0.1.2). A disabled policy returns ``False`` before the optional peer is looked
+    up; otherwise its own ``pytest_timeout_set_timer`` is called directly with the settings built at
+    :func:`_build_settings` -- never through ``config.pluginmanager.hook``, which would re-enter
+    Foundry's implementation of the same ``firstresult`` hookspec and recurse. ``True`` means the
+    timer is armed and ``False`` that nothing was armed, which lets the chain fall through to
+    pytest-timeout's own implementation and leaves the project's timer as the peer set it.
     """
     if not policy.is_enabled:
         return False

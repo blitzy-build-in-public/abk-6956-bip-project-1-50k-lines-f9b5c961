@@ -2,32 +2,16 @@
 
 Every piece of per-test state Foundry keeps lives in a ``pytest.Stash`` entry keyed by a
 :class:`pytest.StashKey` declared here, and everything that must survive a ``pytest-xdist`` worker
--- the attempt count, the quarantine verdict, the log tail, the artifacts -- travels as one
-:class:`TestPayload` stamped onto ``TestReport.user_properties``. This is the single declaration
-site for both: ``plugin.py`` imports it at module scope, and two declarations of one key would be
-two different keys (AAP 0.4.8, implicit requirement I3).
+travels as one :class:`TestPayload` stamped onto ``TestReport.user_properties``. This is the single
+declaration site for both, because two declarations of one key would be two different keys
+(AAP 0.4.8, requirement I3).
 
-Where state may live
-    Per-item state lives in ``item.stash`` behind :data:`ITEM_STASH_KEYS`, session state in
-    ``config.stash`` behind :data:`SESSION_STASH_KEYS`` -- never as an attribute on a
-    ``pytest.Item`` and never in a module-level dict keyed by node id. Importing it builds only
-    ``StashKey`` objects, tuples and frozen dataclasses: it registers no hook, performs no I/O,
-    reads no environment variable, configures no logger and mutates nothing.
-
-The wire format
-    ``user_properties`` is a ``list[tuple[str, object]]`` that pytest serialises for the controller,
-    so a value in it must be JSON-serialisable: text, numbers, booleans and ``None`` travel
-    natively, and every nested structure travels as the ``json.dumps(..., sort_keys=True)`` text of
-    :func:`dumps`. :func:`write_properties` replaces Foundry's entries rather than adding a second
-    set, and :func:`read_properties` is the tolerant inverse: a missing, partial or malformed set
-    yields ``None``, because a fault in Foundry's plumbing may never change a test's outcome.
-
-The reporting boundary
-    ``foundry.execution`` may never import ``foundry.reporting`` (AAP 0.4.8), so
-    :meth:`TestPayload.as_result_fields` restates ``ResultRecord``'s field names for ``plugin.py``,
-    which builds the frozen record; ``log_tail`` and ``artifacts_disabled`` are transport-only for
-    that reason. Nothing raises out of this module either: the readers raise ``FieldValueError`` for
-    the decoders to catch.
+Per-item and session state are keyed by the typed stash keys below, never by an item attribute or a
+module-level dict keyed by node id (AAP 0.4.8). A value in ``user_properties`` must be
+JSON-serialisable, so nested structures travel as the ``json.dumps(..., sort_keys=True)`` text of
+:func:`dumps`: :func:`write_properties` replaces Foundry's entries and :func:`read_properties` is
+the tolerant inverse, because a fault in Foundry's plumbing may never change a test's outcome.
+:meth:`TestPayload.as_result_fields` restates ``ResultRecord``'s field names for ``plugin.py``.
 """
 
 from __future__ import annotations
@@ -69,13 +53,11 @@ if TYPE_CHECKING:
     from foundry.execution.sharding import NodeLedger, RunErrorLedger
     from foundry.obs.artifacts import ArtifactWriter
 
-# --- The property vocabulary ----------------------------------------------
-
 PROPERTY_PREFIX: Final[str] = "foundry."
-"""Prefix of every ``user_properties`` name Foundry writes; the rest of the name is the field.
+"""Prefix of every ``user_properties`` name Foundry writes; each ``PROPERTY_*`` constant adds one.
 
-Each ``PROPERTY_*`` constant is the prefix plus the field it carries, so a decoder strips the prefix
-instead of keeping a second table in step; the names are additive contract (AAP 0.4.9).
+A decoder strips the prefix instead of keeping a second table in step, and the names are additive
+contract (AAP 0.4.9).
 """
 
 PROPERTY_ARTIFACTS: Final[str] = PROPERTY_PREFIX + "artifacts"
@@ -95,8 +77,6 @@ PROPERTY_STARTED_AT: Final[str] = PROPERTY_PREFIX + "started_at"
 """The last of the fourteen stamped names, one per payload field, in AAP 0.4.6's order."""
 
 _LiteralValue = TypeVar("_LiteralValue", bound=str)
-
-# --- The outcome vocabulary ----------------------------------------------
 
 OutcomeValue: TypeAlias = Literal[
     "passed",
@@ -122,8 +102,6 @@ OUTCOME_VALUES: Final[tuple[OutcomeValue, ...]] = (
     "quarantine_passed",
     "not_run",
 )
-
-# --- Reading a decoded payload --------------------------------------------
 
 
 class _WireRecord(Protocol):
@@ -269,9 +247,6 @@ def _run_id(payload: Mapping[str, object], key: str) -> str:
     if not is_valid_run_id(value):
         raise _malformed(key, "a run id of the form YYYYmmddTHHMMSS-<6 hex>")
     return value
-
-
-# --- The wire records -----------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -513,8 +488,6 @@ class TestPayload:
             return None
 
 
-# --- The property names, derived from the payload -------------------------
-
 FOUNDRY_PROPERTY_NAMES: Final[tuple[str, ...]] = tuple(
     sorted(
         PROPERTY_PREFIX + field.name for field in fields(TestPayload) if field.name != "record_type"
@@ -525,9 +498,6 @@ _JSON_FIELDS: Final[frozenset[str]] = frozenset(
     {"artifacts", "failures", "log_tail", "markers", "quarantine"}
 )
 """The payload fields whose wire value is JSON text rather than a scalar."""
-
-
-# --- The user_properties codec -------------------------------------------
 
 
 def dumps(value: object) -> str:
@@ -603,8 +573,6 @@ def read_properties(report: pytest.TestReport) -> TestPayload | None:
     return TestPayload.from_dict(payload)
 
 
-# --- The stash keys ------------------------------------------------------
-#
 # One key per piece of state, named for its owning module, so no two modules can claim one slot.
 
 SESSION_STATE: Final[pytest.StashKey[SessionState]] = pytest.StashKey["SessionState"]()
@@ -631,9 +599,6 @@ ITEM_STASH_KEYS: Final = (
     ITEM_STARTED_MONOTONIC,
     ITEM_STARTED_AT,
 )
-
-
-# --- The bounded log tail -------------------------------------------------
 
 
 def bounded_tail(lines: Iterable[str], limit: int) -> tuple[str, ...]:

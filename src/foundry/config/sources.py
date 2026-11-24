@@ -1,32 +1,11 @@
 """The per-key provenance record: which layer supplied a value, and what names it.
 
-Every value a resolved configuration holds has exactly one origin -- the settings model's
-own field default, the configuration file, a ``[profiles.<name>]`` table, a ``FOUNDRY_*``
-environment variable or a ``--foundry-<dotted.key>`` option (AAP 0.4.5). A
-:class:`ConfigSource` is that origin as a value: the layer, plus the detail that names what
-inside the layer supplied it, which is what makes ``foundry config show`` able to attribute
-each key and what makes the four-layer precedence inspectable rather than asserted
-(implicit requirement I2).
-
-The record exists because the settings model cannot produce it. ``pydantic-settings``
-merges its sources itself and exposes no API naming the environment variable that matched a
-field, so per-key attribution has to be recorded while each layer is applied.
-:mod:`foundry.config.merge` is the only writer of the
-:data:`ConfigSources` mapping, and :mod:`foundry.config.render`,
-``foundry config show`` and the report are its readers.
-
-``detail`` names a value and never holds one: a file path, an environment variable, an
-option spelling or a profile name. It is printed by ``foundry config show`` and
-``foundry doctor`` and can reach a report, so a value stored here would leak the way any
-other configuration text does -- which is why the configuration carries the *name* of the
-variable that holds a secret, never the secret (implicit requirement I9).
-
-Importing this module performs no I/O, reads no environment variable, configures no logger,
-parses nothing and holds no mutable state: the API is one frozen record, one type alias and
-the constructors that build it (AAP 0.4.8). It imports no pydantic, so a reader of a source
-map stays inside the plugin startup budget (AAP 0.14.2, implicit requirement I5), and it
-delegates the label join to :func:`foundry.config.layers.layer_label` so the terminal, the
-JSON document and the TOML document cannot drift apart.
+Every value a resolved configuration holds has exactly one origin -- a field default, the
+configuration file, a ``[profiles.<name>]`` table, a ``FOUNDRY_*`` variable or a
+``--foundry-<dotted.key>`` option (AAP 0.4.5). A :class:`ConfigSource` is that origin as a value,
+recorded per key by :mod:`foundry.config.merge` because ``pydantic-settings`` names no source it
+resolved from (implicit requirement I2). ``detail`` names a value and never holds one, which is why
+the configuration carries the *name* of the variable holding a secret (implicit requirement I9).
 """
 
 from __future__ import annotations
@@ -58,30 +37,16 @@ through, so a rendered label agrees with either spelling.
 class ConfigSource:
     """Where one resolved configuration value came from (AAP 0.4.5, AAP 0.4.9).
 
-    ``layer`` is a :class:`foundry.config.layers.ConfigLayer` carrying one of the five
-    spellings AAP 0.4.5 publishes -- ``default``, ``file``, ``env``, ``cli`` or
-    ``profile:<name>``. The profile form carries its name inside the field because that is
-    how the plan spells that layer, and ``detail`` repeats the name so the record describes
-    itself without a lookup.
+    ``layer`` is a :class:`foundry.config.layers.ConfigLayer` carrying one of the five spellings
+    AAP 0.4.5 publishes -- ``default``, ``file``, ``env``, ``cli`` or ``profile:<name>`` -- and
+    ``detail`` names what inside the layer supplied the value: the configuration file's path, the
+    environment variable as it was spelled, the ``--foundry-*`` option as it was typed, or the
+    profile's name. The ``default`` layer has nothing finer to name and carries
+    :data:`foundry.config.layers.DEFAULT_DETAIL`.
 
-    ``detail`` names what inside the layer supplied the value: the configuration file's
-    path, the environment variable as it was spelled, the ``--foundry-*`` option as it was
-    typed, or the profile's name. The ``default`` layer has nothing finer to name and
-    carries :data:`foundry.config.layers.DEFAULT_DETAIL`.
-
-    The record is frozen and slotted: a resolved configuration is read by ``config show``,
-    ``doctor``, the report and a test comparing two resolutions, none of which may see it
-    change under them. It is also hashable and compares by value, so two resolutions of the
-    same inputs compare equal entry by entry.
-
-    Build one through the constructors rather than the field list: they are where the five
-    published spellings are written, and :func:`foundry.config.merge` uses them to record
-    which layer won a key.
-
-    Attributes:
-        layer: The layer the value came from, carrying one of the five published spellings.
-        detail: What the layer names the value by, or
-            :data:`foundry.config.layers.DEFAULT_DETAIL`.
+    The record is frozen, slotted and compares by value, so two resolutions of the same inputs
+    compare equal entry by entry. Build one through the constructors rather than the field list:
+    they are where the five published spellings are written.
     """
 
     layer: ConfigLayer

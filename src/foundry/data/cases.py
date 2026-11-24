@@ -1,34 +1,6 @@
-"""The immutable case model, and the adapter that turns cases into pytest parameters.
+"""The immutable case model and the adapter that turns cases into pytest parameters (AAP 0.7.2).
 
-A data file reaches this module as a :class:`~foundry.data.loaders.base.LoadedTable` and
-leaves it as a :class:`CaseSet` of :class:`Case` objects -- or, for a file that parses but
-holds no data rows, as the single skipped parameter :func:`build_parameters` returns. The
-field names :class:`Case` and :class:`CaseSet` publish are the AAP 0.7.2 contract: a later
-release may add to them but may never rename or remove one (AAP 0.4.9).
-
-Three rules shape what sits here.
-
-* **Immutability.** Both models are frozen dataclasses with ``slots``, and a case's
-  ``values`` are held in a :class:`types.MappingProxyType`, so a case captured at
-  collection cannot be edited once the run has been planned around it.
-* **Determinism.** Case order is the loader's file order, and an id comes from the file's
-  stem plus a row position -- never from a cell value, the clock, the host or a worker id
-  -- so a serial run and every xdist worker collect byte-identical parametrisation ids
-  (implicit requirement I6).
-* **An empty file is not a fault.** An empty ``LoadedTable.rows`` means the file parses and
-  holds no data, which AAP 0.4.7 reports as one skipped item whose reason reads
-  ``no cases in <file>``: the session exits 0 instead of failing collection.
-
-This module converts and formats only; it validates nothing and raises nothing of its own.
-Schema enforcement belongs to ``foundry.data.schema``, which ``foundry.data.registry`` runs
-before calling :func:`build_case_set`. Importing the module defines names and does nothing
-else -- no I/O, no environment read, no logger configuration, no mutable module state
-(AAP 0.4.8).
-
-``pytest`` is imported at module scope here because this module is the parametrisation
-adapter: ``pytest.param`` is a value it calls and ``Metafunc`` is a type it only annotates,
-so neither is a hookspec and the rule that only ``foundry.plugin`` implements pytest hooks
-(AAP 0.4.8) still holds.
+An empty file is one skipped parameter reading ``no cases in <file>``, never a collection error.
 """
 
 from __future__ import annotations

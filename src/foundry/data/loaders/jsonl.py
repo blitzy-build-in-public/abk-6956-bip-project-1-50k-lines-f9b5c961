@@ -1,36 +1,6 @@
-"""The JSON Lines reader: one JSON object per line, one table row per object.
+"""The JSON Lines reader: one JSON object per line, one table row per object (AAP 0.4.7).
 
-JSON Lines is the one data format whose every record has a real line in the file, so
-this is the reader that can point a collection error at the exact line that broke a
-case (AAP 0.4.7). A file holds one JSON object per physical line, and every non-blank
-line contributes exactly one row to the table this module returns.
-
-Two rules follow from that, and they are why the reader lives apart from ``json.py``:
-
-* A line that is empty or whitespace-only is skipped without consuming a record, and
-  skipping never renumbers: the record after a blank line keeps its true 1-based
-  physical line, which is what makes ``DataError.line`` name the line a person sees in
-  an editor.
-* A JSON Lines file is always tabular. A line that parses to a list, a scalar or
-  ``null`` is a fault naming that line rather than a matrix or a single record, because
-  a JSON Lines file that needs either shape is a modelling error its author should meet
-  at collection time and not as a surprising case set.
-
-The column order comes from :func:`build_table` in the loader base -- the same
-implementation the CSV, JSON and YAML readers reach -- so the first record's keys come
-first, a key a later line introduces is appended, a missing key becomes ``None``, and
-two runs or two shards derive the same columns without iterating a set (implicit
-requirement I6).
-
-Only :class:`foundry.core.exceptions.DataError` escapes :meth:`JsonlLoader.load`, and
-it is raised exclusively through :func:`data_error` in the loader base: the read, the
-decode and the per-line parse each translate their own builtin exception once, at the
-boundary of ``load`` (AAP 0.14.3). That includes a line nested too deeply to parse,
-which is reported against its own physical line rather than as an escaping builtin.
-
-Importing this module defines names and does nothing else -- the standard library plus
-the loader base, no I/O, no environment read, no logger configuration, and no state
-beyond the ``LOADER`` singleton (AAP 0.4.8, implicit requirement I5).
+Blank lines are skipped without renumbering, so a fault names the line a person sees in an editor.
 """
 
 from __future__ import annotations

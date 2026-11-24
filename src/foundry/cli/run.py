@@ -1,36 +1,13 @@
 """The ``foundry run`` command: pytest's own run, wrapped by Foundry's option layer.
 
-``run`` is the surface a team puts in CI -- ``foundry run -k smoke --foundry-profile ci`` -- and
-its whole job is to make Foundry's documented options reach pytest without changing what pytest
-does (AAP 0.4.4, AAP 0.7.1). It translates the ``--foundry-*`` options this command parsed into
-the canonical spellings :mod:`foundry.plugin` registers, appends the caller's pytest arguments
-unchanged and in order, and hands the whole list to :func:`pytest.main`.
-
-**The exit code is the contract** (AAP 0.4.4, AAP 0.4.9). The code ``pytest.main`` produced is
-returned exactly as produced -- ``0`` passed, ``1`` failures, ``3`` internal error, ``4`` usage
-error, ``5`` no tests collected -- and none of them is rewritten, so a bare ``pytest`` invocation
-and ``foundry run`` end identically. The one code Foundry produces itself is ``2``, for a usage
-or configuration fault raised *before* pytest starts: the record and replay switches given
-together, an explicit ``--foundry-config`` path that does not exist, an unknown key, a value its
-key cannot parse. That is why the configuration is resolved here, once, ahead of
-:func:`pytest.main`: the fault then reaches :func:`foundry.cli.main.main` as a
-:class:`~foundry.core.exceptions.ConfigError`, which ends the process with exit 2 before a test
-is collected and before a report file is written (AAP 0.4.7).
-
-**Nothing here activates the plugin.** Foundry's plugin is registered by the ``pytest11`` entry
-point the distribution declares (AAP 0.4.2), so this module never names a plugin on the command
-line -- no plugin selector, no plugin switch -- whatever it is asked to run. Nor does it add an
-argument the caller did not supply, which is what makes ``foundry run examples/checkout``
-behave exactly like ``pytest examples/checkout``.
-
-**Import-time discipline** (AAP 0.4.8). ``pytest`` is imported inside :func:`run` and not here,
-so ``foundry --version``, ``--help``, ``init``, ``config`` and ``doctor`` never pay for it. The
-module performs no I/O, reads no environment variable -- ``foundry.config`` owns that layer --
-and holds no mutable state: :data:`_PARAMETER_TABLE` and :data:`_FLAG_SPELLINGS` are read-only
-constants built once at import. It imports ``core`` and ``config`` and none of
-``foundry.plugin``, and it prints nothing itself: a diagnostic a caller must see is rendered by
-:func:`foundry.cli.main.main` through :func:`foundry.cli.render.render_error`, which redacts it
-first.
+``run`` translates the ``--foundry-*`` options this command parsed into the canonical spellings
+:mod:`foundry.plugin` registers, appends the caller's pytest arguments unchanged and in order, and
+hands the list to :func:`pytest.main`, so a bare ``pytest`` invocation and ``foundry run`` end
+identically (AAP 0.4.4, AAP 0.7.1, AAP 0.4.9). The one code Foundry produces itself is ``2``: the
+configuration is resolved once here, ahead of :func:`pytest.main`, so a usage or configuration fault
+reaches :func:`foundry.cli.main.main` before a test is collected or a report written (AAP 0.4.7).
+Nothing here activates the plugin, no argument the caller did not supply is added, and ``pytest`` is
+imported inside :func:`run` so the other commands never pay for it (AAP 0.4.2, AAP 0.4.8).
 """
 
 from __future__ import annotations

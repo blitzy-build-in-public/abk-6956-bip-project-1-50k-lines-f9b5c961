@@ -1,22 +1,11 @@
 """Exit-code vocabulary for the Foundry command line.
 
-AAP 0.4.4 fixes what each code the command line publishes means and AAP 0.7.3 fixes
-the mapping every CLI module applies:
-
-- ``0`` (:data:`SUCCESS`) -- the command did what it was asked to do.
-- ``1`` (:data:`FAILED`) -- tests failed, or ``foundry report compare`` found newly
-  failing comparisons.
-- ``2`` (:data:`USAGE_OR_CONFIG`) -- a usage or configuration error raised by Foundry
-  itself, including one raised before pytest starts.
-- ``3``, ``4`` and ``5`` (:data:`PYTEST_INTERNAL_ERROR`, :data:`PYTEST_USAGE_ERROR`,
-  :data:`PYTEST_NO_TESTS`) -- pytest's own internal-error, usage-error and
-  no-tests-collected codes, preserved exactly as ``foundry run`` received them.
-
-Foundry maps its own failures to :data:`USAGE_OR_CONFIG` and never rewrites a code
-pytest produced; :func:`passthrough` is where that intent is stated once for every
-call site. The module holds constants and pure functions only: it imports nothing
-from Foundry and nothing third-party, and performs no I/O, environment read, clock
-read or logger configuration at import time, so any CLI module can import it freely.
+AAP 0.4.4 fixes what each published code means and AAP 0.7.3 the mapping every CLI module applies:
+``0`` success, ``1`` failed tests or a newly failing comparison, ``2`` a usage or configuration
+error raised by Foundry itself, and ``3``/``4``/``5`` pytest's own internal-error, usage-error and
+no-tests codes, preserved exactly as ``foundry run`` received them. Foundry maps its own failures to
+``2`` and never rewrites a code pytest produced (:func:`passthrough`). Constants and pure functions
+only: no Foundry import, no I/O, no environment or clock read (AAP 0.4.8).
 """
 
 from collections.abc import Mapping
@@ -84,18 +73,11 @@ _DESCRIPTIONS: Final[Mapping[int, str]] = MappingProxyType(
 def passthrough(code: int | None) -> int:
     """Return ``code`` as the exit status this process publishes.
 
-    ``None`` -- a command that produced no status at all -- becomes
-    :data:`SUCCESS`. An ``int`` subclass such as a ``bool`` or an ``IntEnum``
-    (``pytest.ExitCode`` is one) is normalised to a plain :class:`int`. Every other
-    value, an unknown or negative pytest code included, is returned unchanged rather
-    than coerced: a code Foundry does not recognise is still pytest's, and it must
-    reach the shell exactly as pytest produced it.
-
-    Args:
-        code: The exit code to publish, or ``None`` when none was produced.
-
-    Returns:
-        The exit code the process exits with.
+    ``None`` -- a command that produced no status at all -- becomes :data:`SUCCESS`, and an ``int``
+    subclass such as a ``bool`` or a ``pytest.ExitCode`` is normalised to a plain :class:`int`.
+    Every other value, an unknown or negative pytest code included, is returned unchanged rather
+    than coerced: a code Foundry does not recognise is still pytest's, and it must reach the shell
+    exactly as pytest produced it.
     """
     if code is None:
         return SUCCESS
@@ -105,39 +87,22 @@ def passthrough(code: int | None) -> int:
 def is_pytest_code(code: int) -> bool:
     """Report whether ``code`` is one of pytest's codes that Foundry preserves.
 
-    Args:
-        code: The exit code to classify.
-
-    Returns:
-        ``True`` for pytest's internal-error, usage-error and no-tests codes.
+    Returns ``True`` for pytest's internal-error, usage-error and no-tests codes.
     """
     return code in PYTEST_PASSTHROUGH
 
 
 def is_success(code: int) -> bool:
-    """Report whether ``code`` means the command succeeded.
-
-    Args:
-        code: The exit code to classify.
-
-    Returns:
-        ``True`` only for :data:`SUCCESS`.
-    """
+    """Report whether ``code`` means the command succeeded; ``True`` only for :data:`SUCCESS`."""
     return code == SUCCESS
 
 
 def describe(code: int) -> str:
     """Return the one-line meaning of ``code``.
 
-    The wording is what a ``--help`` epilogue and a rendered CLI message print, so
-    the caller never formats a bare number for a code the vocabulary documents. A
-    code outside the vocabulary still gets usable text, ``"exit code <n>"``.
-
-    Args:
-        code: The exit code to describe.
-
-    Returns:
-        The documented meaning of a known code, otherwise ``"exit code <n>"``.
+    The wording is what a ``--help`` epilogue and a rendered CLI message print, so the caller never
+    formats a bare number for a documented code. A code outside the vocabulary still gets usable
+    text, ``"exit code <n>"``.
     """
     numeric = passthrough(code)
     return _DESCRIPTIONS.get(numeric, f"exit code {numeric}")

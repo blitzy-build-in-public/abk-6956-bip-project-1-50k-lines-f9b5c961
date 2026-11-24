@@ -1,23 +1,14 @@
-"""The sole definition site of Foundry's exception types.
+"""The sole definition site of Foundry's exception types (AAP 0.4.9, AAP 0.14.3).
 
 Only these types cross a module boundary (AAP 0.13.1): ``str()`` renders the message alone, so the
-texts the behaviour contract pins reach a terminal or a CI log unchanged, while the hint and the
-structured context stay on the attributes and in ``repr()``, which echoes free text by its length
-alone. Standard library and the sibling :mod:`foundry.core.types` only, no work at import time, so
-the plugin loads this module inside the startup budget; the names, bases and attributes are the
-compatibility promise (AAP 0.4.9).
+texts the behaviour contract pins reach a terminal unchanged, while the hint and the structured
+context stay on the attributes and in ``repr()``, which echoes a value only in its bounded token
+shape and describes any other by its length, keeping a credential out of a file, the terminal and a
+report (AAP 0.1.1, AAP 0.14.3). A capability package composes the message from the context it alone
+holds, so a caller branches on ``DataError.column`` rather than parsing prose.
 
 :class:`FieldValueError` and :class:`ElementTypeError` serve modules that must raise a
-``ValueError``- or ``TypeError``-compatible fault: each is a Foundry error and the builtin, so
-pydantic wraps the first into one ``ValidationError`` and ``except TypeError`` catches the second;
-both stay out of ``__all__``, the published surface of the eight above.
-
-A capability package composes the message from the context it alone holds and passes it as
-keywords, so a caller branches on ``DataError.column`` rather than parsing prose. ``repr()`` echoes
-an attribute only in its class's bounded token shape and describes any other by its length, keeping
-a credential out of a file, the terminal and a report (AAP 0.1.1 security row, AAP 0.14.3) -- a
-shape check rather than a detector, since :mod:`foundry.obs.redaction` alone holds redaction and a
-stdlib-only :mod:`foundry.core` may not import it.
+``ValueError``- or ``TypeError``-compatible fault, and both stay out of ``__all__``.
 """
 
 from __future__ import annotations
@@ -41,9 +32,7 @@ __all__: Final[tuple[str, ...]] = (
 
 
 _ECHOABLE_ATTRIBUTE: Final[re.Pattern[str]] = re.compile(r"[^\s\x00-\x1f\x7f]{1,120}")
-"""The shape a structured attribute value needs before ``repr()`` echoes it: one visible token of at
-most 120 characters -- a method, a path, a key, a JSON path, a column, a validator, a class name.
-"""
+"""The shape a value needs before ``repr()`` echoes it: one visible token, at most 120 chars."""
 
 _MASKED_ATTRIBUTE: Final[str] = "<redacted: {length} characters>"
 """What ``repr()`` shows instead of free text: the value's length alone."""
@@ -55,10 +44,10 @@ def _present(**values: object) -> tuple[tuple[str, object], ...]:
 
 
 def _render_attribute(name: str, value: object) -> str:
-    """Return one ``name=value`` pair for :meth:`FoundryError.__repr__`.
+    """Return one ``name=value`` pair for :meth:`FoundryError.__repr__`, and never raise.
 
     Only text in the shape :data:`_ECHOABLE_ATTRIBUTE` describes is echoed; any other text becomes
-    its length, so fault detail or a credential never reaches the terminal, and nothing raises.
+    its length, so fault detail or a credential never reaches the terminal.
     """
     if not isinstance(value, str) or _ECHOABLE_ATTRIBUTE.fullmatch(value) is not None:
         return f"{name}={value!r}"
@@ -66,12 +55,12 @@ def _render_attribute(name: str, value: object) -> str:
 
 
 class FoundryError(Exception):
-    """Base class of every exception Foundry raises.
+    """Base class of every exception Foundry raises (AAP 0.4.9).
 
     ``message`` is the text the raising module composed, which ``str()`` renders exactly, and
-    ``hint`` an actionable next step or ``None``. No attribute of any subclass may hold a
-    credential: the configuration stores the *names* of the environment variables that hold secrets,
-    not their values (implicit requirement I9).
+    ``hint`` an actionable next step or ``None``. No attribute of any subclass holds a credential:
+    the configuration keeps the *names* of the environment variables that hold secrets, not their
+    values (implicit requirement I9).
     """
 
     message: str
@@ -94,14 +83,10 @@ class FoundryError(Exception):
         return f"{self.message}\n  {self.hint}"
 
     def __repr__(self) -> str:
-        """Return a stable representation of the error and the context it carries.
+        """Return ``ClassName(message=..., <attribute>=...)``: deterministic, and never raising.
 
-        Deterministic -- class name, message, then the subclass's attributes in declaration order
-        -- with the message echoed and an attribute echoed only in its class's token shape or else
-        described by its length, so free text and credentials stay off the terminal. Nothing raises.
-
-        Returns:
-            ``ClassName(message=..., <attribute>=..., ...)``, a default never passed left out.
+        The attributes come in declaration order, a default never passed left out, and one is echoed
+        only in its class's token shape, so free text and credentials stay off the terminal.
         """
         parts = [f"message={self.message!r}"]
         parts.extend(_render_attribute(name, value) for name, value in self._attribute_items())
@@ -113,13 +98,11 @@ class FoundryError(Exception):
 
 
 class ConfigError(FoundryError):
-    """A configuration fault, raised by :mod:`foundry.config`.
+    """A configuration fault, raised by :mod:`foundry.config`; the command line maps it to exit 2.
 
-    Covers an unknown key, a value outside its range, an unparseable environment value, a missing
-    file and an absent auth variable, whose name but never value the message carries; the command
-    line maps the class to exit code ``2`` before pytest starts. ``key``, ``layer`` and ``path``
-    name the dotted key at fault (``http.timeout``), the resolution layer (``default``, ``file``,
-    ``profile:<name>``, ``env``, ``cli``) and the file, each ``None`` when it does not apply.
+    ``key``, ``layer`` and ``path`` name the dotted key at fault (``http.timeout``), the resolution
+    layer (``default``, ``file``, ``profile:<name>``, ``env``, ``cli``) and the file, each ``None``
+    when it does not apply. An absent auth variable is named by variable, never by value.
     """
 
     key: str | None
@@ -149,9 +132,9 @@ class ConfigError(FoundryError):
 class DataError(FoundryError):
     """A data-file fault, raised by :mod:`foundry.data` while it collects cases.
 
-    The location is mandatory: naming the file, the line and the column is the point of the class,
-    and pytest reports it as a collection error, exit ``2`` when nothing else was collected.
-    ``file``, ``line`` and ``column`` carry it, the last two ``None`` for a file-wide fault.
+    The location is mandatory: pytest reports the fault as a collection error, exit ``2`` when
+    nothing else was collected. ``file``, ``line`` and ``column`` carry it, the last two ``None``
+    for a file-wide fault.
     """
 
     file: Path
@@ -182,7 +165,7 @@ class ContractError(FoundryError):
     """A contract violation, raised by :mod:`foundry.contract` and the schema assertion.
 
     ``json_path`` is the deterministic first violation -- shallowest path, then path, then message
-    -- so the same document always reports it, and ``detail`` names the validator that rejected it.
+    -- and ``detail`` names the validator that rejected it.
     """
 
     json_path: str
@@ -209,11 +192,9 @@ class ContractError(FoundryError):
 class TransportError(FoundryError):
     """A fault below the HTTP protocol, raised by :mod:`foundry.http`.
 
-    A 4xx or 5xx response is returned, not raised, so this class and
-    :class:`RetryExhaustedError` are the only escapes from a request. ``method`` and ``path`` locate
-    it; ``cause`` is a token by contract -- ``timeout``, ``connect``, ``status_5xx``, ``status_429``
-    or a transport exception's class name such as ``ConnectError`` -- and never free text, which
-    ``repr()`` would echo while fault detail belongs in the message the raising module redacts.
+    A 4xx or 5xx response is returned, not raised. ``method`` and ``path`` locate the request;
+    ``cause`` is a token by contract -- ``timeout``, ``connect``, ``status_5xx``, ``status_429`` or
+    a transport exception's class name such as ``ConnectError`` -- and never free text.
     """
 
     method: str
@@ -243,8 +224,8 @@ class TransportError(FoundryError):
 class RetryExhaustedError(TransportError):
     """Every attempt at a request failed, raised by :mod:`foundry.http.retries`.
 
-    ``attempts`` holds one immutable record per attempt, including the first, in order; the list is
-    copied on construction, so a caller that appends to its own list cannot change the error raised.
+    ``attempts`` holds one immutable record per attempt, the first included, copied on construction
+    so a caller appending to its own list cannot change the error raised.
     """
 
     attempts: list[AttemptRecord]
@@ -277,7 +258,7 @@ class CassetteMissError(FoundryError):
     """A replay found no recorded interaction, raised by :mod:`foundry.cassette`.
 
     ``method`` and ``path`` are the request that found no match and ``cassette_path`` the document
-    searched. No socket is opened on this path, which is what makes a replay run provably offline.
+    searched. No socket is opened here, which is what makes a replay run provably offline.
     """
 
     method: str
@@ -308,8 +289,8 @@ class ArtifactError(FoundryError):
     """An artifact or cassette path escaped its directory, raised by :mod:`foundry.obs`.
 
     ``attempted_path`` is the resolved path that was rejected and ``run_dir`` the directory it had
-    to stay inside. The writer logs it at ``WARNING`` and marks the record's artifacts disabled
-    rather than failing the test, so a hostile node id cannot change an outcome.
+    to stay inside. The writer logs it at ``WARNING`` and disables the record's artifacts rather
+    than failing the test, so a hostile node id cannot change an outcome.
     """
 
     attempted_path: Path
@@ -336,11 +317,9 @@ class ArtifactError(FoundryError):
 class FieldValueError(FoundryError, ValueError):
     """A field of a record holds a value the field's documented form does not allow.
 
-    :mod:`foundry.reporting.record` raises it for each rule it states -- a malformed run id or
-    timestamp, an unusable path or profile, a blank node id, a record that finished before it
-    started, a quarantine state contradicting the outcome. The ``ValueError`` base lets pydantic
-    wrap it into one ``ValidationError``; a :class:`FoundryError` subclass is additive under the
-    compatibility promise (AAP 0.4.9), declared here as the only definition site (AAP 0.14.3).
+    :mod:`foundry.reporting.record` raises it for each rule it states. The ``ValueError`` base lets
+    pydantic wrap it into one ``ValidationError``; the class is additive under the compatibility
+    promise (AAP 0.4.9) and declared here as the only definition site (AAP 0.14.3).
     """
 
 
@@ -348,8 +327,6 @@ class ElementTypeError(FoundryError, TypeError):
     """A serialiser was handed an element that is not one of the types it accepts.
 
     :func:`foundry.reporting.store.dumps` renders ``results.json`` from result records and run-error
-    elements only, so any other element is a caller defect and surfaces rather than being absorbed.
-    The ``TypeError`` base keeps an existing ``except TypeError`` working. A :class:`FoundryError`
-    subclass is additive under the compatibility promise (AAP 0.4.9), declared here as the only
-    definition site (AAP 0.14.3).
+    elements only, so any other element is a caller defect and surfaces. The ``TypeError`` base
+    keeps an existing ``except TypeError`` working; additive under AAP 0.4.9, defined here only.
     """

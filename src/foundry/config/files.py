@@ -1,42 +1,12 @@
 """Configuration-file discovery and the TOML loader behind the file layer.
 
-AAP 0.4.5 fixes one discovery order, and nothing searches beyond it: ``--foundry-config PATH``,
-then ``FOUNDRY_CONFIG``, then ``foundry.toml`` in the invocation directory, then
-``[tool.foundry]`` in that directory's ``pyproject.toml``, then the field defaults. First match
-wins, so this module answers just two questions -- which file applies, and what does it hold.
-:func:`discover_file` returns the :class:`DiscoveredFile` that won, or ``None`` when none
-matched; :func:`load_file` turns it into the :class:`FilePayload` the layers merge: the base
-configuration as flat dotted keys, the ``[profiles.<name>]`` tables beside it, and the path
-``foundry config show`` prints as ``file:<path>``.
-
-**Discovery is anchored to the invocation directory, never to the test file** (AAP 0.4.5,
-assumption A9), which is why this module takes the directory as an argument instead of reading
-one. **No candidate is passed over silently**: a missing explicitly named file is the AAP 0.4.7
-row "Explicit config path missing" -- ``config file not found: <path>``, exit 2 at the caller --
-and a candidate that cannot be read or parsed is
-:func:`foundry.config.errors.unreadable_file` or
-:func:`foundry.config.errors.malformed_toml`, whether an operator named it or discovery found
-it. Only a ``pyproject.toml`` that parses but carries no ``[tool.foundry]`` falls through: it
-configures no part of Foundry, so discovery selects nothing and the AAP 0.4.7 DEBUG line
-reports the run as configuration-free.
-
-**Every key is checked against the registry while the file that supplied it is still known**, per
-layer and with the file's path as the detail, so a rejection names the closest valid key and the
-file to edit (AAP 0.4.5) -- and because a table name is a key in TOML terms,
-:func:`_reject_keyless_tables` refuses a keyless section header that names no registered table
-path before the tree is flattened. **Profiles are extracted here and ordered elsewhere**: both
-spellings become the one :attr:`FilePayload.profiles` mapping, while merging a selected profile
-over the base file belongs to :mod:`foundry.config.profiles` and :mod:`foundry.config.merge`, so
-this module states what a file holds, never what wins.
-
-**Deserialisation is TOML and nothing else** -- :mod:`tomllib` over a UTF-8 decode, with no
-``eval``, ``exec``, ``pickle`` or YAML/JSON configuration format (AAP 0.3.2, AAP 0.9.2, AAP
-0.14.3) -- and nothing is written, so no path needs a traversal guard. Importing this module
-performs no I/O, reads no environment variable, configures no logger and holds no mutable state:
-the environment mapping is passed in because :mod:`foundry.config.env` owns the only environment
-read (AAP 0.4.8). It imports :mod:`foundry.config.validation`, which pulls in ``pydantic`` -- a
-cost paid when a configuration is resolved and never by :mod:`foundry.plugin` at import time
-(AAP 0.14.2, implicit requirement I5).
+AAP 0.4.5 fixes one discovery order and nothing searches beyond it: ``--foundry-config PATH``, then
+``FOUNDRY_CONFIG``, then ``foundry.toml`` in the invocation directory, then ``[tool.foundry]`` in
+that directory's ``pyproject.toml``, then the field defaults -- first match wins. Discovery is
+anchored to the invocation directory, never to the test file (assumption A9), and only a
+``pyproject.toml`` that parses but carries no ``[tool.foundry]`` falls through: every other absent
+or unreadable candidate is a fault (AAP 0.4.7). :func:`discover_file` answers which file applies and
+:func:`load_file` what it holds, as the flat dotted keys plus profile tables the layers merge.
 """
 
 from __future__ import annotations
@@ -95,11 +65,7 @@ DISCOVERY_ORDER: Final[tuple[str, ...]] = (
     f"{PYPROJECT_TOML} [{TOOL_TABLE}.{TOOL_FOUNDRY}]",
     "defaults",
 )
-"""The five discovery steps in the order they are tried, first match wins (AAP 0.4.5).
-
-Published behaviour, stated once as data: ``foundry doctor`` reports it and the other modules
-point at it rather than paraphrasing it.
-"""
+"""The five discovery steps in the order they are tried, first match wins (AAP 0.4.5)."""
 
 
 FileKind = Literal["foundry-toml", "pyproject"]
@@ -146,23 +112,20 @@ _NO_PROFILE_NESTING_EXPECTED: Final[str] = "configuration keys rather than a nes
 class DiscoveredFile:
     """One configuration file that discovery selected, and how it was selected.
 
-    The record is what :func:`load_file` reads and what
-    :func:`foundry.config.merge.resolve` turns into a ``ConfigSource`` for the ``file`` layer. It
-    is frozen and slotted, being built once by discovery and read by the loader and the source
-    recorder, neither of which may see it change under them.
+    What :func:`load_file` reads, and what :func:`foundry.config.merge.resolve` turns into a
+    ``ConfigSource`` for the ``file`` layer. Frozen and slotted, being built once by discovery and
+    read by the loader and the source recorder, neither of which may see it change under them.
 
     Attributes:
         path: The file, absolute and normalised. A relative path an operator typed is resolved
             against the invocation directory :func:`discover_file` was given, never against the
-            process working directory, so a resolution is a pure function of its arguments.
+            process working directory.
         kind: How the file is read -- as a Foundry TOML document or through ``[tool.foundry]``.
-        origin: The discovery step that selected it, so ``cli`` and ``env`` say an operator named
-            the file while ``cwd`` and ``pyproject`` say Foundry found it.
+        origin: The discovery step that selected it.
         document: The parsed document, kept only where discovery had to parse the file to decide
-            whether it configures Foundry -- the ``pyproject.toml`` step. :func:`load_file` reads
-            it instead of parsing the same file twice, so it is ``None`` for every other file and
-            for a descriptor a caller builds by hand; being a cache of the file's content rather
-            than part of what identifies the descriptor, it is left out of comparison and ``repr``.
+            whether it configures Foundry -- the ``pyproject.toml`` step -- so :func:`load_file`
+            does not parse it twice; a cache of the file's content rather than part of what
+            identifies the descriptor, so it is left out of comparison and ``repr``.
     """
 
     path: Path
@@ -173,12 +136,8 @@ class DiscoveredFile:
     def label(self) -> str:
         """Return the path as the text a ``file`` layer source records as its detail.
 
-        ``foundry config show`` prints this string after ``file:``, so it is the answer to
-        "which file supplied this value" and must be the resolved path rather than the
-        spelling the operator happened to type (AAP 0.4.5, AAP 0.7.4).
-
-        Returns:
-            The path as text, absolute because :func:`discover_file` resolves it.
+        ``foundry config show`` prints it after ``file:``, so it is the resolved path and not the
+        spelling the operator typed (AAP 0.4.5, AAP 0.7.4).
         """
         return str(self.path)
 
@@ -191,19 +150,10 @@ def discover_file(
 ) -> DiscoveredFile | None:
     """Select the configuration file that applies, walking the five steps of AAP 0.4.5.
 
-    First match wins, and a step that finds no file is not a fault: resolution continues to the
-    next step and, when none matches, the caller resolves from the field defaults and logs
+    First match wins, and a step that finds no file is not a fault: resolution continues to the next
+    step and, when none matches, the caller resolves from the field defaults and logs
     ``foundry: no config file found``. A relative path the operator named is resolved against
     ``cwd``, so ``--foundry-config data/suite.toml`` means the invocation directory.
-
-    Args:
-        cli_path: The value of ``--foundry-config`` as the command line recorded it, or ``None``
-            when it was not given (:class:`foundry.config.cli_layer.CliInput`).
-        environ: The environment to look ``FOUNDRY_CONFIG`` up in, case-insensitively as AAP 0.4.5
-            requires, passed in because :mod:`foundry.config.env` owns the only environment read
-            (AAP 0.4.8).
-        cwd: The invocation directory the local steps and a relative explicit path resolve
-            against.
 
     Returns:
         The selected file, or ``None`` when no step matched and the defaults apply.
@@ -232,12 +182,9 @@ def discover_file(
 def _named_path(cli_path: Path | None) -> Path | None:
     """Return the path ``--foundry-config`` supplied, or ``None`` when it supplied none.
 
-    ``cli_path`` is the recorded option value; an empty string is already read as "not supplied"
-    by :mod:`foundry.config.cli_layer`, and the whitespace test here closes that hole for a caller
+    ``cli_path`` is the recorded option value; an empty string is already read as "not supplied" by
+    :mod:`foundry.config.cli_layer`, and the whitespace test here closes that hole for a caller
     handing a path over directly.
-
-    Returns:
-        The path to resolve, or ``None`` when the option carried nothing.
     """
     if cli_path is None or not str(cli_path).strip():
         return None
@@ -269,16 +216,7 @@ def _explicit_file(named: Path, *, origin: FileOrigin, cwd: Path) -> DiscoveredF
 
     An explicitly named file is read as a full Foundry TOML document: its top-level keys are the
     base configuration, exactly as in a ``foundry.toml``, so naming a ``pyproject.toml`` this way
-    does not switch to the ``[tool.foundry]`` reading -- its ``[tool]`` table is then an ordinary
-    table whose keys the registry rejects.
-
-    Args:
-        named: The path as the command line or the environment spelled it.
-        origin: The step that named it, ``cli`` or ``env``.
-        cwd: The invocation directory a relative path is resolved against.
-
-    Returns:
-        The descriptor for the named file.
+    does not switch to the ``[tool.foundry]`` reading.
 
     Raises:
         foundry.core.exceptions.ConfigError: When the path does not exist or is not a regular
@@ -295,16 +233,11 @@ def _local_pyproject(cwd: Path) -> DiscoveredFile | None:
 
     The fourth step of AAP 0.4.5 matches only a ``pyproject.toml`` that actually carries a
     ``[tool.foundry]`` table, and deciding that requires reading the file -- so the parsed document
-    is kept on the descriptor and :func:`load_file` reuses it rather than parsing the same file
-    twice. Reading it is not a lenient step: a candidate that cannot be decoded or parsed faults
-    exactly as a malformed ``foundry.toml`` does, because passing it over would resolve the run
-    from the defaults while the operator's own table sat unread in the tree. A document that
-    parses but carries no ``[tool.foundry]`` configures nothing, which is the one case that falls
-    through to the defaults (AAP 0.4.5, AAP 0.4.7).
-
-    Returns:
-        The descriptor for a ``pyproject.toml`` carrying ``[tool.foundry]``, or ``None`` when
-        there is no such file or it carries no Foundry table.
+    is kept on the descriptor and :func:`load_file` reuses it. Reading it is not a lenient step: a
+    candidate that cannot be decoded or parsed faults exactly as a malformed ``foundry.toml`` does,
+    because passing it over would resolve the run from the defaults while the operator's own table
+    sat unread. A document that parses but carries no ``[tool.foundry]`` configures nothing, and
+    that is the one case that falls through to the defaults (AAP 0.4.5, AAP 0.4.7).
 
     Raises:
         foundry.core.exceptions.ConfigError: ``unreadable_file`` when the file cannot be read,
@@ -340,21 +273,18 @@ def _absolute(path: Path, cwd: Path) -> Path:
 class FilePayload:
     """What the resolved configuration file contributes, in the form the layers merge.
 
-    :mod:`foundry.config.merge` applies this payload as the ``file`` layer and, for each
-    profile, as a ``profile:<name>`` layer above it (AAP 0.4.5). Everything is already flat and
-    key-sorted, so a payload can be attributed key by key and two runs over one file iterate
-    identically (AAP 0.13.1). The mappings are read-only views: a caller that could edit one
-    could change a resolution after the fact.
+    :mod:`foundry.config.merge` applies this payload as the ``file`` layer and, for each profile, as
+    a ``profile:<name>`` layer above it (AAP 0.4.5). Everything is already flat and key-sorted, so
+    a payload can be attributed key by key (AAP 0.13.1), and the mappings are read-only views: a
+    caller that could edit one could change a resolution after the fact.
 
     Attributes:
         source: The descriptor the values were read through, or ``None`` when no file applied.
-        base: The base configuration as ``dotted key -> value``, sorted: what a
-            ``foundry.toml`` states at top level, or what ``[tool.foundry]`` holds, minus the
-            ``profiles`` table.
+        base: The base configuration as ``dotted key -> value``, sorted: what a ``foundry.toml``
+            states at top level, or what ``[tool.foundry]`` holds, minus the ``profiles`` table.
         profiles: One entry per profile table, keyed by profile name and sorted; each value is
             that table as ``dotted key -> value``, also sorted.
-        label: The path as text for :attr:`source`, or ``""`` when there is none -- the detail
-            a ``file`` layer :class:`~foundry.config.sources.ConfigSource` records.
+        label: The path as text for :attr:`source`, or ``""`` when there is none.
     """
 
     source: DiscoveredFile | None
@@ -365,30 +295,20 @@ class FilePayload:
     def is_empty(self) -> bool:
         """Report whether the file contributed no configuration value at all.
 
-        A file that only declares profile tables is not empty: those are values a selected
-        profile contributes later.
-
-        Returns:
-            ``True`` when the payload holds neither a base key nor a profile table.
+        A file that only declares profile tables is not empty: those are values a selected profile
+        contributes later.
         """
         return len(self.base) == 0 and len(self.profiles) == 0
 
     def dotted_keys(self) -> tuple[str, ...]:
-        """Return the base configuration's keys in sorted order.
-
-        Returns:
-            One dotted key per base value, sorted, so two loads of one file agree.
-        """
+        """Return the base configuration's keys in sorted order, so two loads of one file agree."""
         return tuple(sorted(self.base))
 
     def profile_names(self) -> tuple[str, ...]:
         """Return the declared profile names in sorted order.
 
-        The caller decides whether a name is one of the four AAP 0.4.5 accepts and what a
-        selected profile with no table means; this states only what the file declares.
-
-        Returns:
-            One profile name per table in :attr:`profiles`, sorted.
+        The caller decides whether a name is one of the four AAP 0.4.5 accepts and what a selected
+        profile with no table means; this states only what the file declares.
         """
         return tuple(sorted(self.profiles))
 
@@ -396,12 +316,9 @@ class FilePayload:
 def default_payload() -> FilePayload:
     """Return the payload of a run with no configuration file.
 
-    The caller that received ``None`` from :func:`discover_file` resolves from the field
-    defaults and logs ``foundry: no config file found`` (AAP 0.4.7); this gives it the empty
-    payload to merge, so no caller builds a :class:`FilePayload` by hand.
-
-    Returns:
-        A payload with no source, no values, no profiles and an empty label.
+    The caller that received ``None`` from :func:`discover_file` resolves from the field defaults
+    and logs ``foundry: no config file found`` (AAP 0.4.7); this gives it the empty payload to
+    merge, so no caller builds a :class:`FilePayload` by hand.
     """
     return _payload(source=None, base=MappingProxyType({}), profiles=MappingProxyType({}))
 
@@ -412,9 +329,7 @@ def load_file(discovered: DiscoveredFile | None) -> FilePayload:
     The payload is validated key by key against the registry before it is returned -- the base
     table under the ``file`` layer and each profile table under its ``profile:<name>`` layer, both
     with the file's path as the detail, so a rejection names the file to edit as well as the
-    closest valid key (AAP 0.4.5). A table name is a key in TOML terms, so a section header that
-    holds nothing and is not a registered table path -- ``[data.bogus]`` -- is refused at its
-    dotted path before the leaves are read (AAP 0.4.5).
+    closest valid key (AAP 0.4.5).
 
     Returns:
         The payload for that file, or the empty payload from :func:`default_payload` when
@@ -451,14 +366,10 @@ def _split_document(
     """Split a parsed document into its base configuration and its profile tables.
 
     The two kinds differ only in where the Foundry table sits -- at the document's top level for a
-    Foundry TOML document, under ``[tool.foundry]`` for a ``pyproject.toml`` -- and read the same
-    way from there, which is what makes ``[profiles.ci]`` and ``[tool.foundry.profiles.ci]`` one
-    feature with two spellings.
-
-    Flattening keeps one entry per leaf, so a section header with nothing under it would contribute
-    no key and pass as though it were absent; a table name is a key in TOML terms, so
-    :func:`_reject_keyless_tables` reads the unflattened tree first (AAP 0.4.5). ``detail`` is the
-    file's path, as the layer and its fault report it.
+    Foundry TOML document, under ``[tool.foundry]`` for a ``pyproject.toml`` -- which is what makes
+    ``[profiles.ci]`` and ``[tool.foundry.profiles.ci]`` one feature with two spellings. Flattening
+    keeps one entry per leaf, so :func:`_reject_keyless_tables` reads the unflattened tree first
+    (AAP 0.4.5).
 
     Returns:
         The base configuration and the profile tables, both flat and key-sorted.
@@ -484,11 +395,8 @@ def _profile_tables(raw: object, *, detail: str) -> Mapping[str, Mapping[str, ob
     """Return the profile tables of a document as flat, sorted mappings by name.
 
     Each profile table is checked for keyless section headers before it is flattened, under its own
-    ``profile:<name>`` layer, so a header that holds nothing is refused in the table that carries
-    it (AAP 0.4.5). ``raw`` is the value the ``profiles`` key held, and ``detail`` the file's path.
-
-    Returns:
-        One entry per profile, sorted by name.
+    ``profile:<name>`` layer, so a header that holds nothing is refused in the table that carries it
+    (AAP 0.4.5).
 
     Raises:
         foundry.core.exceptions.ConfigError: When ``profiles`` is not a table of tables, when a
@@ -530,22 +438,11 @@ def _reject_keyless_tables(
 ) -> None:
     """Refuse a section header that holds nothing and names no configuration key.
 
-    Flattening keeps one entry per leaf, so ``[data.bogus]`` -- a table with no keys under it --
-    would reach the settings model as though the header were not there at all. AAP 0.4.5 makes an
-    unknown key in any layer an error, and a table name is a key in TOML terms, so this walk reads
-    the unflattened tree and reports the fault a scalar of that spelling gets. A table that does
-    hold entries is descended into instead, its leaves being the keys the flat check names with
-    their full path. Two shapes pass: a key the registry declares (``[http.headers]`` is
-    table-valued, empty or not) and a path some published key sits under, such as ``[http.auth]``,
-    the empty spelling of a section whose keys were left at their defaults. Those paths are
-    derived from :func:`foundry.config.keys.leaf_keys` rather than listed here, so a key a later
-    release adds makes its own section valid without a change in this module.
-
-    Args:
-        table: The parsed table, before flattening.
-        prefix: The dotted path the table sits under, empty at the document's top level.
-        layer: The layer label the table belongs to -- ``file`` or ``profile:<name>``.
-        detail: The file's path, which the fault's hint names as the place to edit.
+    Flattening keeps one entry per leaf, so ``[data.bogus]`` would reach the settings model as
+    though the header were not there. A table name is a key in TOML terms, so this walk reads the
+    unflattened tree and reports the fault a scalar of that spelling gets (AAP 0.4.5). Two shapes
+    pass: a key the registry declares (``[http.headers]`` is table-valued, empty or not) and a
+    path some published key sits under, such as ``[http.auth]``.
 
     Raises:
         foundry.core.exceptions.ConfigError: ``unknown_key`` for the first keyless table in sorted
@@ -572,11 +469,7 @@ def _flatten(table: Mapping[str, object], *, layer: layers.ConfigLayer) -> Mappi
     """Flatten one table into its dotted keys, sorted and read-only.
 
     :func:`foundry.config.layers.flatten` already visits keys in sorted order and keeps a
-    table-valued key such as ``http.headers`` whole; the sort here makes that guarantee local to
-    whatever the tree's own ordering becomes.
-
-    Returns:
-        One entry per leaf, keyed by its dotted path, sorted.
+    table-valued key such as ``http.headers`` whole; the sort here makes that guarantee local.
 
     Raises:
         foundry.core.exceptions.ConfigError: When a key is not a string, or when one key is defined
@@ -591,10 +484,7 @@ def _read_document(discovered: DiscoveredFile) -> Mapping[str, object]:
     Every candidate discovery can select is read the same way, whether an operator named it or
     Foundry found it: a file that cannot be decoded or parsed is a fault in both cases, because
     skipping it would resolve the run from the defaults while the table its operator wrote sat
-    unread in the tree (AAP 0.4.5, AAP 0.4.7).
-
-    Returns:
-        The parsed document as a read-only view.
+    unread (AAP 0.4.5, AAP 0.4.7).
 
     Raises:
         foundry.core.exceptions.ConfigError: ``unreadable_file`` when the file cannot be read,
@@ -619,9 +509,8 @@ def _read_document(discovered: DiscoveredFile) -> Mapping[str, object]:
 def _parse_fault(exc: tomllib.TOMLDecodeError) -> tuple[str, int | None, int | None]:
     """Return a parse fault's description with the location it already carries split off.
 
-    The location is returned separately because
-    :func:`foundry.config.errors.malformed_toml` appends it in AAP 0.4.5's format, so leaving it
-    in the description would print it twice.
+    The location is returned separately because :func:`foundry.config.errors.malformed_toml` appends
+    it in AAP 0.4.5's format, so leaving it in the description would print it twice.
 
     Returns:
         The description, then the 1-based line and column, each ``None`` when the parser reported
@@ -665,9 +554,7 @@ def _foundry_table(document: Mapping[str, object]) -> Mapping[str, object] | Non
 def _as_table(value: object) -> Mapping[str, object] | None:
     """Return ``value`` as a table, or ``None`` when it is not one.
 
-    Returns:
-        The value itself when it is a mapping, so a nested table keeps the ordering
-        :func:`_flatten` sorts, and ``None`` for a scalar, a list or an absent entry.
+    A nested table is returned as given, so it keeps the ordering :func:`_flatten` sorts.
     """
     if isinstance(value, Mapping):
         return value
@@ -683,9 +570,6 @@ def _payload(
     """Build a payload, deriving the label from the descriptor that supplied it.
 
     ``base`` and ``profiles`` arrive already flat and sorted.
-
-    Returns:
-        The payload, labelled with the source's path or with ``""`` when there is no source.
     """
     label = "" if source is None else source.label()
     return FilePayload(source=source, base=base, profiles=profiles, label=label)

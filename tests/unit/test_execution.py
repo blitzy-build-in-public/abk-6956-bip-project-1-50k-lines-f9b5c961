@@ -1,39 +1,12 @@
 """Unit tests for ``foundry.execution``: the retry budget, quarantine, sharding, timeout, the wire.
 
-Five modules, each pinned to the contract AAP 0.4.5, 0.4.6, 0.4.7 and 0.4.8 give it:
+Five modules, each pinned to the contract AAP 0.4.5 to 0.4.8 give it: A2's retry arithmetic,
+the exit-code rule of both quarantine modes with A11's ``quarantine_passed``, sharding's collection
+comparison and the ``run_error`` a lost worker leaves, pytest-timeout's derived settings, and the
+typed stash keys with the ``user_properties`` codec (implicit requirement I3).
 
-* ``retry`` publishes assumption A2's arithmetic -- ``execution.retries`` counts *repeats after the
-  first attempt*, so ``--foundry-retries 2`` is ``attempts: 3`` -- and
-  :func:`foundry.execution.retry.should_retry` is the whole decision, driven here by explicit
-  phases, outcomes and attempt counts. The driver's behaviour end to end is
-  ``tests/plugin/test_retries.py``'s subject (AAP 0.14.5); repeating it here would blur the
-  placement rule.
-* ``quarantine`` is the exit-code rule of AAP 0.4.7: a marked failure is ``quarantined_failed`` and
-  fails the run only in ``strict`` mode, and a marked pass is ``quarantine_passed`` -- a success
-  carrying the removal note assumption A11 requires.
-* ``sharding`` compares the controller's collection with what the workers reported, and turns a lost
-  worker into the ``run_error`` element of AAP 0.4.6, which names that worker and deliberately
-  carries neither a node id nor an outcome.
-* ``timeout`` derives pytest-timeout's per-item timer from the resolved ``execution.timeout``, so
-  every boundary of the published range yields the configured seconds.
-* ``state`` is the worker boundary itself: the typed stash keys, and the ``user_properties`` codec a
-  ``TestReport`` crosses xdist with (implicit requirement I3), serialised here and decoded back.
-
-Four expectations differ from the brief this file was written against, the modules on disk being
-authoritative: ``state.TestPayload`` carries ``attempts: int`` -- the attempt *count* -- rather than
-a ledger of ``AttemptPayload`` records, so the wire round-trip covers the payload a report really
-carries and ``AttemptPayload``'s record round-trip is asserted separately;
-``TimeoutPolicy.for_item`` returns the session limit for every item because AAP 0.4.5 publishes no
-per-item override key, so that no-override behaviour is asserted instead of an override; a
-``run_error``'s ``recorded_at`` is produced inside ``sharding`` from the wall clock, so the test
-parses the timestamp rather than reading a clock of its own; and the lost-worker path is
-``ShardingService.worker_down``, whose element type is ``state.RunErrorPayload``.
-
-Determinism and isolation (AAP 0.14.3): nothing here drives pytest machinery -- no plugin
-self-test harness, no child suite, no console script -- and the one subprocess is the import probe
-proving ``foundry.execution.state`` pulls in no heavy dependency (implicit requirement I5). No test
-sleeps, reads the wall clock or opens a socket, and every collection asserted is the sorted one the
-modules publish.
+No test here drives pytest machinery, sleeps, reads the wall clock or opens a socket (AAP 0.14.3),
+and the one subprocess proves ``foundry.execution.state`` pulls in no heavy dependency (I5).
 """
 
 from __future__ import annotations
@@ -54,8 +27,7 @@ from foundry.execution import quarantine, retry, sharding, state, timeout
 from foundry.obs import capture
 from foundry.obs.redaction import TRUNCATION_MARKER as REDACTION_TRUNCATION_MARKER
 
-# A run id of the shape AAP 0.4.3 publishes, a profile from AAP 0.4.5's four, a realistic node id
-# carrying "/" and "::", and fixed timestamps so no assertion reads the wall clock.
+# Fixed run id, profile, node id and timestamps, so no assertion reads the wall clock.
 _RUN_ID: Final[str] = "20250102T030405-0abc12"
 _PROFILE: Final[str] = "ci"
 _NODEID: Final[str] = "tests/test_checkout.py::test_total[2]"
@@ -79,16 +51,10 @@ _IMPORT_PROBE: Final[str] = (
 """The child-process one-liner of implicit requirement I5: print what the import dragged in."""
 
 
-# --- Helpers ---------------------------------------------------------------
-
-
 class _Report:
     """The one attribute the ``user_properties`` codec reads from a ``pytest.TestReport``.
 
-    ``write_properties`` and ``read_properties`` touch ``user_properties`` alone, and building a
-    real report would need a full runtest protocol; the stand-in keeps the assertion on the wire
-    format, and mirrors both shapes xdist produces: tuples where the worker stamped them, lists once
-    a serialised report has been decoded.
+    The stand-in keeps the assertion on the wire format without a full runtest protocol.
     """
 
     def __init__(self, properties: list[tuple[str, object]] | None = None) -> None:
@@ -142,9 +108,6 @@ def _service() -> sharding.ShardingService:
     return sharding.ShardingService(
         nodes=sharding.NodeLedger(), errors=sharding.RunErrorLedger(), run_id=_RUN_ID
     )
-
-
-# --- Retry: assumption A2's arithmetic, and the one decision ----------------
 
 
 @pytest.mark.parametrize(("repeats", "attempts"), [(0, 1), (2, 3), (10, 11)])
@@ -232,9 +195,6 @@ def test_the_attempt_summary_is_one_chronological_line() -> None:
     message = retry.exhausted_message(_NODEID, _attempts("failed", "failed", "failed"))
     assert message.startswith(f"{_NODEID}: ")
     assert "retries exhausted after 3 attempts" in message
-
-
-# --- Quarantine: the two modes, and the A11 success outcome -----------------
 
 
 @pytest.mark.parametrize(
@@ -353,8 +313,6 @@ def test_the_marker_vocabulary_is_the_published_one() -> None:
     assert quarantine.quarantined_outcomes() == ("quarantined_failed", "quarantine_passed")
 
 
-# --- Sharding: set equality, and the run error a lost worker leaves ---------
-
 _ONE: Final[str] = "tests/test_a.py::test_one"
 _TWO: Final[str] = "tests/test_b.py::test_two"
 _THREE: Final[str] = "tests/test_c.py::test_three"
@@ -472,9 +430,6 @@ def test_record_worker_output_reads_the_xdist_channel() -> None:
     assert sharding.record_worker_output(ledger, "gw3", single) == ("tests/test_solo.py::test_one",)
 
 
-# --- Timeout: the derived pytest-timeout settings ---------------------------
-
-
 @pytest.mark.parametrize("seconds", [0.001, 60.0, 3600.0])
 def test_the_settings_carry_the_configured_seconds(seconds: float) -> None:
     """Every boundary of ``0 < t <= 3600`` reaches the timer as the configured value."""
@@ -531,9 +486,6 @@ def test_a_limit_outside_the_published_range_is_a_config_error(seconds: object) 
     assert excinfo.value.key == timeout.TIMEOUT_KEY
     assert timeout.TIMEOUT_RANGE_TEXT in str(excinfo.value)
     assert timeout.TIMEOUT_KEY == "execution.timeout"
-
-
-# --- State: the stash keys, and the wire format a worker sends the controller --
 
 
 def test_the_stash_keys_are_typed_distinct_and_disjoint() -> None:

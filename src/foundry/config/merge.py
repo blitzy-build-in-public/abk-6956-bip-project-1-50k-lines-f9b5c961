@@ -1,52 +1,13 @@
 """The four-layer merge: one resolved configuration, with the origin of every value.
 
-AAP 0.3.2 gives this module one job. :func:`resolve` reads what the layers of AAP 0.4.5 supply --
-the settings field defaults, the configuration file with the selected ``[profiles.<name>]`` table
-applied over it, the ``FOUNDRY_*`` environment and the ``--foundry-*`` command line -- applies them
-in :data:`foundry.config.layers.LAYER_ORDER`, and returns the one immutable
-:class:`foundry.config.models.FoundryConfig` a run reads.
-
-Provenance is recorded here rather than asked of ``pydantic-settings``. That library resolves values
-but names no source: no public API reports which environment variable matched a field, so per-key
-attribution cannot be read back out of it (implicit requirement I2, AAP 0.2.1). Each layer therefore
-arrives as a :class:`foundry.config.layers.LayerPayload` -- flat dotted keys plus the detail naming
-what supplied them -- and :func:`_fold` walks :data:`~foundry.config.layers.LAYER_ORDER`, keeping
-the last writer of every key beside the :class:`foundry.config.sources.ConfigSource` that
-describes it.
-``foundry config show``, ``foundry doctor`` and the run's reports read that map; no other module
-records provenance, and no other module restates the precedence order.
-
-What a resolution may fail with, and nothing else, is
-:class:`foundry.core.exceptions.ConfigError` -- AAP 0.4.7's rows, each ending a session with exit
-code 2 before anything is collected (assumption A4): an explicitly named file that is absent
-(``config file not found: <path>``), an unknown key in any layer with the closest valid spelling as
-the hint, an unparseable environment value, a profile outside the four, and a configured auth
-variable the environment does not set -- whose name, never its value, reaches the message. A run
-with no configuration file is not a fault: it resolves from the field defaults, keeps the profile
-``default``, and logs ``foundry: no config file found`` at ``DEBUG``.
-
-Discipline this module keeps so the guarantees around it hold (AAP 0.4.8):
-
-- it reads the process environment nowhere: the mapping is obtained through
-  :func:`foundry.config.env.effective_environ`, which is the configuration package's one environment
-  read;
-- importing it performs no I/O, parses nothing, configures no logger and reads no environment
-  variable, so the plugin's startup budget is untouched (implicit requirement I5);
-- it holds no module-level mutable state and no cache: a second :func:`resolve` with a changed
-  environment observes the change, and the 50 ms budget of AAP 0.14.2 is met by doing little work
-  rather than by memoising;
-- every mapping it folds or returns is ordered by sorted key, so two runs over the same inputs
-  produce an equal configuration and an identical source map (AAP 0.13.1);
-- it never logs, stores or renders a configuration *value*: the resolution records a key with the
-  label of the layer that supplied it, which is the one thing that cannot leak a credential
-  (implicit requirement I9).
-
-The collaborators do the work this module composes and none of it is repeated here: file discovery
-and parsing live in :mod:`foundry.config.files`, the environment read in :mod:`foundry.config.env`,
-the profile step in :mod:`foundry.config.profiles`, the command line's coercions in
-:mod:`foundry.config.cli_layer`, the key registry in :mod:`foundry.config.keys`, the merge
-vocabulary in :mod:`foundry.config.layers`, and the wording of every message in
-:mod:`foundry.config.errors`.
+:func:`resolve` applies the layers of AAP 0.4.5 -- field defaults, the configuration file with its
+selected ``[profiles.<name>]`` table, the ``FOUNDRY_*`` environment and the ``--foundry-*`` command
+line -- in :data:`foundry.config.layers.LAYER_ORDER` and returns the one immutable
+:class:`foundry.config.models.FoundryConfig` a run reads, with the provenance recorded here because
+``pydantic-settings`` resolves values but names no source (implicit requirement I2). The only fault
+is :class:`foundry.core.exceptions.ConfigError`, AAP 0.4.7's rows, each ending the session at exit
+code 2 before anything is collected; a run with no configuration file is not a fault and logs
+``foundry: no config file found`` at ``DEBUG``.
 """
 
 from __future__ import annotations
@@ -100,21 +61,10 @@ them (:meth:`foundry.config.sources.ConfigSource.label` renders the same text)."
 class _Layer:
     """One layer ready to fold: the payload it contributes, and how each of its keys is named.
 
-    :attr:`payload` is the vocabulary every producer of this package already speaks -- flat dotted
-    keys, the layer they came from, and a single detail. Most layers have exactly one detail for all
-    their values: the file layer names its path, the profile layer its name. Two do not: every
-    ``FOUNDRY_*`` variable names one key, and every ``--foundry-*`` option names one key, so those
-    layers carry a per-key map in :attr:`details` and use the payload's own detail only as a
-    fallback.
-
-    The instance is frozen and slotted, so the fold cannot be surprised by an edit while it runs and
-    a reader cannot add an attribute a second reader would have to account for. A changed
-    contribution is a new contribution.
-
-    Attributes:
-        payload: The layer's values as dotted keys, with the detail naming the layer by default.
-        details: The detail naming each individual key, for a layer whose keys come from different
-            places; empty for a layer that names itself once.
+    Most layers have exactly one detail for all their values -- the file layer names its path, the
+    profile layer its name. Two do not: every ``FOUNDRY_*`` variable names one key and every
+    ``--foundry-*`` option names one key, so those layers carry a per-key map in :attr:`details` and
+    use the payload's own detail only as a fallback.
     """
 
     payload: LayerPayload
@@ -230,32 +180,18 @@ def check_secret_variables(config: FoundryConfig, environ: Mapping[str, str]) ->
 
     The check is a membership test and nothing else: for each variable ``http.auth.*_env`` names
     while its strategy is selected -- ``token_env`` for ``bearer``, ``user_env`` and
-    ``password_env`` for ``basic``, ``header_value_env`` for ``header``, and nothing at all for
-    ``none`` -- the name is looked up in ``environ`` and the value is never read, stored, compared
-    or logged. That is what makes the message AAP 0.4.7 requires possible: it names the variable the
-    operator has to set, and cannot name the credential, because a builder given the name can
-    compose no message containing the value (implicit requirement I9).
+    ``password_env`` for ``basic``, ``header_value_env`` for ``header``, nothing for ``none`` -- the
+    name is looked up in ``environ`` and the value is never read, stored, compared or logged, so the
+    message can name the variable an operator has to set and cannot name the credential
+    (implicit requirement I9).
 
-    Why the *name* is checked at resolution time while the *value* is read at session start is a
-    reading of two AAP statements that have to be held together. AAP 0.4.7's state row "Configured
-    secret environment variable absent" ends the run with ``ConfigError`` and exit code 2, which is
-    a configuration-time fault: it must be raised before anything is collected, and 2 is the code a
-    bare ``pytest`` produces identically (assumption A4). AAP 0.3.3 has
-    :mod:`foundry.http.auth` resolve the values themselves once at session start, so that a
-    configuration object, ``results.json`` and a report never hold a credential. Both hold if the
-    name is validated here -- presence in the environment, exit 2 when it is missing -- and the
-    value is read there. A variable that disappears between the two moments raises the same
-    ``ConfigError`` from :mod:`foundry.http.auth`, which is why the check is repeated at the point
-    of use rather than being trusted from here.
-
-    A strategy whose companion name is unset never reaches this function: the model's cross-field
-    rule refuses ``bearer`` without ``token_env`` and its siblings at construction time, so a name
-    that is ``None`` means the strategy does not require it.
-
-    Args:
-        config: The resolved configuration whose ``http.auth`` table selects the strategy.
-        environ: The environment the resolution read, as
-            :func:`foundry.config.env.effective_environ` returned it.
+    Why the name is checked here while the value is read at session start holds two AAP statements
+    together: AAP 0.4.7 makes an absent configured secret variable a configuration-time fault,
+    before anything is collected and at exit code 2 (assumption A4), while AAP 0.3.3 has
+    :mod:`foundry.http.auth` resolve the values at session start, so no configuration object,
+    ``results.json`` or report holds a credential. A variable that disappears between the two
+    moments raises the same ``ConfigError`` from :mod:`foundry.http.auth`, which is why the check is
+    repeated at the point of use rather than trusted from here.
 
     Raises:
         foundry.core.exceptions.ConfigError: For the first required variable, in the fixed order of

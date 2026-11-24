@@ -1,70 +1,12 @@
-"""The JUnit XML writer: the document a CI system reads as Foundry's result surface.
+"""The JUnit XML writer: the ``junit.xml`` document a CI system reads (AAP 0.4.6).
 
-``junit.xml`` is written to the invocation directory beside ``results.json`` and ``report.html``
-and holds one ``<testcase>`` per result record plus one ``<system-err>`` per run-level error, in
-exactly the shape AAP 0.4.6 fixes. A testcase's ``classname`` is the node id's module path with its
-``.py`` suffix removed and its separators turned into dots, its ``name`` is the test id -- a
-parametrised id keeps its ``[...]`` suffix, which is what a CI system displays -- and its ``time``
-is ``duration_ms / 1000`` to three decimals. Every testcase carries the four properties
-``foundry.profile``, ``foundry.outcome``, ``foundry.attempts`` and ``foundry.quarantine``, then a
-``foundry.artifact.<kind>`` reference for each of the five artifacts AAP 0.4.6 names, whose value is
-the path exactly as the record holds it: relative to the run directory, so a reference survives the
-checkout being moved. ``log_tail`` and ``manifest`` references are deliberately absent -- the
-manifest describes the artifacts, and the log tail is rendered by ``report.html``.
-
-Outcome mapping (AAP 0.4.6), the reason this writer exists rather than a generic serialiser:
-
-* ``passed`` -- a testcase with no child element.
-* ``failed`` -- a ``<failure message="...">`` whose text carries every failing phase, counted in the
-  suite's ``failures``.
-* ``error`` -- an ``<error message="...">``: JUnit tells an unexpected exception from a failed
-  assertion, and a CI reader expects the element. Counted in the suite's ``errors``.
-* ``skipped`` -- ``<skipped message="foundry: skipped">``.
-* ``xfailed`` -- ``<skipped message="foundry: expected failure">``, because an expected failure is
-  not a CI failure.
-* ``xpassed`` -- a testcase plus a ``<system-out>`` note that the test passed unexpectedly.
-* ``quarantined_failed`` -- ``<skipped message="foundry: quarantined failure">``, the exact string
-  AAP 0.4.6 fixes, so a CI system does not read a quarantined failure as a failure and the document
-  agrees with the run's exit code of ``0``.
-* ``quarantine_passed`` -- a testcase plus a ``<system-out>`` note recommending the
-  ``foundry_quarantine`` marker be removed.
-* ``not_run`` -- ``<skipped message="foundry: not run">`` for an item that never executed because
-  the session stopped or a worker was lost (assumption A12).
-
-``skipped``, ``xfailed``, ``quarantined_failed`` and ``not_run`` are the four that count in the
-suite's ``skipped`` attribute. A run error counts in none of the suite's counters, because it
-describes a failure of the run rather than of a test: it becomes a ``<system-err>`` on the
-``<testsuite>``, prefixed with the worker id it came from.
-
-Escaping and determinism
-    Every value is written through :mod:`xml.etree.ElementTree`, so a test id containing
-    ``<script>`` reaches the document as ``&lt;script&gt;`` and a message holding ``&``, ``"`` or
-    ``'`` round-trips through a parser unchanged; nothing here joins markup by hand. Escaping alone
-    cannot carry a code point outside XML 1.0's ``Char`` production -- a C0 control other than tab,
-    newline and carriage return, a lone surrogate, ``#xFFFE`` or ``#xFFFF`` -- and ElementTree
-    passes such a point through as it found it, so every record-derived string is reduced to that
-    production first (:func:`_sanitise_tree`). Those characters are removed rather than replaced:
-    XML text carries no meaning for them, and a replacement character would push a clipped
-    ``<failure>`` message past :data:`FAILURE_MESSAGE_BYTES`. The document carries no timestamp, no
-    hostname and no wall clock -- a ``<testsuite>`` timestamp attribute would make two runs of one
-    suite differ -- so it is byte-identical for identical records, its sanitised strings included.
-    Records are sorted by node id, run errors by worker id and message, no set is ever iterated,
-    and durations are summed with :func:`math.fsum`, whose result does not depend on the order the
-    terms arrive in.
-
-Redaction and failure isolation
-    Every failure message, run-error message and artifact path passes through
-    :class:`foundry.obs.redaction.Redactor` before it reaches the document (AAP 0.3.2). A record's
-    node id, outcome, profile, attempt count, quarantine state, duration and the run's id are
-    contract values and are left exactly as captured. This module renders text and writes nothing:
-    the write goes through :func:`foundry.reporting.store.write_text`, the package's only writer
-    (AAP 0.4.8), which reports a refused filesystem write at ``WARNING`` and returns ``None``, so a
-    report that cannot be written never changes an outcome or an exit code (AAP 0.14.3).
-
-Import direction and import-time discipline (AAP 0.4.8): the standard library,
-:mod:`foundry.core`, :mod:`foundry.obs` and this package's own :mod:`foundry.reporting.record` and
-:mod:`foundry.reporting.store`. Importing this module defines constants and functions only -- no
-I/O, no environment read, no logger configuration and no mutable module state.
+Every ``<testcase>`` carries ``classname``, ``name`` and ``time``, the four properties
+``foundry.profile``, ``foundry.outcome``, ``foundry.attempts`` and ``foundry.quarantine``, then one
+``foundry.artifact.<kind>`` reference per captured artifact -- the five kinds of AAP 0.4.6, never
+``log_tail`` or ``manifest``; the single ``<testsuite>`` carries ``foundry.run_id`` and
+``foundry.profile``. The mapping tables below give the outcome-to-element rules; escaping and
+redaction are AAP 0.3.2, determinism AAP 0.14.1, and the write is
+:func:`foundry.reporting.store.write_text` (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -272,18 +214,13 @@ def split_nodeid(nodeid: str) -> tuple[str, str]:
     ``tests/test_api.py::TestClient::test_get[200-ok]`` becomes
     ``("tests.test_api.TestClient", "test_get[200-ok]")``: the module path loses its ``.py`` suffix
     and its separators become dots, the class segments join that name, and the last segment is the
-    test id itself. A parametrised id keeps its ``[...]`` suffix, which is what a CI system
-    displays and what distinguishes one case of one test from another. A bare path with no ``::``
-    is reported as both class and name, which is what a JUnit reader needs to list a collected file
-    that produced no item.
+    test id, its ``[...]`` suffix kept. A bare path with no ``::`` is both class and name.
 
     Args:
-        nodeid: The record's node id, unsanitised as pytest reports it -- sanitising is the
-            artifact writer's job, and a class name reads better with its slashes turned into dots.
+        nodeid: The record's node id, unsanitised as pytest reports it.
 
     Returns:
-        The ``(classname, name)`` pair. A node id whose module segment is empty yields an empty
-        classname rather than a name taken from the wrong segment.
+        The ``(classname, name)`` pair; an empty module segment yields an empty classname.
     """
     segments = nodeid.split("::")
     module = segments[0].strip().replace("\\", "/")
@@ -633,16 +570,9 @@ def _partition(
 def render(records: Sequence[ResultElement], *, redactor: Redactor | None = None) -> str:
     """Render a run's elements as the exact text of a ``junit.xml`` document.
 
-    Every value goes through :mod:`xml.etree.ElementTree`, so the library escapes text and
-    attribute values and a test id containing ``<script>`` can never reach the document as markup
-    (AAP 0.3.2); a code point outside XML 1.0's ``Char`` production, which escaping cannot carry,
-    is removed from every record-derived string first (:func:`_sanitise_tree`). The outcome mapping
-    -- which of the nine outcomes produces a ``<failure>``, an ``<error>``, a ``<skipped>`` or a
-    ``<system-out>`` note, and which of the suite's counters it feeds -- is the module's, and one
-    testcase per result record plus one ``<system-err>`` per run error is AAP 0.4.6's shape.
-
-    Nothing here depends on the wall clock, the host or the order the caller collected its records
-    in: the document is byte-identical for identical records (AAP 0.14.1 criterion 14).
+    :mod:`xml.etree.ElementTree` escapes every value, so a test id can never reach the document as
+    markup, and :func:`_sanitise_tree` removes the code points escaping cannot carry (AAP 0.3.2).
+    The document is byte-identical for identical records (AAP 0.14.1).
 
     Args:
         records: The run's elements, in any order: result records, run errors, or both.
@@ -650,9 +580,8 @@ def render(records: Sequence[ResultElement], *, redactor: Redactor | None = None
             built-in header and query deny-lists, so a caller cannot skip redaction by omitting it.
 
     Returns:
-        The document as text: the XML declaration, a newline, the element indented by two spaces
-        and a trailing newline. An empty ``records`` yields a valid ``<testsuite>`` reporting zero
-        tests, so the zero-tests state still leaves a document a CI system can read.
+        The document as text: the XML declaration, the indented suite and a trailing newline. An
+        empty ``records`` yields a ``<testsuite>`` reporting zero tests.
 
     Raises:
         ElementTypeError: An element is neither a
@@ -676,20 +605,17 @@ def write(
 ) -> Path | None:
     """Write the run's JUnit XML document to ``path``, creating its directory if needed.
 
-    The document is rendered by :func:`render` and the file is written by
-    :func:`foundry.reporting.store.write_text`, this package's only writer (AAP 0.4.8), so no
-    module here opens a file itself.
+    :func:`render` builds the document and :func:`foundry.reporting.store.write_text` writes it, so
+    no module here opens a file itself (AAP 0.4.8).
 
     Args:
         records: The run's elements, in any order; :func:`render` imposes the document's order.
-        path: The document to write, normally ``junit.xml`` in the invocation directory or beside
-            the path ``--foundry-json-report`` named.
+        path: The document to write, normally ``junit.xml`` in the invocation directory.
         redactor: The run's redactor, or ``None`` for the built-in deny-lists.
 
     Returns:
-        The path written, or ``None`` when the filesystem refused the write. A refusal is a
-        plumbing fault: it is reported at ``WARNING`` on the ``foundry`` logger and changes neither
-        a test's outcome nor the run's exit code (AAP 0.14.3).
+        The path written, or ``None`` when the filesystem refused the write. A refusal is reported
+        at ``WARNING`` and changes neither an outcome nor the exit code (AAP 0.14.3).
 
     Raises:
         ElementTypeError: An element is neither a

@@ -1,16 +1,9 @@
-"""The ``foundry`` import package: one distribution, four surfaces.
+"""The ``foundry`` import package: version string and exception names, nothing else.
 
-Installing the ``pytest-foundry`` distribution makes this package importable as
-``foundry`` and activates all four surfaces at once: the pytest plugin loaded through its
-``pytest11`` entry point, the fixture and assertion library a suite imports, the
-``foundry`` console application, and the scaffolder behind ``foundry init``.
-
-This module is the one file every ``import foundry`` pays for, so it resolves the version
-and re-exports the exception names and does nothing else: no capability package and none
-of the third-party libraries behind them is imported here, which is what keeps the pytest
-plugin inside its startup budget. The exception classes are defined once in
-:mod:`foundry.core.exceptions`, and the re-exports below carry the names, bases and
-attributes the compatibility promise fixes.
+It re-exports only ``__version__`` and the exception names, so every ``import foundry`` stays
+inside the startup budget (AAP 0.4.8, AAP 0.14.2); the classes are defined once in
+:mod:`foundry.core.exceptions` and their names, bases and attributes are the compatibility
+promise (AAP 0.4.9).
 """
 
 from importlib import metadata
@@ -40,8 +33,7 @@ __all__: Final[tuple[str, ...]] = (
 )
 
 try:
-    # Distribution metadata is keyed by the distribution name, not the import name:
-    # version("foundry") raises PackageNotFoundError even with the wheel installed.
+    # Metadata is keyed by the distribution name: version("foundry") raises even when installed.
     __version__: str = metadata.version("pytest-foundry")
 except metadata.PackageNotFoundError:
     # A source checkout carries no installed distribution metadata to read.

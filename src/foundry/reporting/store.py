@@ -1,58 +1,13 @@
 """The ``results.json`` store: the writer and the reader of a run's result document.
 
-This module owns the run's result document. :func:`dumps` renders it, :func:`write` writes it,
-:func:`loads` and :func:`read` decode one back, and :func:`write_text` is the single text writer
-of the whole ``foundry.reporting`` package: the JUnit writer and the HTML renderer build their
-documents as text and hand them here rather than opening a file themselves, because filesystem
-writes are permitted in three modules only -- :mod:`foundry.obs.artifacts`,
-:mod:`foundry.cassette.store` and this one (AAP 0.4.8).
-
-Ordering and determinism
-    Two runs of the same tests must produce the same bytes once ``run_id``, ``started_at``,
-    ``finished_at`` and ``duration_ms`` are replaced (AAP 0.14.1 criterion 14), so nothing here
-    may depend on the order a caller collected its records in. Result records are sorted by node
-    id; the run-error elements follow every result record and are sorted by worker id and message,
-    never by their ``recorded_at``, which the determinism criterion does not normalise. The file is
-    a JSON array indented by two spaces, with object keys sorted, non-ASCII characters left
-    unescaped, UTF-8 encoding and a trailing newline. An empty run is an empty array plus that
-    newline, so the zero-tests and all-deselected states carry a valid document rather than a
-    missing file.
-
-Redaction
-    Every value that can quote run data -- a failure message, a traceback path, an artifact path
-    and a run error's message -- passes through :class:`foundry.obs.redaction.Redactor` before it
-    is serialised, because a header or a URL echoed into a failure would otherwise be persisted
-    verbatim (AAP 0.3.2). Contract values are deliberately left alone: redacting a node id would
-    break ``foundry report compare``, and a duration or an outcome is not free text. Redaction is
-    shape-preserving -- it replaces the value of a field the record already has and adds none --
-    so the document stays exactly the schema :mod:`foundry.reporting.record` defines.
-
-Failure isolation
-    Writing is plumbing, and plumbing never changes a test's outcome or a run's exit code
-    (AAP 0.14.3). A writer that cannot create its directory, cannot open its temporary file or
-    cannot rename it reports one ``WARNING`` on the ``foundry`` logger and returns ``None``; it
-    never raises into the pytest session and never calls ``sys.exit``. Both :exc:`OSError` and
-    :exc:`UnicodeEncodeError` are isolated that way, so an encoding fault costs one document rather
-    than every document after it. Text is written with the ``replace`` error handler, so a
-    character UTF-8 cannot represent -- a lone surrogate decoded from a path with undecodable
-    bytes, which a node id or a failure message can carry -- becomes the replacement character
-    instead of losing the file, and the same input still produces the same bytes (AAP 0.14.1).
-    Because that degradation must not be silent, it is reported as one ``WARNING`` naming the file
-    while the write completes and returns its path. What is *not* isolated is a ``TypeError`` from
-    ``json.dumps``: that is a defect in the record models, not a filesystem fault, and it surfaces
-    instead of being hidden.
-
-Reading
-    :func:`read` is the one path the command line drives on a document it did not write, so every
-    way it can fail -- a missing file, a directory, undecodable bytes, text that is not JSON, a
-    JSON document that is not an array, an element that is not a Foundry result element -- becomes
-    :class:`foundry.core.exceptions.DataError` naming the file. It is a typed ``FoundryError``,
-    which is what lets ``foundry report compare`` exit ``2`` instead of crashing (AAP 0.4.4).
-
-Import direction and import-time discipline
-    :mod:`foundry.reporting` imports ``foundry.core`` and ``foundry.obs`` and no capability
-    package (AAP 0.4.8), and importing this module only defines names: no I/O, no environment
-    read, no logger configuration and no module-level mutable state.
+:func:`dumps` renders the document, :func:`loads` and :func:`read` decode one back, and
+:func:`write_text` is the single text writer of the whole ``foundry.reporting`` package (AAP 0.4.8),
+so the JUnit writer and the HTML renderer hand it their text rather than opening a file. Records are
+sorted by node id and run errors by worker id and message, never by ``recorded_at``, so two runs of
+one suite are byte-identical once the normalised fields are replaced (AAP 0.14.1), and every
+free-text value passes through :class:`foundry.obs.redaction.Redactor` first (AAP 0.3.2). A refused
+write reports one ``WARNING`` and returns ``None`` (AAP 0.14.3); :func:`read` raises ``DataError``
+so ``foundry report compare`` can exit ``2`` (AAP 0.4.4).
 """
 
 from __future__ import annotations
@@ -101,9 +56,8 @@ _DOCUMENT_HINT: Final[str] = (
 def dumps(elements: Sequence[ResultElement], *, redactor: Redactor | None = None) -> str:
     """Render result elements as the exact text of a ``results.json`` document.
 
-    Result records come first, sorted by node id, and the run-error elements follow them, sorted
-    by worker id and message. The sort keys are the records' own content, so the document is the
-    same whoever wrote it and whichever worker produced which record.
+    Result records come first, sorted by node id, and the run-error elements follow them, sorted by
+    worker id and message, so the document is the same whoever wrote it.
 
     Args:
         elements: The run's elements: result records, run errors, or both in any order.
@@ -118,13 +72,10 @@ def dumps(elements: Sequence[ResultElement], *, redactor: Redactor | None = None
     Raises:
         ElementTypeError: An element is neither a
             :class:`~foundry.reporting.record.ResultRecord` nor a
-            :class:`~foundry.reporting.record.RunError`. It is a
-            :class:`~foundry.core.exceptions.FoundryError` that subclasses ``TypeError``, so a
-            caller catching the documented caller defect still catches it, and it is not
-            absorbed: a caller defect is not a filesystem fault.
+            :class:`~foundry.reporting.record.RunError`. It subclasses ``TypeError``, so a caller
+            catching that documented defect still catches it.
         TypeError: An element serialises to a value that is not JSON-native, which ``json.dumps``
-            rejects. That is a defect in the record models rather than a filesystem fault, so it
-            is not absorbed either.
+            rejects: a defect in the record models, not a filesystem fault, so it is not absorbed.
     """
     scrub = default_redactor() if redactor is None else redactor
     records: list[ResultRecord] = []
@@ -224,28 +175,20 @@ def write(
 def write_text(text: str, path: str | Path) -> Path | None:
     """Write ``text`` to ``path`` as UTF-8 with LF line endings: this package's only writer.
 
-    The JUnit writer and the HTML renderer return their documents as text and call this rather
-    than opening a file, so every file :mod:`foundry.reporting` produces is written by one
-    implementation (AAP 0.4.8). The content is written to a sibling temporary file and renamed
-    into place, so a reader never sees a half-written document and a re-run of the same content
-    produces byte-identical bytes.
-
-    Text that UTF-8 cannot encode -- a lone surrogate, as a node id or a failure message decoded
-    from a path with undecodable bytes carries -- is written with the ``replace`` error handler, so
-    the character degrades into the replacement character rather than the document being lost. The
-    degradation is reported as one ``WARNING`` on the ``foundry`` logger naming ``path``, and the
-    write still completes.
+    The content goes to a sibling temporary file that is renamed into place, so a reader never sees
+    a half-written document and a re-run of the same content produces identical bytes. Text UTF-8
+    cannot encode -- a lone surrogate decoded from a path, say -- is written with the ``replace``
+    handler and reported as one ``WARNING`` naming ``path``, so the character degrades instead of
+    the document being lost and the degradation is not silent.
 
     Args:
-        text: The document's complete text, written as given -- including any trailing newline.
-        path: The file to write. Missing parent directories are created.
+        text: The document's complete text, written as given, trailing newline included.
+        path: The file to write; missing parent directories are created.
 
     Returns:
-        The path written, or ``None`` when the write was refused. A refusal -- a filesystem fault
-        or, should one reach the encoder despite the ``replace`` handler, an encoding fault -- is a
-        plumbing fault: it is reported once at ``WARNING`` on the ``foundry`` logger, no temporary
-        file is left behind, and neither a test's outcome nor the run's exit code changes
-        (AAP 0.14.3).
+        The path written, or ``None`` when the write was refused. A refusal is reported once at
+        ``WARNING``, leaves no temporary file behind and changes neither a test's outcome nor the
+        run's exit code (AAP 0.14.3).
     """
     target = Path(path)
     temporary = target.with_name(target.name + _TEMP_SUFFIX)

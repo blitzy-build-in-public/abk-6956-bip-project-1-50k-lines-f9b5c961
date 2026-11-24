@@ -1,58 +1,25 @@
 """How many attempts a failing test earns: the ``execution.retries`` semantics, in one place.
 
 ``execution.retries`` -- ``0`` by default, accepted range ``0..10`` (AAP 0.4.5) -- counts the
-*repeats after the first attempt*, so a resolved value of ``2`` is three attempts in total and
-``attempts: 3`` in ``results.json`` (assumption A2, AAP 0.4.6). That arithmetic is published here
-and nowhere else: :attr:`ExecutionRetries.max_attempts` is ``repeats + 1``, and the worked example
-``--foundry-retries 2`` becoming ``attempts: 3`` is the shape the retry criterion observes.
+*repeats after the first attempt*, so a resolved value of ``2`` is ``attempts: 3`` in
+``results.json`` (assumption A2, AAP 0.4.6); :attr:`ExecutionRetries.max_attempts` publishes that
+arithmetic and nothing else does.
 
-Retries are Foundry's own rather than a peer plugin's (AAP 0.5.1)
-    ``pytest-rerunfailures`` is deliberately excluded from the dependency set, because a repeat has
-    to stay inside Foundry's own runtest protocol: it feeds the attempt ledger that reaches the
-    controller, it decides the quarantine verdict and it captures the artifacts of the attempt that
-    failed. A plugin re-running an item behind Foundry's back can offer none of the three.
-    :func:`should_retry` is the whole decision, and :mod:`foundry.execution.coordinator` drives
-    pytest's runtest protocol with it.
+Retries are Foundry's own rather than a peer plugin's (AAP 0.5.1), because a repeat has to stay
+inside Foundry's own runtest protocol: it feeds the attempt ledger, decides the quarantine verdict
+and captures the failed attempt's artifacts, and :func:`should_retry` is the whole decision. Only a
+``"call"``-phase ``"failed"`` outcome is retried, since a fixture fault is deterministic and a
+repeat would only multiply it. No delay is inserted between attempts: AAP 0.4.5 publishes no
+``execution.backoff`` key, and backoff belongs to :mod:`foundry.http.retries`, so this module
+imports neither ``time`` nor ``datetime`` and the caller keeps the time.
 
-Only a failing call phase is retried
-    :data:`RETRYABLE_PHASES` holds ``"call"`` alone. A ``setup`` or ``teardown`` failure is a
-    fixture or finaliser fault, and a fixture is deterministic: repeating one multiplies the same
-    fault, pays its setup cost again and buries the first traceback under an identical second one.
-    pytest's own vocabulary agrees -- it reports a setup or teardown failure as an ``error`` rather
-    than a ``failure`` -- which is why :func:`should_retry` accepts ``"failed"`` and nothing else.
-
-Nothing sleeps here, and no clock is read
-    AAP 0.4.5 publishes no ``execution.backoff`` key, and adding one would change the published
-    configuration surface (AAP 0.4.9 forbids that), so there is no delay between test attempts:
-    Foundry repeats the item immediately. Backoff belongs to :mod:`foundry.http.retries`, where
-    ``http.retries.backoff_base`` and ``http.retries.backoff_max`` publish it and an injected
-    :data:`foundry.core.types.Sleep` keeps every wait out of the suite's wall clock (AAP 0.14.3).
-    This module therefore imports neither ``time`` nor ``datetime``: it decides, and the caller
-    keeps the time.
-
-One predicate vocabulary, one classification
-    :mod:`foundry.http.retries` owns the retry predicates -- ``timeout``, ``connect``,
-    ``status_5xx``, ``status_429`` -- and the classification of a fault or a status, and its own
-    declaration names this module as that evaluation's consumer, because ``execution`` may import
-    ``http`` and never the reverse (AAP 0.4.8). :func:`retry_label` delegates to
-    :func:`foundry.http.retries.classify` rather than testing ``httpx`` exception types itself, so a
-    label attached to an attempt means exactly what the HTTP engine means by it and this module
-    imports no ``httpx`` at all.
-
-    The label is diagnostic and never a gate. AAP 0.4.5 publishes no ``execution.retry_on`` key, so
-    the only way to gate a test-level retry on the predicate vocabulary would be to widen it to
-    cover an ordinary assertion failure -- and a suite whose assertions were the one thing not
-    retried would be the opposite of what the key is for. What gates the decision is the phase, the
-    outcome and the budget, in :func:`should_retry`; the label only tells how an attempt ended.
-
-Layering and import discipline
-    The imports below are :mod:`foundry.core.exceptions`, :mod:`foundry.core.limits`,
-    :mod:`foundry.core.types`, :mod:`foundry.execution.state` and :mod:`foundry.http.retries`, all
-    inside the AAP 0.4.8 allowance for this package; ``reporting``, ``cli`` and ``plugin`` are not
-    reachable from here. Importing this module defines names only: no I/O, no environment read, no
-    logger configuration and no module-level mutable state. The coordinator imports it lazily rather
-    than ``plugin.py`` importing it at module scope, so the 150 ms startup budget (AAP 0.14.2) does
-    not pay for it.
+:mod:`foundry.http.retries` owns the retry predicates -- ``timeout``, ``connect``,
+``status_5xx``, ``status_429`` -- and the classification of a fault or a status, and
+:func:`retry_label` delegates to :func:`foundry.http.retries.classify` rather than testing
+``httpx`` exception types itself, so a label means exactly what the HTTP engine means by it. The
+label is diagnostic and never a gate: what gates a retry is the phase, the outcome and the budget.
+Importing this module defines names only, and the coordinator imports it lazily so the 150 ms
+startup budget (AAP 0.14.2) does not pay for it (AAP 0.4.8).
 """
 
 from __future__ import annotations

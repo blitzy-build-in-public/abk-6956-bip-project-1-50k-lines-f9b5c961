@@ -2,10 +2,8 @@
 
 ``manifest.json`` is the seventh file of the artifact layout (AAP 0.4.6): every artifact Foundry
 wrote for one test with its size and digest, and whether redaction changed the bytes or capture was
-disabled (AAP 0.4.7). Nothing here opens or removes a file, because AAP 0.4.8 permits writes only
-in the artifact, cassette and report stores. Entries are sorted before the document is built, and
-key order is the field order of AAP 0.4.6 rather than ``sort_keys``; the models are frozen
-dataclasses rather than pydantic ones, so two runs render identical text (AAP 0.14.3).
+disabled (AAP 0.4.7). Nothing here opens or removes a file (AAP 0.4.8); key order is AAP 0.4.6's
+field order rather than ``sort_keys``, and frozen models keep two runs byte-identical (AAP 0.14.3).
 """
 
 from __future__ import annotations

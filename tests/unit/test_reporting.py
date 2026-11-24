@@ -1,36 +1,15 @@
 """Unit tests for the ``foundry.reporting`` package.
 
-Reporting is the one place a run's report is produced, and every renderer there consumes the
-frozen result record rather than live run state (AAP 0.4.6, AAP 0.4.8, AAP 0.7.2). This module
-pins what the package publishes, without driving pytest, the CLI or a subprocess -- those
-surfaces belong to ``tests/plugin`` and ``tests/e2e`` (AAP 0.14.5):
+Every renderer consumes the frozen result record, not live run state (AAP 0.4.6, 0.4.8, 0.7.2):
+``record`` pins the nine outcome values, the documented fields and the relationship rules;
+``store`` writes sorted records with run errors last; ``junit`` renders the suite properties, each
+outcome's element, redacted messages and escaped node ids; ``html`` renders a self-contained,
+byte-identical report; ``assets`` and ``renderers`` publish the inlined CSS/JS and the format
+table; ``compare`` is reachable from the package surface.
 
-* ``record`` -- the nine outcome values and the documented field list, frozen records, and the
-  relationship rules of AAP 0.7.2: ``attempts >= 1``, ``duration_ms >= 0``, markers sorted and
-  de-duplicated, artifact paths relative and free of ``..``, a failure phase from the three
-  pytest phases, and a ``quarantine.state`` that agrees with ``outcome``.
-* ``store`` -- result records sorted by node id, run errors after every result record, the
-  ``record_type`` discriminator on each element, a JSON array (an empty one for a zero-record
-  run) and two writes of one run producing identical bytes.
-* ``junit`` -- the suite properties, the derived ``classname``/``name``/``time``, the four fixed
-  properties and five artifact references of a testcase, the element each outcome maps to, the
-  redaction of a failure message, and ``ElementTree`` escaping, which keeps a ``<script>`` node
-  id from becoming markup.
-* ``html`` -- a document that references nothing outside itself, escaped node ids, a
-  node-id-sorted results table, the Quarantined section, a failure panel linking both dumps and
-  the log tail, the zero-test state, and two renders of one run that are byte-identical.
-* ``assets`` and ``renderers`` -- the inlined CSS and JS are self-contained and the report is
-  complete without JavaScript (assumption A14); the import-time format table exists, publishes
-  the documented formats, maps each to a callable, and is unchanged by a run.
-* ``compare`` -- the comparison is reachable from the package surface and ignores run errors.
-  The committed fixture pairs and the sorted-output contract are ``tests/unit/test_compare.py``'s.
-
-Determinism and isolation (AAP 0.14.3): records are built inline from fixed timestamps, so no
-assertion reads the wall clock; files are written under ``tmp_path``; nothing sleeps, nothing
-touches the network, and no renderer is patched. Imports stay inside the reporting boundary --
-``foundry.http``, ``foundry.data``, ``foundry.db``, ``foundry.execution``, ``foundry.cli`` and
-``foundry.plugin`` are deliberately absent, because a test that reached them would hide a
-reversed import edge from ``tests/unit/test_layering.py``.
+Determinism and isolation (AAP 0.14.3): fixed timestamps, files under ``tmp_path``, no sleep, no
+network, no patched renderer, and no import of ``http``, ``data``, ``db``, ``execution``, ``cli``
+or ``plugin`` (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -58,10 +37,7 @@ from foundry.reporting.record import (
     parse_element,
 )
 
-# --- Fixed fixtures --------------------------------------------------------
-#
-# A run id of the shape AAP 0.4.3 publishes, a profile from AAP 0.4.5's four, a node id carrying a
-# module path, and two fixed instants, so no assertion here depends on the host's clock.
+# Fixed run id, profile, node id and instants, so no assertion depends on the host's clock.
 
 _RUN_ID = "20250102T030405-abc123"
 _PROFILE = "ci"
@@ -174,9 +150,6 @@ def _captured_run(tmp_path: Path) -> tuple[Path, tuple[ArtifactRecord, ...]]:
     return run_dir, references
 
 
-# --- The outcome vocabulary and the record's fields ------------------------
-
-
 def test_outcome_exposes_exactly_the_nine_documented_values() -> None:
     values = {member.value for member in Outcome}
     assert values == _DOCUMENTED_OUTCOMES
@@ -192,9 +165,6 @@ def test_result_record_exposes_the_documented_fields() -> None:
 
 def test_profile_names_cover_the_configuration_enum() -> None:
     assert tuple(member.value for member in ProfileName) == reporting.PROFILE_NAMES
-
-
-# --- Frozen records --------------------------------------------------------
 
 
 def _frozen_cases() -> tuple[tuple[object, str, object], ...]:
@@ -229,9 +199,6 @@ def test_records_are_frozen(instance: object, attribute: str, value: object) -> 
 def test_a_marker_repeat_is_canonicalised_rather_than_rejected() -> None:
     record = _record(markers=("b", "a", "b"))
     assert record.markers == ("a", "b")
-
-
-# --- The AAP 0.7.2 relationship rules --------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -332,9 +299,6 @@ def test_a_malformed_element_is_reported_as_a_data_error(tmp_path: Path) -> None
     assert str(source) in str(excinfo.value)
 
 
-# --- results.json ----------------------------------------------------------
-
-
 def test_store_sorts_result_records_by_node_id() -> None:
     records = [_record_for("c"), _record_for("a"), _record_for("b")]
     payload = json.loads(store.dumps(records))
@@ -391,9 +355,6 @@ def test_two_writes_of_one_run_are_byte_identical(tmp_path: Path) -> None:
     expected = store.dumps(records)
     assert first.read_text(encoding="utf-8") == expected
     assert second.read_text(encoding="utf-8") == expected
-
-
-# --- junit.xml -------------------------------------------------------------
 
 
 def _junit_root(*records: object) -> ElementTree.Element:
@@ -517,9 +478,6 @@ def test_write_produces_exactly_the_rendered_document(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == junit.render(records)
 
 
-# --- report.html -----------------------------------------------------------
-
-
 def _render(records: list[object], **options: object) -> str:
     """Render the report and fail rather than pass on the documented template fallback."""
     document = html.render(list(records), **options)
@@ -614,9 +572,6 @@ def test_the_report_is_complete_without_javascript() -> None:
     assert "data-foundry-js=" not in document[start : document.index(">", start)]
 
 
-# --- The inlined assets and the report renderer table ----------------------
-
-
 @pytest.mark.parametrize(("name", "text"), [("css", assets.CSS), ("js", assets.JS)])
 def test_an_inlined_asset_is_self_contained(name: str, text: str) -> None:
     assert text, name
@@ -647,9 +602,6 @@ def test_writing_a_run_leaves_the_registration_table_untouched(tmp_path: Path) -
     written = renderers.write_all([_record_for("a")], tmp_path)
     assert [path.name for path in written.written()] == list(_REPORT_FILENAMES)
     assert [(name, id(spec)) for name, spec in renderers.RENDERERS.items()] == before
-
-
-# --- The comparison --------------------------------------------------------
 
 
 def _inline_document(outcome: str) -> str:
