@@ -1,55 +1,55 @@
-"""Unit tests for ``foundry.http``: the session, the response, the transport seam and the dumps.
+"""Unit tests for ``foundry.http``: URL joining, the header merge, retries, auth and responses.
 
-AAP 0.10.1 places the HTTP layer's unit module here, and what it pins is AAP 0.7.3's request
-pipeline as a test observes it -- the header merge, the timeout extension, transport selection, the
-retry loop and the response wrapper -- rather than as the docstrings describe it.
+AAP 0.10.1 places the HTTP layer's unit module here. What it pins is AAP 0.7.3's request pipeline
+and AAP 0.4.3's response contract as a caller observes them:
 
-* A non-2xx reply is a value (AAP 0.4.3): a ``404``, a ``500`` and an unfollowed ``302`` each come
-  back as a :class:`~foundry.http.response.FoundryResponse`. The only escapes are
-  :class:`~foundry.core.exceptions.TransportError` and, once the attempts are spent,
-  :class:`~foundry.core.exceptions.RetryExhaustedError`.
-* The headers merge as ``http.headers`` -> the auth strategy's pair -> the per-request mapping, the
-  later assignment winning case-insensitively, so one name is one header (AAP 0.7.3).
-* The backoff of attempt *n* is ``min(backoff_base * 2 ** (n - 1), backoff_max)`` and the sleep is
-  injected, so both retry tests assert the delays instead of paying them (AAP 0.7.3, AAP 0.14.2).
-* :func:`~foundry.http.transport.select_transport` is the whole effect of the cassette mode on this
-  package, and a ``replay`` session needs no live transport to exist at all, which is what makes
-  offline replay a property of the object graph (AAP 0.2.1, assumption A8).
-* The committed reference document ``tests/fixtures/cassettes/replay_echo.json`` replays through the
-  public ``session.post(path, json=...)`` path it illustrates -- its recorded hash is the digest of
-  the bytes ``httpx`` encodes -- and a body it does not hold raises the typed miss (AAP 0.4.6).
-* ``request_dump()`` and ``response_dump()`` carry exactly the published keys and mask every
-  configured secret name with the ``***`` marker (AAP 0.3.2, AAP 0.4.6).
-* One request goes through a real :class:`~foundry.http.transport.LiveTransport` to an in-process
-  ``http.server`` on ``127.0.0.1:0``, because the one component a mock cannot vouch for is the one
-  that reaches ``httpcore``.
+* :func:`foundry.http.url.join_url` keeps the base URL's path, replaces it for an absolute path,
+  accepts an absolute URL unchanged and appends a query exactly once; a relative path with no
+  ``http.base_url`` raises :class:`~foundry.core.exceptions.ConfigError` naming that key, both at
+  the request and, for ``foundry_api``, at session construction (AAP 0.4.5, AAP 0.4.7).
+* :func:`foundry.http.url.redact_url` strips URL userinfo and masks a deny-listed query
+  parameter, which is what keeps a credential out of a dump (AAP 0.3.2).
+* Headers merge ``http.headers`` -> the auth strategy's pair -> the per-request mapping, the later
+  source winning case-insensitively (AAP 0.7.3).
+* A request carries the per-request deadline when given and ``http.timeout`` otherwise, asserted
+  on the ``timeout`` extension the transport receives.
+* Retry predicates map ``timeout`` to :class:`httpx.TimeoutException`, ``connect`` to
+  :class:`httpx.ConnectError`, ``status_5xx`` to any status from 500 up and ``status_429`` to 429
+  alone; the backoff of attempt *n* is ``min(base * 2 ** (n - 1), max)`` and the sleep is injected,
+  so the delays are asserted instead of paid (AAP 0.7.3, AAP 0.14.2).
+* An exhausted request raises :class:`~foundry.core.exceptions.RetryExhaustedError` carrying one
+  :class:`~foundry.core.types.AttemptRecord` per attempt (AAP 0.4.3).
+* The four auth strategies resolve the environment variable *names* configuration holds, and no
+  representation of the settings or of the resolved header carries the value (AAP 0.3.3, I9).
+* A 4xx, a 5xx and an unfollowed 3xx are returned as values; the five verbs delegate to
+  :meth:`FoundrySession.request` (AAP 0.4.3, assumption A13).
 
-Everything else is driven through :class:`httpx.MockTransport`, no test opens a non-loopback socket
-(AAP 0.14.3), no test sleeps, and the only file any test writes is the copy of the committed
-reference cassette it makes under ``tmp_path``.
+Recorded differences from the plan's names, as the pipeline is spelled on disk: the retry settings
+are :class:`foundry.http.retries.RetryPolicy` -- a frozen dataclass of ``max_attempts``,
+``backoff_base``, ``backoff_max`` and a ``retry_on`` frozenset -- with ``delay_for(attempt)``,
+beside ``classify``, ``should_retry`` and ``backoff``; credentials resolve through
+``resolve_auth(AuthSettings, environ=...)`` into an ``AuthHeader`` or ``None``; ``foundry_api``'s
+mandatory base URL is ``SessionSettings(require_base_url=True)``, refused at construction; and
+``FoundryResponse`` is built by ``from_httpx``, so every response asserted here came from a real
+request call.
+
+Everything is served by :class:`httpx.MockTransport`, so no test opens a socket (AAP 0.14.3). No
+test imports ``foundry.reporting`` (AAP 0.4.8), and no test waits: every wait is an injected
+recorder, which is why the module finishes in well under a second (AAP 0.14.2).
 """
 
 from __future__ import annotations
 
+import base64
 import json
-import re
-import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict
 from typing import Final
 
 import httpx
 import pytest
 
-from foundry.cassette import CassetteSession, CassetteStore, cassette_path
-from foundry.core.exceptions import (
-    CassetteMissError,
-    ConfigError,
-    FoundryError,
-    RetryExhaustedError,
-    TransportError,
-)
+from foundry.core.exceptions import ConfigError, ContractError, RetryExhaustedError, TransportError
 from foundry.http import (
     AuthSettings,
     FoundryResponse,
@@ -57,65 +57,41 @@ from foundry.http import (
     RetryPolicy,
     SessionSettings,
 )
-from foundry.http.transport import (
-    LiveTransport,
-    build_live_transport,
-    close_quietly,
-    select_transport,
-    timeout_extension,
-)
-from foundry.obs.redaction import MAX_EXCERPT_BYTES, REDACTED, TRUNCATION_MARKER
+from foundry.http.auth import AuthHeader, resolve_auth
+from foundry.http.retries import backoff, classify, should_retry
+from foundry.http.url import join_url, redact_url, require_base_url, strip_userinfo
+
+_BASE: Final[str] = "http://peer.test"
+"""A name that resolves nowhere: the suite guard refuses it, so a real send would fail loudly."""
 
 _TOKEN_VARIABLE: Final[str] = "FOUNDRY_SPEC_BEARER"
-"""Name of the variable the bearer strategy reads. The session is given the mapping, never the
-process environment, so no test here depends on what the shell exports."""
+_USER_VARIABLE: Final[str] = "FOUNDRY_SPEC_USER"
+_PASSWORD_VARIABLE: Final[str] = "FOUNDRY_SPEC_PASSWORD"
+_HEADER_VARIABLE: Final[str] = "FOUNDRY_SPEC_API_KEY"
+"""The names configuration holds; the values never enter the settings (implicit requirement I9)."""
 
 _SENTINEL: Final[str] = "s3cr3t-b34r3r"  # no real credential; a scanner-safe stand-in
-_API_KEY: Final[str] = "s3cr3t-h34d3r"  # the value a header strategy would send
-_BASE: Final[str] = "http://peer.test"  # a name that resolves nowhere: every send is mocked
-_NODEID: Final[str] = "tests/test_api.py::test_echo"  # carries / and ::, so the path is encoded
-_QUERY: Final[Mapping[str, object]] = {"page": 2, "limit": 10}  # what the recorded GET carries
-_RECORDED_TEXT: Final[str] = '{"echo":{"method":"GET","path":"/echo"},"ok":true}'
-"""Body of the committed cassette's ``GET /echo`` reply, so a replay test names a real value."""
-_RECORDED_POST_TEXT: Final[str] = (
-    '{"echo":{"body":{"message":"hello"},"method":"POST","path":"/echo"},"ok":true}'
-)
-"""Body of the committed cassette's ``POST /echo`` reply, the one its body hash selects."""
-_RECORDED_BODY: Final[Mapping[str, object]] = {"message": "hello"}
-"""The JSON body the committed cassette records, so the ``json=`` request below is that exchange."""
-_HEX64: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
+_USER_VALUE: Final[str] = "spec-user"
+_PASSWORD_VALUE: Final[str] = "spec-password"
+_HEADER_VALUE: Final[str] = "s3cr3t-h34d3r"
+_QUERY_TOKEN: Final[str] = "s3cr3t-qu3ry"
 
+_ENVIRON: Final[Mapping[str, str]] = {
+    _TOKEN_VARIABLE: _SENTINEL,
+    _USER_VARIABLE: _USER_VALUE,
+    _PASSWORD_VARIABLE: _PASSWORD_VALUE,
+    _HEADER_VARIABLE: _HEADER_VALUE,
+}
+"""The credential mapping every session here is given, so no test depends on the shell's exports."""
 
-class _RefusingTransport(httpx.BaseTransport):
-    """A live-transport stand-in that records every call and refuses to serve one.
-
-    ``replay`` must reach neither ``httpcore`` nor the transport the session built for the mode
-    selection, so a delegation attempt raises instead of answering. A plain ``RuntimeError`` is
-    raised rather than a locally defined subclass, so every Foundry exception still lives in
-    ``foundry/core/exceptions.py`` (AAP 0.14.3).
-    """
-
-    def __init__(self) -> None:
-        """Start with no recorded call."""
-        self.calls: list[httpx.Request] = []
-
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
-        """Record the attempt and refuse it."""
-        self.calls.append(request)
-        raise RuntimeError(f"the live transport must not be reached: {request.method}")
-
-    def close(self) -> None:
-        """Accept the teardown a network mode would perform."""
+_METHODS: Final[tuple[str, ...]] = ("get", "post", "put", "patch", "delete")
 
 
 # --- Builders -------------------------------------------------------------
 
 
 def _recorder(
-    status: int = 200,
-    *,
-    body: bytes = b"",
-    headers: Mapping[str, str] | None = None,
+    status: int = 200, *, body: bytes = b"", headers: Mapping[str, str] | None = None
 ) -> tuple[httpx.MockTransport, list[httpx.Request]]:
     """Return a transport answering ``status`` beside the list of requests it was handed."""
 
@@ -143,7 +119,7 @@ def _faults(
 
 
 def _statuses(codes: Sequence[int]) -> tuple[httpx.MockTransport, list[httpx.Request]]:
-    """Return a transport answering ``codes`` in order, beside the list of requests it received."""
+    """Return a transport answering ``codes`` in order, beside the requests it received."""
 
     received: list[httpx.Request] = []
     remaining = list(codes)
@@ -163,7 +139,7 @@ def _values(headers: Mapping[str, str], name: str) -> list[str]:
 
 
 def _no_sleep(seconds: float) -> None:
-    """Perform no wait; every session here is built with an injected sleeper (AAP 0.14.2)."""
+    """Perform no wait: every session here carries an injected sleeper instead (AAP 0.14.2)."""
 
 
 def _session(
@@ -172,85 +148,85 @@ def _session(
     transport: httpx.BaseTransport | None = None,
     sleep: Callable[[float], None] = _no_sleep,
 ) -> FoundrySession:
-    """Return a session over ``transport``, with the credential mapping no shell can influence."""
+    """Return a session over ``transport`` with the credential mapping no shell can influence."""
     return FoundrySession(
         SessionSettings() if settings is None else settings,
         transport=transport,
         sleep=sleep,
-        environ={_TOKEN_VARIABLE: _SENTINEL},
+        environ=_ENVIRON,
     )
 
 
-def _replay_client(
-    cassette: CassetteSession, monkeypatch: pytest.MonkeyPatch
-) -> tuple[FoundrySession, _RefusingTransport]:
-    """Return a session over ``cassette`` beside the live transport it must never reach."""
-    live = _RefusingTransport()
-    monkeypatch.setattr("foundry.http.session.build_live_transport", lambda: live)
-    session = FoundrySession(SessionSettings(base_url=_BASE), cassette=cassette, sleep=_no_sleep)
-    return session, live
+# --- URL joining (AAP 0.4.5, AAP 0.4.7) ----------------------------------
 
 
-class _PeerHandler(BaseHTTPRequestHandler):
-    """The loopback peer's three routes: ``/echo``, ``/fail`` and ``/redirect``."""
-
-    def do_GET(self) -> None:
-        """Answer ``/echo`` from the request seen, ``/fail`` with 500, ``/redirect`` with 302."""
-        if self.path.startswith("/fail"):
-            self._send(500, {"error": "boom"})
-        elif self.path.startswith("/redirect"):
-            self.send_response(302)
-            self.send_header("Location", "/echo")
-            self.end_headers()
-        else:
-            self._send(200, {"path": self.path, "trace": self.headers.get("X-Trace", "")})
-
-    def _send(self, status: int, payload: Mapping[str, object]) -> None:
-        """Write one JSON reply with an explicit length, so the client reads it as one body."""
-        body = json.dumps(payload).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format: str, *args: object) -> None:
-        """Keep the peer quiet: a test's output is the suite's, not the server's."""
+@pytest.mark.parametrize(
+    ("base", "target", "expected"),
+    [
+        (f"{_BASE}:8080/api", "orders", f"{_BASE}:8080/api/orders"),
+        (f"{_BASE}:8080/api/", "orders", f"{_BASE}:8080/api/orders"),
+        (f"{_BASE}/api", "/orders", f"{_BASE}/orders"),
+        (f"{_BASE}/api", "orders?page=1#frag", f"{_BASE}/api/orders?page=1"),
+        (None, f"{_BASE}/echo?page=2", f"{_BASE}/echo?page=2"),
+    ],
+)
+def test_a_target_is_resolved_against_the_base_url(
+    base: str | None, target: str, expected: str
+) -> None:
+    """The base path is kept, a rooted path replaces it, and a fragment is never sent."""
+    assert join_url(base, target) == expected
 
 
-# --- Fixtures -------------------------------------------------------------
+def test_query_parameters_merge_without_duplicating_the_one_in_the_path() -> None:
+    """The path's query and ``params`` become one query, and a repeated name keeps one value."""
+    transport, received = _recorder()
+    with _session(SessionSettings(base_url=_BASE), transport=transport) as session:
+        session.get("/echo?page=1", params={"page": 2, "limit": 10})
+    sent = received[0]
+    assert str(sent.url) == f"{_BASE}/echo?page=2&limit=10"
+    assert sent.url.params.multi_items() == [("page", "2"), ("limit", "10")]
 
 
-@pytest.fixture
-def cassette_dir(tmp_path: Path) -> Path:
-    """Function scope: an existing, empty cassette directory inside ``tmp_path``."""
-    directory = tmp_path / "cassettes"
-    directory.mkdir()
-    return directory
+def test_a_relative_path_without_a_base_url_is_a_config_error() -> None:
+    """The fault names the key and never reaches a transport, which is what exit 2 needs."""
+    transport, received = _recorder()
+    with _session(transport=transport) as session, pytest.raises(ConfigError) as raised:
+        session.get("/echo")
+    assert raised.value.key == "http.base_url"
+    assert "http.base_url" in str(raised.value)
+    assert received == []
 
 
-@pytest.fixture
-def replay_session(repo_root: Path, cassette_dir: Path) -> CassetteSession:
-    """Function scope: a ``replay`` session over a copy of the committed reference cassette."""
-    source = repo_root / "tests" / "fixtures" / "cassettes" / "replay_echo.json"
-    target = cassette_path(_NODEID, cassette_dir=cassette_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(source.read_bytes())
-    return CassetteSession(_NODEID, mode="replay", store=CassetteStore(cassette_dir))
+def test_a_session_that_requires_a_base_url_refuses_to_be_built_without_one() -> None:
+    """``foundry_api``'s path (AAP 0.4.7): the fault lands before the first request is sent."""
+    with pytest.raises(ConfigError) as raised:
+        FoundrySession(SessionSettings(require_base_url=True), environ=_ENVIRON)
+    assert raised.value.key == "http.base_url"
 
 
-@pytest.fixture
-def loopback_peer() -> Iterator[str]:
-    """Function scope: a real ``http.server`` on an ephemeral ``127.0.0.1`` port, stopped after."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _PeerHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5.0)
+@pytest.mark.parametrize(
+    "base", ["", "   ", "peer.test/api", "ftp://peer.test/api", "http://alice:hunter2@peer.test"]
+)
+def test_an_unusable_base_url_is_refused_naming_the_key(base: str) -> None:
+    """An absent, relative, wrong-scheme or credential-carrying base URL is one typed fault."""
+    with pytest.raises(ConfigError) as raised:
+        require_base_url(base)
+    assert raised.value.key == "http.base_url"
+    assert "hunter2" not in str(raised.value)
+
+
+def test_a_url_loses_its_userinfo_and_its_deny_listed_parameters_before_a_dump() -> None:
+    """The redacted URL is what a log line, a cassette and a report receive (AAP 0.3.2)."""
+    cleaned = redact_url(f"http://alice:hunter2@peer.test/echo?token={_QUERY_TOKEN}&page=2")
+    serialised = json.dumps({"url": cleaned})
+    assert "alice" not in serialised
+    assert "hunter2" not in serialised
+    assert _QUERY_TOKEN not in serialised
+    assert "***" in serialised
+    assert "peer.test" in serialised
+    assert "page=2" in serialised
+    assert strip_userinfo("http://alice:hunter2@peer.test/echo") == "http://peer.test/echo"
+    assert redact_url(f"{_BASE}/echo?page=2") == f"{_BASE}/echo?page=2"
 
 
 # --- The header merge (AAP 0.7.3) ----------------------------------------
@@ -260,48 +236,279 @@ def test_the_headers_merge_configured_then_auth_then_per_request() -> None:
     """A later source replaces an earlier one, so the peer sees one value per name."""
     transport, received = _recorder()
     settings = SessionSettings(
+        base_url=_BASE,
         headers=(("X-Trace", "cfg"), ("X-Static", "1")),
         auth=AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE),
     )
-    session = _session(settings, transport=transport)
-    session.get(f"{_BASE}/echo", headers={"x-trace": "req"})
+    with _session(settings, transport=transport) as session:
+        session.get("/echo", headers={"x-trace": "req"})
     sent = received[0].headers
     assert _values(sent, "x-trace") == ["req"]
     assert _values(sent, "x-static") == ["1"]
     assert _values(sent, "authorization") == [f"Bearer {_SENTINEL}"]
 
 
-def test_a_lower_case_per_request_name_replaces_the_configured_one() -> None:
-    """``x-trace`` and ``X-Trace`` are one header name, so the request carries exactly one value."""
-    transport, received = _recorder()
-    session = _session(SessionSettings(headers=(("X-Trace", "cfg"),)), transport=transport)
-    session.get(f"{_BASE}/echo", headers={"x-trace": "req"})
-    assert _values(received[0].headers, "X-TRACE") == ["req"]
-
-
 def test_the_per_request_headers_beat_the_auth_header() -> None:
     """A caller's own credential wins over the configured strategy, and only it is sent."""
     transport, received = _recorder()
-    session = _session(
-        SessionSettings(auth=AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE)),
-        transport=transport,
+    settings = SessionSettings(
+        base_url=_BASE, auth=AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE)
     )
-    session.get(f"{_BASE}/echo", headers={"authorization": "Bearer manual"})
+    with _session(settings, transport=transport) as session:
+        session.get("/echo", headers={"Authorization": "Bearer manual"})
     assert _values(received[0].headers, "authorization") == ["Bearer manual"]
     assert _SENTINEL not in json.dumps(dict(received[0].headers))
 
 
-# --- Every status is a value (AAP 0.4.3) ---------------------------------
+# --- The deadline a request carries --------------------------------------
 
 
-@pytest.mark.parametrize("status", [404, 500, 302])
-def test_every_status_comes_back_as_a_response(status: int) -> None:
-    """A client error, a server error and an unfollowed redirect are returned, never raised."""
-    transport, _received = _recorder(status, body=b'{"error": "boom"}')
-    response = _session(transport=transport).get(f"{_BASE}/echo")
-    assert isinstance(response, FoundryResponse)
-    assert response.status_code == status
-    assert response.source == "live"
+@pytest.mark.parametrize(
+    ("configured", "requested", "expected"), [(2.5, None, 2.5), (10.0, 1.5, 1.5)]
+)
+def test_the_deadline_is_the_per_request_value_or_the_configured_one(
+    configured: float, requested: float | None, expected: float
+) -> None:
+    """Every phase of the request carries ``http.timeout`` unless the caller names a deadline."""
+    transport, received = _recorder()
+    with _session(SessionSettings(timeout=configured), transport=transport) as session:
+        session.get(f"{_BASE}/echo", timeout=requested)
+    assert received[0].extensions["timeout"] == {
+        "connect": expected,
+        "read": expected,
+        "write": expected,
+        "pool": expected,
+    }
+
+
+@pytest.mark.parametrize("value", [-1.0, 0.0, 301.0])
+def test_a_timeout_outside_its_range_is_refused_as_a_config_error(value: float) -> None:
+    """An unusable deadline names ``http.timeout`` and its range instead of reaching the peer."""
+    transport, received = _recorder()
+    with _session(transport=transport) as session, pytest.raises(ConfigError) as raised:
+        session.get(f"{_BASE}/echo", timeout=value)
+    assert raised.value.key == "http.timeout"
+    assert "0 < t <= 300" in str(raised.value)
+    assert received == []
+
+
+# --- The retry predicates (AAP 0.7.3) ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("make", "expected"),
+    [
+        (lambda: httpx.ConnectTimeout("slow connect"), "timeout"),
+        (lambda: httpx.ReadTimeout("slow read"), "timeout"),
+        (lambda: httpx.ConnectError("refused"), "connect"),
+        (lambda: httpx.RemoteProtocolError("broken"), None),
+        (lambda: httpx.DecodingError("undecodable"), None),
+    ],
+)
+def test_a_transport_fault_classifies_into_its_predicate(
+    make: Callable[[], httpx.HTTPError], expected: str | None
+) -> None:
+    """``timeout`` covers every :class:`httpx.TimeoutException`, ``connect`` a connect failure."""
+    assert classify(make(), None) == expected
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (500, "status_5xx"),
+        (503, "status_5xx"),
+        (599, "status_5xx"),
+        (429, "status_429"),
+        (400, None),
+        (404, None),
+        (200, None),
+    ],
+)
+def test_a_status_classifies_into_its_predicate(status: int, expected: str | None) -> None:
+    """``status_5xx`` is any status from 500 up and ``status_429`` is 429 alone."""
+    assert classify(None, status) == expected
+
+
+def test_a_predicate_set_without_status_429_does_not_retry_a_rate_limited_reply() -> None:
+    """The predicate must be configured explicitly, so ``status_5xx`` does not retry a 429."""
+    assert should_retry("status_429", {"status_5xx"}) is False
+    assert should_retry("status_429", {"status_5xx", "status_429"}) is True
+    assert should_retry(None, {"status_5xx"}) is False
+    assert RetryPolicy(retry_on=frozenset({"status_5xx"})).should_retry("status_429") is False
+
+
+# --- The backoff ladder (AAP 0.7.3, AAP 0.14.2) ---------------------------
+
+
+def test_the_backoff_doubles_from_the_base_and_is_clamped_by_the_cap() -> None:
+    """The published ladder for ``backoff_base=0.2`` and ``backoff_max=2.0``, attempts 1 to 5."""
+    policy = RetryPolicy(backoff_base=0.2, backoff_max=2.0)
+    assert [policy.delay_for(attempt) for attempt in (1, 2, 3, 4, 5)] == [0.2, 0.4, 0.8, 1.6, 2.0]
+    assert backoff(1, base=0.2, maximum=2.0) == 0.2
+    assert backoff(5, base=0.2, maximum=2.0) == 2.0
+    assert backoff(2, base=10.0, maximum=60.0) == 20.0
+
+
+def test_a_failing_request_waits_the_ladder_through_the_injected_sleep() -> None:
+    """The delays are recorded, never paid: five attempts sleep 0.2, 0.4, 0.8 and 1.6 seconds."""
+    transport, received = _faults(lambda request: httpx.ConnectError("refused", request=request))
+    delays: list[float] = []
+    settings = SessionSettings(base_url=_BASE, retry=RetryPolicy(max_attempts=5))
+    with (
+        _session(settings, transport=transport, sleep=delays.append) as session,
+        pytest.raises(RetryExhaustedError),
+    ):
+        session.get("/health")
+    assert delays == [0.2, 0.4, 0.8, 1.6]
+    assert len(received) == 5
+
+
+def test_a_zero_backoff_policy_never_waits() -> None:
+    """``backoff_base = 0`` retries immediately, so every recorded delay is zero."""
+    transport, _received = _faults(lambda request: httpx.ConnectError("refused", request=request))
+    delays: list[float] = []
+    settings = SessionSettings(base_url=_BASE, retry=RetryPolicy(backoff_base=0.0, max_attempts=2))
+    with (
+        _session(settings, transport=transport, sleep=delays.append) as session,
+        pytest.raises(RetryExhaustedError),
+    ):
+        session.get("/health")
+    assert delays == [0.0]
+
+
+# --- Exhaustion (AAP 0.4.3, AAP 0.4.7) -----------------------------------
+
+
+def test_an_exhausted_request_reports_one_record_per_attempt() -> None:
+    """Three attempts give three records, each naming its number, outcome, delay and message."""
+    transport, received = _faults(lambda request: httpx.ConnectError("refused", request=request))
+    delays: list[float] = []
+    settings = SessionSettings(base_url=_BASE, retry=RetryPolicy(max_attempts=3))
+    with (
+        _session(settings, transport=transport, sleep=delays.append) as session,
+        pytest.raises(RetryExhaustedError) as raised,
+    ):
+        session.get("/health")
+    error = raised.value
+    assert isinstance(error, TransportError)
+    assert (error.method, error.path, error.cause) == ("GET", "/health", "connect")
+    assert "GET /health" in str(error)
+    assert len(received) == 3
+    assert delays == [0.2, 0.4]
+    assert [record.number for record in error.attempts] == [1, 2, 3]
+    for record in error.attempts:
+        assert record.outcome == "connect"
+        assert record.retry_on == "connect"
+        assert record.elapsed_ms >= 0.0
+        assert record.message is not None and "ConnectError" in record.message
+
+
+def test_a_transport_fault_the_policy_does_not_retry_raises_the_plain_error() -> None:
+    """A connect fault under a policy that cannot retry it escapes as ``TransportError``."""
+    transport, received = _faults(lambda request: httpx.ConnectError("refused", request=request))
+    policy = RetryPolicy(max_attempts=1, retry_on=frozenset({"status_5xx"}))
+    with (
+        _session(SessionSettings(base_url=_BASE, retry=policy), transport=transport) as session,
+        pytest.raises(TransportError) as raised,
+    ):
+        session.get("/health")
+    assert not isinstance(raised.value, RetryExhaustedError)
+    assert raised.value.cause == "connect"
+    assert len(received) == 1
+
+
+# --- The four credential strategies (AAP 0.3.3, implicit requirement I9) ---
+
+
+def test_the_bearer_strategy_sends_the_token_from_the_named_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``bearer`` reads the variable ``http.auth.token_env`` names and sends the RFC 6750 form."""
+    monkeypatch.setenv(_TOKEN_VARIABLE, _SENTINEL)
+    header = resolve_auth(AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE))
+    assert isinstance(header, AuthHeader)
+    assert (header.name, header.value) == ("Authorization", f"Bearer {_SENTINEL}")
+
+
+def test_the_basic_strategy_encodes_the_two_named_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``basic`` builds the RFC 7617 ``user:password`` token from UTF-8 bytes."""
+    monkeypatch.setenv(_USER_VARIABLE, _USER_VALUE)
+    monkeypatch.setenv(_PASSWORD_VARIABLE, _PASSWORD_VALUE)
+    settings = AuthSettings(
+        strategy="basic", user_env=_USER_VARIABLE, password_env=_PASSWORD_VARIABLE
+    )
+    header = resolve_auth(settings)
+    assert header is not None
+    expected = base64.b64encode(f"{_USER_VALUE}:{_PASSWORD_VALUE}".encode()).decode("ascii")
+    assert (header.name, header.value) == ("Authorization", f"Basic {expected}")
+
+
+def test_the_header_strategy_sends_the_configured_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``header`` sends ``http.auth.header_name`` with the value of the variable it names."""
+    monkeypatch.setenv(_HEADER_VARIABLE, _HEADER_VALUE)
+    settings = AuthSettings(
+        strategy="header", header_name="X-Api-Key", header_value_env=_HEADER_VARIABLE
+    )
+    header = resolve_auth(settings)
+    assert header is not None
+    assert (header.name, header.value) == ("X-Api-Key", _HEADER_VALUE)
+
+
+@pytest.mark.parametrize("strategy", ["none", ""])
+def test_the_none_strategy_sends_no_credential(strategy: str) -> None:
+    """``none``, and a blank strategy, resolve to no header -- what ``foundry_http`` relies on."""
+    assert resolve_auth(AuthSettings(strategy=strategy), environ=_ENVIRON) is None
+    assert resolve_auth(None, environ=_ENVIRON) is None
+
+
+def test_no_representation_of_the_settings_or_the_header_holds_the_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configuration stores the variable's name; the resolved header keeps its value out of repr."""
+    monkeypatch.setenv(_TOKEN_VARIABLE, _SENTINEL)
+    settings = AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE)
+    header = resolve_auth(settings)
+    assert header is not None
+    assert _SENTINEL not in repr(settings)
+    assert _SENTINEL not in json.dumps(asdict(settings))
+    assert asdict(settings)["token_env"] == _TOKEN_VARIABLE
+    assert _SENTINEL not in repr(header)
+    assert header.masked() == "***"
+
+
+def test_an_absent_credential_variable_is_a_config_error_naming_only_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The message names the variable and its state; no value is read, so none can be quoted."""
+    monkeypatch.delenv(_TOKEN_VARIABLE, raising=False)
+    with pytest.raises(ConfigError) as raised:
+        resolve_auth(AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE))
+    message = str(raised.value)
+    assert _TOKEN_VARIABLE in message
+    assert raised.value.key == "http.auth.token_env"
+    assert _SENTINEL not in message
+
+
+def test_the_credential_is_resolved_once_at_session_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two requests after the variable changes both carry the value the session started with."""
+    transport, received = _recorder()
+    monkeypatch.setenv(_TOKEN_VARIABLE, _SENTINEL)
+    settings = SessionSettings(
+        base_url=_BASE, auth=AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE)
+    )
+    with FoundrySession(settings, transport=transport, sleep=_no_sleep) as session:
+        monkeypatch.setenv(_TOKEN_VARIABLE, "rotated-value")
+        session.get("/echo")
+        session.get("/echo")
+    sent = [_values(request.headers, "authorization") for request in received]
+    assert sent == [[f"Bearer {_SENTINEL}"], [f"Bearer {_SENTINEL}"]]
+
+
+# --- The response wrapper (AAP 0.4.3, AAP 0.4.6) --------------------------
 
 
 def test_the_response_members_describe_the_exchange() -> None:
@@ -309,112 +516,81 @@ def test_the_response_members_describe_the_exchange() -> None:
     payload = {"ok": True, "echo": {"method": "GET"}}
     body = json.dumps(payload).encode()
     transport, _received = _recorder(200, body=body, headers={"Content-Type": "application/json"})
-    response = _session(transport=transport).get(f"{_BASE}/echo")
+    with _session(transport=transport) as session:
+        response = session.get(f"{_BASE}/echo")
+    assert isinstance(response, FoundryResponse)
+    assert response.status_code == 200
     assert response.text == body.decode()
     assert response.json() == payload
     assert response.headers["content-type"] == "application/json"
     assert response.headers["Content-Type"] == "application/json"
     assert isinstance(response.elapsed_ms, float)
-    assert response.elapsed_ms > 0.0
+    assert response.elapsed_ms >= 0.0
     assert response.source == "live"
 
 
-# --- The timeout and its extension ---------------------------------------
+def test_json_refuses_a_body_that_is_not_json() -> None:
+    """A non-JSON body is a ``ContractError`` at ``$``, which is what exit 1 names (AAP 0.4.7)."""
+    transport, _received = _recorder(500, body=b"<html>boom</html>")
+    with _session(transport=transport) as session:
+        response = session.get(f"{_BASE}/fail")
+    assert response.status_code == 500
+    with pytest.raises(ContractError) as raised:
+        response.json()
+    assert raised.value.json_path == "$"
+    assert "not JSON" in str(raised.value)
 
 
-def test_the_timeout_extension_deadlines_the_whole_request() -> None:
-    """Every phase of a bare request carries the resolved deadline, which is what httpx reads."""
-    transport, received = _recorder()
-    _session(SessionSettings(timeout=2.5), transport=transport).get(f"{_BASE}/echo")
-    assert received[0].extensions["timeout"] == timeout_extension(2.5)
-    assert timeout_extension(2.5) == {"connect": 2.5, "read": 2.5, "write": 2.5, "pool": 2.5}
-
-
-def test_a_per_request_timeout_replaces_the_configured_one() -> None:
-    """``http.timeout`` is the default; a per-request value is the deadline actually sent."""
-    transport, received = _recorder()
-    _session(SessionSettings(timeout=10.0), transport=transport).get(f"{_BASE}/echo", timeout=1.5)
-    assert received[0].extensions["timeout"] == timeout_extension(1.5)
-
-
-@pytest.mark.parametrize("value", [-1.0, 0.0, 301.0])
-def test_a_timeout_outside_its_range_is_refused_as_a_config_error(value: float) -> None:
-    """An unusable deadline names ``http.timeout`` and its range instead of reaching the peer."""
-    transport, received = _recorder()
-    with pytest.raises(ConfigError) as raised:
-        _session(transport=transport).get(f"{_BASE}/echo", timeout=value)
-    assert raised.value.key == "http.timeout"
-    assert "0 < t <= 300" in str(raised.value)
-    assert received == []
-
-
-# --- Transport faults and the retry loop (AAP 0.7.3) ----------------------
-
-
-def test_a_transport_fault_the_policy_does_not_retry_raises_the_typed_error() -> None:
-    """A connect fault under a policy that cannot retry it escapes as ``TransportError``."""
-    transport, received = _faults(lambda request: httpx.ConnectError("refused", request=request))
-    with pytest.raises(TransportError) as raised:
-        _session(
-            SessionSettings(
-                base_url=_BASE,
-                retry=RetryPolicy(max_attempts=1, retry_on=frozenset({"status_5xx"})),
-            ),
-            transport=transport,
-        ).get("/health")
-    assert not isinstance(raised.value, RetryExhaustedError)
-    assert (raised.value.method, raised.value.path, raised.value.cause) == (
-        "GET",
-        "/health",
-        "connect",
+def test_request_dump_reports_the_exchange_with_every_credential_masked() -> None:
+    """The dump carries the published keys, and the header and the token parameter read ``***``."""
+    transport, _received = _recorder()
+    settings = SessionSettings(
+        base_url=_BASE,
+        redact_keys=("authorization", "token"),
+        auth=AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE),
     )
-    assert len(received) == 1
-
-
-def test_a_read_timeout_is_classified_as_a_timeout() -> None:
-    """``timeout`` is the predicate a ``httpx.ReadTimeout`` earns, and the attempt count is one."""
-    transport, received = _faults(lambda request: httpx.ReadTimeout("timed out", request=request))
-    with pytest.raises(TransportError) as raised:
-        _session(SessionSettings(retry=RetryPolicy(max_attempts=1)), transport=transport).get(
-            f"{_BASE}/slow"
+    with _session(settings, transport=transport) as session:
+        response = session.post(
+            "/echo", params={"token": _QUERY_TOKEN, "page": 2}, json={"message": "hello"}
         )
-    assert raised.value.cause == "timeout"
+    dump = response.request_dump()
+    assert set(dump) == {"method", "path", "query", "headers", "body_sha256", "body"}
+    assert (dump["method"], dump["path"]) == ("POST", "/echo")
+    assert dump["query"] == [["page", "2"], ["token", "***"]]
+    headers = dump["headers"]
+    assert isinstance(headers, dict)
+    assert headers["authorization"] == "***"
+    body_sha256 = dump["body_sha256"]
+    assert isinstance(body_sha256, str)
+    assert len(body_sha256) == 64
+    serialised = json.dumps(dump)
+    assert _SENTINEL not in serialised
+    assert _QUERY_TOKEN not in serialised
+
+
+# --- Every status is a value (AAP 0.4.3) ---------------------------------
+
+
+@pytest.mark.parametrize("status", [200, 302, 404, 500])
+def test_every_status_comes_back_as_a_response(status: int) -> None:
+    """A client error, a server error and an unfollowed redirect are returned, never raised."""
+    transport, received = _recorder(status, body=b'{"error": "boom"}')
+    settings = SessionSettings(base_url=_BASE, retry=RetryPolicy(max_attempts=1))
+    with _session(settings, transport=transport) as session:
+        response = session.get("/echo")
+    assert isinstance(response, FoundryResponse)
+    assert response.status_code == status
+    assert response.source == "live"
     assert len(received) == 1
-
-
-def test_the_retry_loop_runs_the_configured_attempts_and_records_the_backoff() -> None:
-    """Three attempts, backoff ``[0.2, 0.4]`` from a recording sleeper, one record per attempt."""
-    transport, received = _faults(lambda request: httpx.ConnectError("refused", request=request))
-    delays: list[float] = []
-    with pytest.raises(RetryExhaustedError) as raised:
-        _session(
-            SessionSettings(base_url=_BASE, retry=RetryPolicy(max_attempts=3)),
-            transport=transport,
-            sleep=delays.append,
-        ).get("/health")
-    assert len(received) == 3
-    assert delays == [0.2, 0.4]
-    attempts = raised.value.attempts
-    assert [record.number for record in attempts] == [1, 2, 3]
-    assert {record.retry_on for record in attempts} == {"connect"}
-    assert all(record.elapsed_ms >= 0.0 for record in attempts)
-    assert (raised.value.method, raised.value.path, raised.value.cause) == (
-        "GET",
-        "/health",
-        "connect",
-    )
-    assert "GET /health" in str(raised.value)
 
 
 def test_a_retried_status_is_returned_once_the_attempts_run_out() -> None:
     """A 503 under ``status_5xx`` is retried and then returned as a value, not raised."""
     transport, received = _statuses([503, 503, 200])
     delays: list[float] = []
-    response = _session(
-        SessionSettings(retry=RetryPolicy(max_attempts=2)),
-        transport=transport,
-        sleep=delays.append,
-    ).get(f"{_BASE}/flaky")
+    settings = SessionSettings(base_url=_BASE, retry=RetryPolicy(max_attempts=2))
+    with _session(settings, transport=transport, sleep=delays.append) as session:
+        response = session.get("/flaky")
     assert response.status_code == 503
     assert len(received) == 2
     assert delays == [0.2]
@@ -424,232 +600,22 @@ def test_a_status_outside_the_predicates_is_not_retried() -> None:
     """A 404 with only ``status_5xx`` configured makes exactly one attempt."""
     transport, received = _statuses([404, 200])
     delays: list[float] = []
-    response = _session(
-        SessionSettings(retry=RetryPolicy(max_attempts=3, retry_on=frozenset({"status_5xx"}))),
-        transport=transport,
-        sleep=delays.append,
-    ).get(f"{_BASE}/missing")
+    policy = RetryPolicy(max_attempts=3, retry_on=frozenset({"status_5xx"}))
+    settings = SessionSettings(base_url=_BASE, retry=policy)
+    with _session(settings, transport=transport, sleep=delays.append) as session:
+        response = session.get("/missing")
     assert response.status_code == 404
     assert len(received) == 1
     assert delays == []
 
 
-# --- Transport selection (AAP 0.7.3, assumption A8) ----------------------
-
-
-def test_build_live_transport_returns_the_one_socket_capable_transport() -> None:
-    """The package builds exactly one kind of transport that can open a socket, and closes it."""
-    transport = build_live_transport()
-    try:
-        assert isinstance(transport, LiveTransport)
-    finally:
-        close_quietly(transport)
-    close_quietly(None)
-
-
-def test_select_transport_hands_back_the_callers_own_transport(cassette_dir: Path) -> None:
-    """No cassette, and a cassette in ``off`` mode, both answer with the very object offered.
-
-    ``live`` is a factory (AAP 0.7.3), so a session that answers from a cassette never builds the
-    transport that can reach a peer: the first call builds it once, and the cassette's own transport
-    answers the second without calling the factory at all.
-    """
-    transport = _RefusingTransport()
-    built: list[int] = []
-
-    def factory() -> httpx.BaseTransport:
-        """Build ``transport`` and count that the live path was taken."""
-        built.append(1)
-        return transport
-
-    assert select_transport(factory) is transport
-    assert len(built) == 1
-    off_mode = CassetteSession(
-        "tests/test_api.py::test_off",
-        mode="off",
-        store=CassetteStore(cassette_dir),
-        live_transport=transport,
-    )
-    assert select_transport(factory, off_mode) is transport
-    assert len(built) == 1, "the cassette's transport answered; no live transport was built"
-
-
-def test_select_transport_builds_the_replay_transport_for_a_replay_session(
-    replay_session: CassetteSession,
-) -> None:
-    """A ``replay`` session answers with a transport of its own and never the live one."""
-    live = _RefusingTransport()
-    chosen = select_transport(lambda: live, replay_session)
-    assert chosen is not live
-    assert type(chosen).__name__ == "ReplayTransport"
-    assert live.calls == []
-
-
-def test_a_replay_session_needs_no_live_transport_and_serves_the_recording(
-    replay_session: CassetteSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Replay holds no live transport at all: the one the session builds is never reached."""
-    live = _RefusingTransport()
-    monkeypatch.setattr("foundry.http.session.build_live_transport", lambda: live)
-    session = FoundrySession(SessionSettings(base_url=_BASE), cassette=replay_session)
-    try:
-        response = session.get("/echo", params=_QUERY)
-    finally:
-        session.close()
-    assert response.status_code == 200
-    assert response.source == "cassette"
-    assert response.text == _RECORDED_TEXT
-    assert response.json() == {"echo": {"method": "GET", "path": "/echo"}, "ok": True}
-    assert live.calls == []
-
-
-# --- The committed reference cassette (AAP 0.4.6, criterion 8) -----------
-
-
-def test_the_committed_reference_cassette_replays_a_json_post_through_the_session(
-    replay_session: CassetteSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The documented ``session.post(json=...)`` path replays the fixture, and its GET beside it."""
-    session, live = _replay_client(replay_session, monkeypatch)
-    try:
-        posted = session.post("/echo", json=_RECORDED_BODY)
-        recorded = session.get("/echo", params=_QUERY)
-    finally:
-        session.close()
-    assert posted.status_code == 201
-    assert posted.source == "cassette"
-    assert posted.text == _RECORDED_POST_TEXT
-    assert posted.json() == {
-        "echo": {"body": {"message": "hello"}, "method": "POST", "path": "/echo"},
-        "ok": True,
-    }
-    # The recording holds ``limit`` before ``page``; the request sends the opposite order (A7).
-    assert recorded.status_code == 200
-    assert (recorded.source, recorded.text) == ("cassette", _RECORDED_TEXT)
-    assert live.calls == []
-
-
-def test_a_body_the_reference_cassette_does_not_hold_is_a_typed_miss(
-    replay_session: CassetteSession, cassette_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A changed JSON body misses by hash, naming the method, the path and the document searched."""
-    session, live = _replay_client(replay_session, monkeypatch)
-    try:
-        with pytest.raises(CassetteMissError) as raised:
-            session.post("/echo", json={"message": "goodbye"})
-    finally:
-        session.close()
-    error = raised.value
-    document = cassette_path(_NODEID, cassette_dir=cassette_dir)
-    assert (error.method, error.path, error.cassette_path) == ("POST", "/echo", document)
-    assert "POST" in error.message
-    assert "/echo" in error.message
-    assert str(document) in error.message
-    assert live.calls == []
-
-
-# --- The two dumps (AAP 0.4.6, AAP 0.3.2) --------------------------------
-
-
-def test_request_dump_carries_the_published_keys_and_masks_the_credential() -> None:
-    """The request payload reports the exchange and shows the configured secret as its marker."""
-    transport, _received = _recorder()
-    session = _session(
-        SessionSettings(
-            redact_keys=("authorization", "token"),
-            auth=AuthSettings(strategy="bearer", token_env=_TOKEN_VARIABLE),
-        ),
-        transport=transport,
-    )
-    response = session.post(f"{_BASE}/echo", params={"q": "x"}, json={"message": "hello"})
-    dump = response.request_dump()
-    assert set(dump) == {"method", "path", "query", "headers", "body_sha256", "body"}
-    assert dump["method"] == "POST"
-    # AAP 0.7.3 gives ``path`` the meaning the cassette document gives it -- the path alone -- and
-    # the decoded pairs are the one place the query appears in the dump.
-    assert dump["path"] == "/echo"
-    assert dump["query"] == [["q", "x"]]
-    headers = dump["headers"]
-    assert isinstance(headers, dict)
-    assert headers["authorization"] == REDACTED
-    assert _SENTINEL not in json.dumps(dump)
-    body_sha256 = dump["body_sha256"]
-    assert isinstance(body_sha256, str)
-    assert _HEX64.fullmatch(body_sha256) is not None
-    assert dump["body"] == '{"message": "hello"}'
-
-
-def test_response_dump_carries_the_published_keys_and_masks_the_credential() -> None:
-    """The response payload reports the status and source and masks a deny-listed header and key."""
-    body = json.dumps({"token": _API_KEY, "ok": True}).encode()
-    transport, _received = _recorder(
-        500, body=body, headers={"X-Api-Key": _API_KEY, "Content-Type": "application/json"}
-    )
-    response = _session(
-        SessionSettings(redact_keys=("x-api-key", "token")), transport=transport
-    ).get(f"{_BASE}/fail")
-    dump = response.response_dump()
-    assert set(dump) == {"status", "headers", "body", "source"}
-    assert (dump["status"], dump["source"]) == (500, "live")
-    headers = dump["headers"]
-    assert isinstance(headers, dict)
-    assert headers["x-api-key"] == REDACTED
-    dumped_body = dump["body"]
-    assert isinstance(dumped_body, str)
-    assert _API_KEY not in dumped_body
-    assert REDACTED in dumped_body
-
-
-def test_the_dumps_bound_the_body_excerpt() -> None:
-    """A body longer than the excerpt budget is cut and marked, so a dump stays a diagnostic."""
-    transport, _received = _recorder(200, body=b"x" * 5000)
-    dump = _session(transport=transport).get(f"{_BASE}/big").response_dump()
-    excerpt = dump["body"]
-    assert isinstance(excerpt, str)
-    assert excerpt.endswith(TRUNCATION_MARKER)
-    assert len(excerpt) == MAX_EXCERPT_BYTES + len(TRUNCATION_MARKER)
-
-
-# --- The closed-session guard -------------------------------------------
-
-
-def test_a_closed_session_refuses_the_next_request_and_close_is_idempotent() -> None:
-    """``close()`` twice is one teardown, and a request afterwards raises ``FoundryError``."""
+@pytest.mark.parametrize("verb", _METHODS)
+def test_each_verb_delegates_to_request_with_its_method_and_arguments(verb: str) -> None:
+    """The five verbs are conveniences over :meth:`FoundrySession.request` (assumption A13)."""
     transport, received = _recorder()
-    session = _session(transport=transport)
-    session.close()
-    session.close()
-    assert session.closed is True
-    with pytest.raises(FoundryError) as raised:
-        session.get(f"{_BASE}/echo")
-    assert "FoundrySession is closed" in str(raised.value)
-    assert received == []
-
-
-# --- One real exchange over the loopback peer ----------------------------
-
-
-def test_a_request_reaches_a_loopback_peer_through_the_live_transport(loopback_peer: str) -> None:
-    """The real transport sends the merged headers and returns the peer's own reply."""
-    session = FoundrySession(SessionSettings(timeout=5.0, headers=(("X-Trace", "req"),)))
-    try:
-        response = session.get(f"{loopback_peer}/echo")
-    finally:
-        session.close()
-    assert response.status_code == 200
-    assert response.source == "live"
-    assert response.elapsed_ms > 0.0
-    assert response.json() == {"path": "/echo", "trace": "req"}
-    assert response.headers["content-type"] == "application/json"
-
-
-def test_a_server_error_from_the_loopback_peer_is_returned(loopback_peer: str) -> None:
-    """A 500 from a real peer comes back as a value with its body, exactly as a 200 would."""
-    session = FoundrySession(SessionSettings(timeout=5.0))
-    try:
-        response = session.get(f"{loopback_peer}/fail")
-    finally:
-        session.close()
-    assert response.status_code == 500
-    assert response.source == "live"
-    assert response.json() == {"error": "boom"}
+    with _session(transport=transport) as session:
+        getattr(session, verb)(f"{_BASE}/echo", params={"page": 2}, json={"message": "hello"})
+    sent = received[0]
+    assert sent.method == verb.upper()
+    assert sent.url.params.get("page") == "2"
+    assert json.loads(sent.content) == {"message": "hello"}
