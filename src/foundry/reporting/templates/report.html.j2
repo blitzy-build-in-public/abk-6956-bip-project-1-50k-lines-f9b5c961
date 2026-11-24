@@ -78,7 +78,7 @@
           {% for q in ctx.quarantined %}
           <li>
             <code>{{ q.nodeid }}</code>
-            <span class="outcome outcome-{{ q.outcome }}">{{ q.outcome }}</span>
+            <span class="outcome {{ q.css_class }}">{{ q.outcome }}</span>
             {% if q.note %}
             <p class="note">{{ q.note }}</p>
             {% endif %}

@@ -7,8 +7,9 @@ file. AAP 0.4.7 (the fallback), 0.4.8, 0.7.4, 0.14.1, 0.14.2.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Final
 
@@ -16,7 +17,12 @@ from foundry.core.exceptions import ElementTypeError
 from foundry.core.ids import to_iso8601
 from foundry.obs.events import emit_html_fallback
 from foundry.obs.redaction import Redactor, default_redactor
-from foundry.reporting.assets import DEFAULT_ASSETS, AssetsBundle, assert_self_contained
+from foundry.reporting.assets import (
+    DEFAULT_ASSETS,
+    AssetsBundle,
+    assert_self_contained,
+    contains_external_reference,
+)
 from foundry.reporting.panels import DEFAULT_LOG_TAIL_LINES, FailurePanel, build_panels
 from foundry.reporting.record import (
     OUTCOMES,
@@ -71,10 +77,8 @@ QUARANTINE_REMOVAL_NOTE: Final[str] = (
 """The recommendation rendered beside a ``quarantine_passed`` entry (assumption A11).
 
 Byte-identical to :data:`foundry.reporting.junit.QUARANTINE_PASSED_NOTE`, the same run's JUnit
-``<system-out>`` note, so ``report.html`` and ``junit.xml`` carry one recommendation rather than
-two. The bytes are restated here instead of imported because ``foundry.reporting`` may not import
-``foundry.execution``, which holds the decision's own copy (AAP 0.4.8); a test pins the two
-reporting-side copies equal.
+``<system-out>`` note, so both documents carry one recommendation; the bytes are restated rather
+than imported because ``foundry.reporting`` may not import ``foundry.execution`` (AAP 0.4.8).
 """
 
 _UNKNOWN: Final[str] = "unknown"
@@ -150,11 +154,13 @@ class QuarantinedRow:
     Attributes:
         nodeid: The test's pytest node id, unsanitised.
         outcome: ``quarantined_failed`` or ``quarantine_passed``.
+        css_class: The badge's ``.outcome-<value>`` class, such as ``outcome-quarantine_passed``.
         note: :data:`QUARANTINE_REMOVAL_NOTE` for a marked test that passed, else an empty string.
     """
 
     nodeid: str
     outcome: Outcome
+    css_class: str
     note: str = ""
 
 
@@ -322,14 +328,21 @@ def _quarantined_rows(rows: Sequence[ReportRow]) -> tuple[QuarantinedRow, ...]:
     """Collect the Quarantined section from the run's rows.
 
     The rows are already sorted by node id, so the section inherits that order, and only the two
-    outcomes of :data:`foundry.reporting.record.QUARANTINE_OUTCOMES` are selected.
+    outcomes of :data:`foundry.reporting.record.QUARANTINE_OUTCOMES` are selected. The badge's class
+    is copied from the row's own ``css_class`` rather than composed again, so the table and the
+    Quarantined section share one derivation of the stylesheet's ``.outcome-<value>`` rule.
 
     Returns:
         One :class:`QuarantinedRow` per quarantined result, in node-id order; empty when nothing was
         quarantined, which is what makes the template omit the section altogether.
     """
     return tuple(
-        QuarantinedRow(nodeid=row.nodeid, outcome=row.outcome, note=_removal_note(row.outcome))
+        QuarantinedRow(
+            nodeid=row.nodeid,
+            outcome=row.outcome,
+            css_class=row.css_class,
+            note=_removal_note(row.outcome),
+        )
         for row in rows
         if row.outcome in QUARANTINE_OUTCOMES
     )
@@ -406,12 +419,10 @@ def _partition(records: Sequence[ResultElement]) -> tuple[list[ResultRecord], li
         The result records sorted by node id, and the run errors sorted by worker id and message.
 
     Raises:
-        ElementTypeError: An element is neither a
-            :class:`foundry.reporting.record.ResultRecord` nor a
-            :class:`foundry.reporting.record.RunError`. It subclasses ``TypeError`` and
-            :class:`foundry.core.exceptions.FoundryError`, so a caller catching either documented
-            type still catches it, and a caller defect surfaces instead of being absorbed into a
-            report that would silently omit a test.
+        ElementTypeError: An element is neither a :class:`foundry.reporting.record.ResultRecord`
+            nor a :class:`foundry.reporting.record.RunError`. It subclasses ``TypeError`` and
+            :class:`foundry.core.exceptions.FoundryError`, so a caller defect surfaces instead of
+            being absorbed into a report that would silently omit a test.
     """
     results: list[ResultRecord] = []
     errors: list[RunError] = []
@@ -448,14 +459,12 @@ def build_context(
     performs no I/O of its own: reading the captured log tails is
     :func:`foundry.reporting.panels.build_panels`'s work, and it isolates every fault it meets.
 
-    The element sequence is validated once, here, before any panel is built, so only a result record
-    and a run error ever reach the document and :func:`_partition` performs that check for the whole
-    sequence (AAP 0.14.3).
+    The element sequence is validated once, here, by :func:`_partition`, before any panel is built,
+    so only a result record and a run error reach the document (AAP 0.14.3).
 
-    ``report_dir`` is the directory the document will be written into, and every artifact href in it
-    is relative to that directory. Omitted, the link base is the process working directory -- where
-    the product writes ``report.html`` (assumption A5) -- so a caller rendering a document for any
-    other directory must pass it.
+    ``report_dir`` is the directory the document is written into and every artifact href in it is
+    relative to it. Omitted, the link base is the process working directory -- where the product
+    writes ``report.html`` (assumption A5) -- so a document for another directory must pass it.
 
     Determinism (AAP 0.13.1, criterion 14): the result records are sorted by node id, the run errors
     by worker id and message, the counts follow the outcome declaration order, and every other
@@ -467,9 +476,8 @@ def build_context(
         The context, with every collection sorted and every free-text value redacted.
 
     Raises:
-        ElementTypeError: An element is neither a
-            :class:`foundry.reporting.record.ResultRecord` nor a
-            :class:`foundry.reporting.record.RunError`. It subclasses ``TypeError`` and
+        ElementTypeError: An element is neither a :class:`foundry.reporting.record.ResultRecord`
+            nor a :class:`foundry.reporting.record.RunError`. It subclasses ``TypeError`` and
             :class:`foundry.core.exceptions.FoundryError`, so a caller catching either documented
             type still catches it.
     """
@@ -505,6 +513,41 @@ def build_context(
 
 # --- Rendering --------------------------------------------------------------
 
+_ISOLATION_ERRORS: Final[tuple[type[BaseException], ...]] = (
+    TypeError,
+    ValueError,
+    KeyError,
+    AttributeError,
+    OSError,
+    RecursionError,
+    RuntimeError,
+)
+"""The families a rendering fault raises outside :class:`jinja2.TemplateError`.
+
+AAP 0.1.2 and 0.14.3 make a reporting fault one ``WARNING`` that changes no outcome and no exit
+code, so :func:`_render_document` isolates exactly these -- the set :mod:`foundry.obs.events`
+isolates its own work with -- and not every exception: an interrupt or a ``SystemExit`` is a
+caller's control flow and still propagates.
+"""
+
+_ATTRIBUTE_REFERENCE: Final[re.Pattern[str]] = re.compile(
+    r"""\s(?:href|src)\s*=\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)')""",
+    re.IGNORECASE,
+)
+"""One quoted ``href`` or ``src`` attribute of the rendered document, in either quote style.
+
+Reading attribute values rather than the whole text is what keeps a URL a failure message quotes
+from reading as external: ``autoescape=True`` escapes that message's quotes, so it cannot match
+here, and the leading whitespace keeps a value such as ``data-href`` out.
+"""
+
+_PROTOCOL_RELATIVE_PREFIX: Final[str] = "//"
+"""Prefix of a protocol-relative URL, which fetches from another host under the page's own scheme.
+
+It names no scheme for :func:`foundry.reporting.assets.contains_external_reference` to recognise,
+so the scan checks for this prefix explicitly.
+"""
+
 
 def _search_dirs(source: Path) -> list[str]:
     """Return the template search path: ``source``'s directory first, then the package's.
@@ -518,23 +561,45 @@ def _search_dirs(source: Path) -> list[str]:
     return [str(directory), str(TEMPLATE_DIR)]
 
 
-def _render_document(context: ReportContext, source: Path, redactor: Redactor) -> str | None:
-    """Render ``context`` through ``source``, isolating every template fault into a warning.
+def _first_external_attribute(document: str) -> str | None:
+    """Return the first ``href`` or ``src`` in ``document`` that points outside it, or ``None``.
 
-    Jinja2 and Markup are imported here rather than at module scope, because the library's import
-    cost must not reach the plugin's startup budget (implicit requirement I5). The asset strings are
-    marked because they are module-owned constants and not run data, so the ``<style>`` and
-    ``<script>`` payloads survive whatever the template does with them, while every value that came
-    from a record stays escaped by ``autoescape=True``.
+    Only the attributes the template controls are inspected, so a failure message that legitimately
+    quotes a URL reaches the page escaped and cannot match :data:`_ATTRIBUTE_REFERENCE`.
 
     Returns:
-        The rendered document, or ``None`` when the template is missing or cannot be rendered. The
-        caller then skips ``report.html``, keeps ``results.json`` and writes no ``junit.xml``
-        (AAP 0.4.7); the run's exit code is untouched.
+        The offending value stripped of surrounding whitespace, or ``None`` when every attribute
+        stays inside the document.
+    """
+    for match in _ATTRIBUTE_REFERENCE.finditer(document):
+        value = (match.group("double") or match.group("single") or "").strip()
+        if value.startswith(_PROTOCOL_RELATIVE_PREFIX) or contains_external_reference(value):
+            return value
+    return None
+
+
+def _render_document(context: ReportContext, source: Path, redactor: Redactor) -> str | None:
+    """Render ``context`` through ``source``, isolating every rendering fault into one warning.
+
+    Jinja2 is imported here rather than at module scope, because the library's import cost must not
+    reach the plugin's startup budget (implicit requirement I5). Nothing here marks a value safe:
+    the template's ``safe`` filter keeps the two module-owned asset payloads unescaped, and every
+    record value stays escaped by ``autoescape=True``.
+
+    The finished document is scanned for a ``href`` or ``src`` value that points outside it
+    (AAP 0.4.6, I10), so a template regression that adds an external asset takes the fallback.
+
+    Returns:
+        The rendered document, or ``None`` when the template is missing, cannot be rendered, or
+        points outside itself; the caller then skips ``report.html``, keeps ``results.json``, writes
+        no ``junit.xml`` and leaves the exit code alone (AAP 0.4.7).
     """
     import jinja2
-    from markupsafe import Markup
 
+    # Jinja2's own template faults join the isolated families here, where Jinja2 is in scope, so one
+    # handler carries every rendering fault to the same fallback; the annotation is the shape mypy
+    # --strict accepts for an exception tuple assembled at run time.
+    faults: tuple[type[BaseException], ...] = (jinja2.TemplateError, *_ISOLATION_ERRORS)
     try:
         environment = jinja2.Environment(
             loader=jinja2.FileSystemLoader(_search_dirs(source)),
@@ -544,16 +609,17 @@ def _render_document(context: ReportContext, source: Path, redactor: Redactor) -
             keep_trailing_newline=True,
             undefined=jinja2.StrictUndefined,
         )
-        trusted = replace(
-            context,
-            assets=AssetsBundle(
-                css=Markup(context.assets.css),
-                js=Markup(context.assets.js),
-                version=context.assets.version,
-            ),
-        )
-        return environment.get_template(source.name).render(ctx=trusted)
-    except (jinja2.TemplateError, OSError) as exc:
+        document = environment.get_template(source.name).render(ctx=context)
+        reference = _first_external_attribute(document)
+        if reference is not None:
+            emit_html_fallback(
+                f"report.html not written: rendering {source.name or source} produced the "
+                f"external reference {reference!r}",
+                redactor=redactor,
+            )
+            return None
+        return document
+    except faults as exc:
         emit_html_fallback(
             f"report.html not written: rendering {source.name or source} failed: "
             f"{type(exc).__name__}: {exc}",
@@ -579,28 +645,25 @@ def render(
     The document is returned, never written: ``renderers.py`` hands it to
     :func:`foundry.reporting.store.write_text`, this package's only file writer (AAP 0.4.8).
 
-    The asset bundle is validated before anything is rendered, so a bundle that reaches outside the
-    document raises now rather than shipping a report that cannot open offline; the assertion is
-    deliberately not applied to the finished document, because a failure message may legitimately
-    quote a URL.
+    The asset bundle is validated before anything renders, so a bundle reaching outside the document
+    raises, and the finished document is scanned too, at attribute level (AAP 0.4.6, I10): a quoted
+    URL in a failure message is escaped, so only an ``href`` or ``src`` the template emits matches.
 
-    ``report_dir`` is the directory the document will be written into, and every artifact href in it
-    is relative to that directory; it reaches :func:`build_context` unchanged. Omitted, the link
-    base is the process working directory -- where the product writes ``report.html`` (assumption
-    A5) -- so a caller rendering a document for any other directory must pass it.
+    ``report_dir`` is the directory the document is written into, every artifact href in it is
+    relative to it, and it reaches :func:`build_context` unchanged. Omitted, the link base is the
+    process working directory -- where the product writes ``report.html`` (A5) -- pass it otherwise.
 
     Returns:
-        The rendered document, or ``None`` when the template is missing or cannot be rendered -- in
-        which case the caller writes no ``report.html``, keeps ``results.json``, writes no
-        ``junit.xml``, and leaves the exit code alone (AAP 0.4.7).
+        The rendered document, or ``None`` when the template is missing, cannot be rendered, or
+        pulls in a reference from outside itself -- in which case the caller writes no
+        ``report.html``, keeps ``results.json``, writes no ``junit.xml``, and leaves the exit code
+        alone (AAP 0.4.7).
 
     Raises:
         FoundryError: The asset bundle is not self-contained, which is a programmer error in
             :mod:`foundry.reporting.assets` rather than a fault of the run.
-        ElementTypeError: An element is neither a
-            :class:`foundry.reporting.record.ResultRecord` nor a
-            :class:`foundry.reporting.record.RunError`, which
-            :func:`foundry.reporting.html.build_context` reports before anything is rendered.
+        ElementTypeError: An element is neither a result record nor a run error, which
+            :func:`foundry.reporting.html.build_context` reports before anything renders.
     """
     scrubber = default_redactor() if redactor is None else redactor
     bundle = DEFAULT_ASSETS if assets is None else assets

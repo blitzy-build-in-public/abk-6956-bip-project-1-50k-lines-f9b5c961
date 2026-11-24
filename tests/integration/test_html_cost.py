@@ -449,8 +449,8 @@ def _assert_self_contained(document: str) -> None:
     """Assert the document pulls nothing in from outside itself (criterion 9).
 
     Only asset-bearing attributes are inspected, because a failure message may legitimately quote
-    a URL -- which is why :func:`foundry.reporting.html.render` does not scan the finished
-    document either.
+    a URL. :func:`foundry.reporting.html.render` refuses a document whose attributes point outside
+    it before returning one, so this is the independent whole-document cross-check of that guard.
 
     Args:
         document: The rendered report.
