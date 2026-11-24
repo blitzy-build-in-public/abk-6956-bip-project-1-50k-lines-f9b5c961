@@ -112,6 +112,8 @@ def write_html_report(
     log_lines: int = DEFAULT_LOG_LINES,
     run_id: str | None = None,
     profile: str | None = None,
+    finished_at: str | None = None,
+    artifacts_disabled: bool | None = None,
 ) -> Path | None:
     """Render the HTML report and write it, or report the documented fallback by returning ``None``.
 
@@ -133,6 +135,12 @@ def write_html_report(
         log_lines: How many captured log lines each failure panel carries.
         run_id: The run id to label the report with, or ``None`` to take it from the records.
         profile: The profile to label the report with, on the same terms as ``run_id``.
+        finished_at: The run's finish time to label the report with, ISO 8601 UTC, on the same terms
+            as ``run_id``: the caller that knows it -- ``plugin.py`` -- supplies it for a run whose
+            records carry none (AAP 0.4.6, 0.7.4).
+        artifacts_disabled: The artifact writer's own ``disabled`` flag, supplied by the caller that
+            holds the writer, which turns the failure panels' artifact links into the report's
+            single banner (AAP 0.4.7).
 
     Returns:
         The path written, or ``None`` when nothing was written: the template could not be rendered
@@ -157,6 +165,8 @@ def write_html_report(
         log_lines=log_lines,
         run_id=run_id,
         profile=profile,
+        finished_at=finished_at,
+        artifacts_disabled=artifacts_disabled,
     )
     if document is None:
         return None
@@ -301,6 +311,8 @@ def write_all(
     log_lines: int = DEFAULT_LOG_LINES,
     run_id: str | None = None,
     profile: str | None = None,
+    finished_at: str | None = None,
+    artifacts_disabled: bool | None = None,
     write_json: bool = True,
     write_html: bool = True,
     write_junit: bool = True,
@@ -324,6 +336,11 @@ def write_all(
         log_lines: How many captured log lines each HTML failure panel carries.
         run_id: The run id to label the report with, or ``None`` to take it from the records.
         profile: The profile to label the report with, on the same terms as ``run_id``.
+        finished_at: The run's finish time to label the report with, ISO 8601 UTC, on the same terms
+            as ``run_id`` (AAP 0.4.6, 0.7.4).
+        artifacts_disabled: The artifact writer's own ``disabled`` flag, on the same terms as
+            ``artifacts_root``: the caller that holds the writer supplies it, and it replaces the
+            artifact links with the report's single banner (AAP 0.4.7).
         write_json: Whether to write ``results.json``, from the resolved ``reporting.json``.
         write_html: Whether to write ``report.html``, from the resolved ``reporting.html``.
         write_junit: Whether to write ``junit.xml``, unless the HTML step fell back (AAP 0.4.7).
@@ -351,6 +368,8 @@ def write_all(
             log_lines=log_lines,
             run_id=run_id,
             profile=profile,
+            finished_at=finished_at,
+            artifacts_disabled=artifacts_disabled,
         )
         if html_requested
         else None

@@ -11,7 +11,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>foundry report — {{ ctx.run_id }}</title>
+    <title>{{ ctx.title }} — {{ ctx.run_id }}</title>
     <!--
       Autoescaping is enabled for this whole document, so every value interpolated below -- a node
       id, an outcome, a message, a log line -- is escaped and a node id carrying markup renders as
@@ -22,7 +22,7 @@
   </head>
   <body>
     <header class="report-header">
-      <h1>foundry report</h1>
+      <h1>{{ ctx.title }}</h1>
       <p class="meta">
         <span>run id {{ ctx.run_id }}</span>
         <span>profile={{ ctx.profile }}</span>
@@ -30,14 +30,16 @@
         <span>{{ ctx.total_tests }} tests</span>
       </p>
     </header>
-    <ul class="summary">
-      {% for c in ctx.counts %}
-      <li class="{{ c.css_class }}"><span class="count">{{ c.count }}</span> {{ c.outcome }}</li>
-      {% else %}
-      {# an empty tally renders no chip at all #}
-      {% endfor %}
-    </ul>
     <main>
+      {% if ctx.counts %}
+      <section aria-label="outcome counts">
+        <ul class="summary">
+          {% for c in ctx.counts %}
+          <li class="{{ c.css_class }}"><span class="count">{{ c.count }}</span> {{ c.outcome }}</li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
       {% if ctx.artifacts_disabled %}
       <p class="banner">artifact capture is disabled for this run, so no artifact links are available</p>
       {% endif %}
@@ -61,7 +63,7 @@
         <tbody>
           {% for row in ctx.rows %}
           <tr>
-            <td class="nodeid">{{ row.nodeid }}</td>
+            <th scope="row" class="nodeid">{{ row.nodeid }}</th>
             <td><span class="outcome {{ row.css_class }}">{{ row.outcome_value }}</span></td>
             <td class="num">{{ row.duration_display }}</td>
             <td>{{ row.profile }}</td>
@@ -72,8 +74,8 @@
       </table>
       {% endif %}
       {% if ctx.quarantined %}
-      <section class="quarantined">
-        <h2>Quarantined</h2>
+      <section class="quarantined" aria-labelledby="quarantined-heading">
+        <h2 id="quarantined-heading">Quarantined</h2>
         <ul>
           {% for q in ctx.quarantined %}
           <li>
@@ -124,8 +126,8 @@
       </details>
       {% endfor %}
       {% if ctx.errors %}
-      <section>
-        <h2>Errors</h2>
+      <section aria-labelledby="errors-heading">
+        <h2 id="errors-heading">Errors</h2>
         <ul>
           {% for error in ctx.errors %}
           <li><code>{{ error.worker_id }}</code> {{ error.message }}</li>

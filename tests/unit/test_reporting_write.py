@@ -13,6 +13,9 @@ and ``foundry.reporting.store.write_text`` own:
   ``os.fsdecode`` gives a path with undecodable bytes) must cost that one string rather than every
   document. AAP 0.1.2 and 0.14.3 require a plumbing fault to log at ``WARNING`` on the ``foundry``
   logger and to change neither a test's outcome nor the run's exit code.
+* cr1-f05, cr1-f06 -- the report header's ``finished_at`` and the artifacts-disabled banner are the
+  caller's values, not something the renderer infers: ``write_all`` passes both through to
+  ``report.html`` (AAP 0.4.6, 0.4.7, 0.7.4, 0.13.1).
 * cr1-f01-element-type-boundary -- a writer handed an element that is neither a result record nor a
   run error must raise the published ``ElementTypeError`` rather than a builtin escaping from a
   renderer (AAP 0.14.3), which is the exception ``write_all`` and ``write_html_report`` document.
@@ -119,6 +122,30 @@ def test_the_result_document_is_written_whatever_the_html_switch_is(
     assert (written.html is not None) is write_html
     assert [path.name for path in written.written()] == expected
     assert sorted(path.name for path in tmp_path.iterdir()) == sorted(expected)
+
+
+# --- The caller's report-header signals (AAP 0.4.6, 0.4.7, 0.7.4) ----------
+
+
+def test_the_callers_finish_time_and_banner_flag_reach_the_written_report(tmp_path: Path) -> None:
+    """``write_all`` threads ``finished_at`` and ``artifacts_disabled`` through to ``report.html``.
+
+    Both are values only the caller knows: the session's finish time, which a run with no record has
+    nowhere else to take from, and the artifact writer's own disabled flag, which the report turns
+    into its single banner (AAP 0.4.6, 0.4.7, 0.7.4).
+    """
+    written = renderers.write_all(
+        [],
+        tmp_path,
+        run_id=_RUN_ID,
+        profile=_PROFILE,
+        finished_at="2025-01-02T03:04:05.000+00:00",
+        artifacts_disabled=True,
+    )
+    assert written.html == tmp_path / "report.html"
+    document = written.html.read_text(encoding="utf-8")
+    assert "finished_at=2025-01-02T03:04:05.000+00:00" in document
+    assert 'class="banner"' in document
 
 
 # --- The documented fallback (AAP 0.4.7) -----------------------------------

@@ -93,7 +93,7 @@ touching the filesystem.
 REPORT_DIR: Final[Path] = Path()
 """The report's own directory: the invocation directory, as assumption A5 fixes."""
 
-ROW_CELL: Final[str] = '<td class="nodeid">'
+ROW_CELL: Final[str] = '<th scope="row" class="nodeid">'
 """The template's per-row marker, one per result record inside ``table.results``.
 
 Read out of ``report.html.j2`` rather than guessed: the rows loop emits exactly this cell, so its

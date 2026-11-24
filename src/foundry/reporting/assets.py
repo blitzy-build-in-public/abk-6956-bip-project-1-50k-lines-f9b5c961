@@ -36,14 +36,17 @@ CSS: Final[str] = """\
   --text: #1b1f24;
   --muted: #57606a;
   --accent: #0969da;
-  --passed: #1a7f37;
+  /* Outcome foregrounds: one step darker than their tints alone would allow, because they colour
+     the 12px outcome badges and the 13px summary-chip digits, which must clear WCAG AA 4.5:1
+     against their own tint. Do not lighten them back. */
+  --passed: #116329;
   --failed: #cf222e;
   --error: #a40e26;
-  --skipped: #6e7781;
+  --skipped: #57606a;
   --xfail: #9a6700;
   --xpass: #9a6700;
-  --quarantined: #8250df;
-  --not-run: #6e7781;
+  --quarantined: #6639ba;
+  --not-run: #57606a;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -121,9 +124,12 @@ table.results thead th {
   padding: 8px 10px; position: sticky; text-align: left; top: 0; z-index: 1;
 }
 
-table.results tbody td {
+table.results tbody td,
+table.results tbody th {
   border-bottom: 1px solid var(--border); padding: 8px 10px; vertical-align: top;
 }
+
+table.results tbody th { font-weight: 400; text-align: left; }
 
 table.results tbody tr:hover { background: var(--surface); }
 table.results .num { font-variant-numeric: tabular-nums; text-align: right; }
