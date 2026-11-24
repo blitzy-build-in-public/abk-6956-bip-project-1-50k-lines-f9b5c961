@@ -353,14 +353,15 @@ def from_mapping(raw: Mapping[str, object], *, cwd: Path | None = None) -> CliIn
     spelling that supplied it is recorded beside it, which is what lets
     ``foundry config show --resolved`` report ``cli:--foundry-http.timeout`` (criterion 4).
 
-    A key whose value is a table or a list -- ``http.headers``, ``secrets.redact_keys`` --
-    raises instead of being coerced. No generic option is registered for such a key, because
-    a header table or a list has no faithful single-token form, so the error names the option
-    and the shape the key accepts. It is built by
-    :func:`foundry.config.errors.bad_option_value` rather than
-    :func:`foundry.config.errors.unknown_key`, because the key does exist: it is the option
-    that cannot carry it, and ``bad_option_value``'s hint sends the operator to the file
-    layer that can.
+    A key whose value is a table or a list -- ``http.headers``, ``secrets.redact_keys``,
+    ``http.retries.retry_on`` -- raises instead of being coerced. AAP 0.4.4 registers the
+    generic option for the scalar keys only, so such a key reaches this layer as a dotted key
+    or an unregistered spelling and no parser ever produced a value for it. The error says
+    exactly that rather than quoting the key's value format: an operator told to pass a
+    comma-separated list or a table would supply the form this layer rejects.
+    :func:`foundry.config.errors.option_not_settable` builds it and names the file layer that
+    can carry the key. It is not :func:`foundry.config.errors.unknown_key`, because the key
+    does exist: it is the command line that cannot carry it.
 
     Args:
         raw: The supplied values, keyed by option spelling or by dotted key.
@@ -417,7 +418,7 @@ def from_mapping(raw: Mapping[str, object], *, cwd: Path | None = None) -> CliIn
                 )
             spec = declared
         if not keys.is_scalar(spec):
-            raise errors.bad_option_value(spelling, spec.constraint, key=dotted)
+            raise errors.option_not_settable(spelling, dotted)
         overrides[dotted] = validation.coerce_cli_value(spec, supplied, option=spelling)
         spellings[dotted] = spelling
 

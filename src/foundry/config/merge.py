@@ -175,10 +175,11 @@ def resolve(
         foundry.core.exceptions.ConfigError: For the first fault AAP 0.4.7 makes fatal, each naming
             the key and the layer that supplied it: an explicitly named file that is absent or
             unreadable, an unknown key in the file, the profile table, the environment or the
-            command line, an unparseable environment value, a value outside its accepted range or
-            values, a profile outside the four names, and a configured auth variable the environment
-            does not set. Nothing else leaves this function: a resolution either returns a
-            configuration or raises the one type a caller maps to exit code 2.
+            command line, a file value of a type its key does not declare, an unparseable
+            environment value, a value outside its accepted range or values, a profile outside the
+            four names, and a configured auth variable the environment does not set. Nothing else
+            leaves this function: a resolution either returns a configuration or raises the one
+            type a caller maps to exit code 2.
     """
     cli = cli_layer.EMPTY_CLI_INPUT if cli_overrides is None else cli_overrides
     environment = env.effective_environ(environ)
@@ -188,6 +189,18 @@ def resolve(
     file_payload = files.load_file(discovered)
     if discovered is None:
         _log_no_config_file()
+    # TOML delivers typed values, so the file layer's value *types* are checked here, as its key
+    # names already are in files.load_file: pydantic's lax mode would otherwise turn a boolean in
+    # a numeric slot into a number (AAP 0.4.5).
+    validation.validate_file_values(
+        file_payload.base, layer=errors.LAYER_FILE, detail=file_payload.label
+    )
+    for name in file_payload.profile_names():
+        validation.validate_file_values(
+            file_payload.profiles[name],
+            layer=errors.profile_layer(name),
+            detail=file_payload.label,
+        )
 
     env_payload = env.read_env(environment)
     selected = profiles.select_profile(cli=cli, env=env_payload, base=file_payload.base)
@@ -474,7 +487,7 @@ def _attributed_failure(exc: ValidationError, recorded: Mapping[str, ConfigSourc
     if source is None:
         return unattributed
     return validation.translate_validation_error(
-        exc, layer=source.layer, detail=_note_detail(source)
+        exc, layer=str(source.layer), detail=_note_detail(source)
     )
 
 
@@ -522,7 +535,7 @@ def _refuse_unregistered_keys(recorded: Mapping[str, ConfigSource]) -> None:
         raise errors.unknown_key(
             dotted,
             closest=keys.closest_key(dotted),
-            layer=source.layer,
+            layer=str(source.layer),
             detail=_note_detail(source),
         )
 

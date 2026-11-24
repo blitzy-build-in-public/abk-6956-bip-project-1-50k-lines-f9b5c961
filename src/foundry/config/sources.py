@@ -58,10 +58,11 @@ through, so a rendered label agrees with either spelling.
 class ConfigSource:
     """Where one resolved configuration value came from (AAP 0.4.5, AAP 0.4.9).
 
-    ``layer`` is one of the five spellings AAP 0.4.5 publishes -- ``default``, ``file``,
-    ``env``, ``cli`` or ``profile:<name>``. The profile form carries its name inside the
-    field because that is how the plan spells that layer, and ``detail`` repeats the name so
-    the record describes itself without a lookup.
+    ``layer`` is a :class:`foundry.config.layers.ConfigLayer` carrying one of the five
+    spellings AAP 0.4.5 publishes -- ``default``, ``file``, ``env``, ``cli`` or
+    ``profile:<name>``. The profile form carries its name inside the field because that is
+    how the plan spells that layer, and ``detail`` repeats the name so the record describes
+    itself without a lookup.
 
     ``detail`` names what inside the layer supplied the value: the configuration file's
     path, the environment variable as it was spelled, the ``--foundry-*`` option as it was
@@ -78,12 +79,12 @@ class ConfigSource:
     which layer won a key.
 
     Attributes:
-        layer: The layer the value came from, as one of the five published spellings.
+        layer: The layer the value came from, carrying one of the five published spellings.
         detail: What the layer names the value by, or
             :data:`foundry.config.layers.DEFAULT_DETAIL`.
     """
 
-    layer: str
+    layer: ConfigLayer
     detail: str = DEFAULT_DETAIL
 
     def label(self) -> str:
@@ -100,14 +101,14 @@ class ConfigSource:
             the value came from a field default, and never a trailing separator.
         """
         if self.layer.startswith(_PROFILE_LAYER_PREFIX):
-            return self.layer
+            return str(self.layer)
         try:
             layer = ConfigLayer(self.layer)
         except ValueError:
             # A layer spelled outside the published vocabulary still renders rather than
             # raising: every caller is a renderer -- config show, doctor, the report -- and
             # Foundry's own plumbing never fails a run (AAP 0.1.2 failure isolation).
-            return self.layer
+            return str(self.layer)
         return layer_label(layer, self.detail)
 
     def as_dict(self) -> dict[str, str]:
@@ -133,7 +134,7 @@ class ConfigSource:
         Returns:
             ``True`` when :attr:`layer` is the ``default`` layer.
         """
-        return self.layer == ConfigLayer.DEFAULT.value
+        return self.layer == ConfigLayer.DEFAULT
 
     @classmethod
     def default(cls) -> ConfigSource:
@@ -145,7 +146,7 @@ class ConfigSource:
         Returns:
             The ``default`` record.
         """
-        return cls(layer=ConfigLayer.DEFAULT.value, detail=DEFAULT_DETAIL)
+        return cls(layer=ConfigLayer.DEFAULT, detail=DEFAULT_DETAIL)
 
     @classmethod
     def from_file(cls, path: Path | str) -> ConfigSource:
@@ -162,7 +163,7 @@ class ConfigSource:
         Returns:
             The ``file`` record naming ``path``.
         """
-        return cls(layer=ConfigLayer.FILE.value, detail=str(path))
+        return cls(layer=ConfigLayer.FILE, detail=str(path))
 
     @classmethod
     def from_profile(cls, name: str) -> ConfigSource:
@@ -171,15 +172,18 @@ class ConfigSource:
         A profile overrides the base file it sits in and is overridden by the environment
         and the command line (AAP 0.4.5), so its value must stay distinguishable from a
         base-file value: the name rides in :attr:`layer` as ``profile:<name>``, which is
-        what makes the row read ``profile:ci`` rather than ``file:<path>``.
+        what makes the row read ``profile:ci`` rather than ``file:<path>``. That spelling is
+        an instance of :class:`foundry.config.layers.ConfigLayer` built from the profile
+        layer's own prefix, and a record with no name carries the plain ``profile`` layer.
 
         Args:
             name: The profile whose table supplied the value, for example ``ci``.
 
         Returns:
-            The record whose layer is ``profile:<name>`` and whose detail is ``name``.
+            The record whose layer is a :class:`foundry.config.layers.ConfigLayer` spelling
+            ``profile:<name>`` and whose detail is ``name``.
         """
-        layer = f"{_PROFILE_LAYER_PREFIX}{name}" if name else ConfigLayer.PROFILE.value
+        layer = ConfigLayer(f"{_PROFILE_LAYER_PREFIX}{name}") if name else ConfigLayer.PROFILE
         return cls(layer=layer, detail=name)
 
     @classmethod
@@ -198,7 +202,7 @@ class ConfigSource:
         Returns:
             The ``env`` record naming ``variable``.
         """
-        return cls(layer=ConfigLayer.ENV.value, detail=variable)
+        return cls(layer=ConfigLayer.ENV, detail=variable)
 
     @classmethod
     def from_cli(cls, option: str) -> ConfigSource:
@@ -215,7 +219,7 @@ class ConfigSource:
         Returns:
             The ``cli`` record naming ``option``.
         """
-        return cls(layer=ConfigLayer.CLI.value, detail=option)
+        return cls(layer=ConfigLayer.CLI, detail=option)
 
 
 ConfigSources: TypeAlias = Mapping[str, ConfigSource]

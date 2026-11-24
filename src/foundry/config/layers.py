@@ -104,6 +104,15 @@ class ConfigLayer(StrEnum):
     The five values are part of the published compatibility promise (AAP 0.4.9): a later
     release may add a member, but a rename or removal would change what
     ``foundry config show`` and every recorded source report say.
+
+    A value's layer is one of the five spellings AAP 0.4.5 publishes, and the fifth --
+    ``profile:<name>`` -- carries the selected profile's own name, so no fixed member can
+    hold it. :meth:`_missing_` answers that lookup with an instance of this class that *is*
+    the spelling, which is what lets :attr:`foundry.config.sources.ConfigSource.layer` be
+    typed as this enum while ``config show`` keeps printing ``profile:ci``. An instance is
+    therefore one of the five published spellings -- ``default``, ``file``, ``env`` and
+    ``cli`` as the members above, and the profile-labelled form -- while the member table
+    itself stays the five of AAP 0.4.9.
     """
 
     DEFAULT = "default"
@@ -111,6 +120,42 @@ class ConfigLayer(StrEnum):
     PROFILE = "profile"
     ENV = "env"
     CLI = "cli"
+
+    @classmethod
+    def _missing_(cls, value: object) -> ConfigLayer | None:
+        """Return the instance for a profile-labelled spelling, or ``None`` to refuse it.
+
+        :meth:`enum.Enum.__new__` asks this when a value matches no member, which is exactly
+        the case AAP 0.4.5 describes for a value a ``[profiles.<name>]`` table supplied: its
+        layer is ``profile:<name>`` for whichever name the run selected.
+
+        Args:
+            value: The value a caller looked a member up by.
+
+        Returns:
+            A :class:`ConfigLayer` that is ``profile:<name>`` for a non-empty name, and
+            ``None`` for anything else, so ``profile`` alone, an empty name and a value
+            that is not text still raise the ``ValueError`` the enum itself spells.
+        """
+        if not isinstance(value, str) or not value.startswith(_PROFILE_LABEL_PREFIX):
+            return None
+        if not value[len(_PROFILE_LABEL_PREFIX) :]:
+            return None
+        member = str.__new__(cls, value)
+        object.__setattr__(member, "_name_", value)
+        object.__setattr__(member, "_value_", value)
+        return member
+
+
+_PROFILE_LABEL_PREFIX: Final[str] = f"{ConfigLayer.PROFILE.value}{_LABEL_SEPARATOR}"
+"""The prefix a profile-labelled layer spelling carries its profile's name after.
+
+AAP 0.4.5 spells that layer ``profile:<name>``, so the prefix is the ``PROFILE`` member's own
+value joined by the one label separator this module fixes. It is built here, from the member
+rather than from a second literal, because it is the member's published spelling that
+:meth:`ConfigLayer._missing_` has to recognise, and it is defined after the class because it
+is derived from it.
+"""
 
 
 LAYER_ORDER: Final[tuple[ConfigLayer, ...]] = (

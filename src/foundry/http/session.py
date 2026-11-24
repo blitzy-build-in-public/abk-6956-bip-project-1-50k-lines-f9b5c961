@@ -11,49 +11,38 @@ order AAP 0.7.3 fixes.
    headers -- where a later assignment replaces an earlier one case-insensitively;
 4. the timeout -- the per-request value, else ``http.timeout`` -- checked against ``0 < t <= 300``
    and turned into the request extension :func:`foundry.http.transport.timeout_extension` builds;
-5. the transport, chosen once at construction by :func:`foundry.http.transport.select_transport`;
+5. the transport, chosen once at construction by :func:`foundry.http.transport.select_transport`,
+   which builds the live one only for a session that has no cassette to send on;
 6. the retry loop, :meth:`foundry.http.retries.RetryRunner.execute`;
 7. :func:`foundry.http.response.from_httpx` wrapping the reply that came back.
 
 Every status is a value, never an exception
     ``request()`` raises nothing for a ``3xx``, ``4xx`` or ``5xx``: the reply is a
     :class:`~foundry.http.response.FoundryResponse` and the two dumps it carries describe the
-    exchange. The only escapes are the ones the collaborators define --
-    :class:`~foundry.core.exceptions.TransportError` and
+    exchange. The only escapes are :class:`~foundry.core.exceptions.TransportError` and
     :class:`~foundry.core.exceptions.RetryExhaustedError` from the retry loop,
-    :class:`~foundry.core.exceptions.ConfigError` for a base URL or a timeout that cannot be used
-    (at construction when ``require_base_url`` is set, per request otherwise), and
-    :class:`~foundry.core.exceptions.FoundryError` for a request on a closed session.
+    :class:`~foundry.core.exceptions.ConfigError` for a base URL, a timeout or a request argument
+    this module cannot use -- naming the argument, never its value -- and
+    :class:`~foundry.core.exceptions.FoundryError` for a request on a closed session (AAP 0.14.3).
 
-Why no ``httpx.Client``
-    Four of the client's behaviours are ones Foundry must not have: a cookie jar, redirect
-    following, ``trust_env`` proxy discovery, and a five-second default deadline that would silently
-    override ``http.timeout``. A bare :class:`httpx.Request` sent on a transport has none of them --
-    a ``3xx`` is returned to the caller rather than followed, the configured timeout is the only
-    deadline, and a recorded exchange replays on a transport that never reaches ``httpcore``
-    (AAP 0.3.1, AAP 0.2.1). Do not "upgrade" this class to a client: each of the four would change
-    what a test observes.
+No ``httpx.Client``, and a fresh request per attempt
+    Four client behaviours are ones Foundry must not have: a cookie jar, redirect following,
+    ``trust_env`` proxy discovery, and a five-second default deadline that would silently override
+    ``http.timeout``. A bare :class:`httpx.Request` on a transport has none of them, so a ``3xx`` is
+    returned rather than followed, the configured timeout is the only deadline, and a recorded
+    exchange replays on a transport that never reaches ``httpcore`` (AAP 0.3.1, AAP 0.2.1). Do not
+    "upgrade" this class to a client. The request is built inside the retry loop's ``send``
+    callable, so no attempt re-sends a consumed body and ``record`` captures one interaction each.
 
-A fresh request per attempt
-    :meth:`FoundrySession.request` builds the :class:`httpx.Request` inside the retry loop's
-    ``send`` callable, so no attempt re-sends a body a previous attempt consumed, and ``record``
-    mode captures one cassette interaction per attempt.
-
-Determinism and injectability
+Determinism and layering (AAP 0.4.8, AAP 0.14.3)
     ``elapsed_ms`` is measured with :func:`time.monotonic` only, and every wait goes through the
-    :data:`~foundry.core.types.Sleep` the session was built with, so a test asserts on a backoff
-    instead of paying it (AAP 0.14.3).
-
-Layering and import-time discipline (AAP 0.4.8)
-    ``foundry.core``, ``foundry.obs`` and this package's five siblings; never ``foundry.config``
-    (settings arrive here as plain primitives in :class:`SessionSettings`), ``foundry.reporting``,
-    ``foundry.cli``, ``foundry.plugin`` or ``foundry.execution``. ``httpx`` and the sibling modules
-    are imported at module scope -- nothing on ``foundry.plugin``'s import path reaches this
-    module -- while :class:`~foundry.cassette.modes.CassetteSession` is imported under
-    :data:`typing.TYPE_CHECKING` because it arrives as an argument and is never built here.
-    Importing this module builds no session, opens no socket, reads no environment variable and
-    configures no logger: the environment is read only when a session resolves its credentials, from
-    the mapping the caller injected.
+    injected :data:`~foundry.core.types.Sleep`. ``foundry.core``, ``foundry.obs``, ``httpx`` and
+    this package's five siblings are the whole import surface -- never ``foundry.config`` (settings
+    arrive as plain primitives in :class:`SessionSettings`), ``foundry.reporting``, ``foundry.cli``,
+    ``foundry.plugin`` or ``foundry.execution`` -- and ``CassetteSession`` arrives as an argument
+    imported under :data:`typing.TYPE_CHECKING`. Importing this module builds no session, opens no
+    socket, reads no environment variable and configures no logger; a session reads one only when
+    it resolves its credentials, from the mapping the caller injected.
 """
 
 from __future__ import annotations
@@ -68,7 +57,12 @@ from typing import TYPE_CHECKING, Final, TypeAlias, cast
 import httpx
 
 from foundry.core.exceptions import ConfigError, FoundryError
-from foundry.core.limits import range_fault_message
+from foundry.core.limits import (
+    HTTP_TIMEOUT_DEFAULT,
+    HTTP_TIMEOUT_MAX,
+    HTTP_TIMEOUT_RANGE,
+    range_fault_message,
+)
 from foundry.core.types import Sleep
 from foundry.http.auth import AuthHeader, AuthSettings, header_pairs, resolve_auth
 from foundry.http.response import FoundryResponse, from_httpx
@@ -100,20 +94,22 @@ RequestParams: TypeAlias = Mapping[str, object] | Sequence[tuple[str, object]]
 """The shapes the ``params`` argument accepts: the ones :class:`httpx.Request` accepts.
 
 Declared once so :meth:`FoundrySession.request` and the five verbs publish the same annotation. The
-values are handed to ``httpx`` unchanged -- this module neither sorts nor re-encodes a parameter, so
-a caller's order reaches the peer and the cassette matcher, which is where order-insensitive
-comparison belongs.
+values reach ``httpx`` unchanged -- its own :class:`httpx.QueryParams` is what encodes them -- and
+this module neither sorts nor re-encodes a parameter, so a caller's order reaches the peer and the
+cassette matcher, which is where order-insensitive comparison belongs.
 """
 
-DEFAULT_TIMEOUT: Final[float] = 10.0
+DEFAULT_TIMEOUT: Final[float] = HTTP_TIMEOUT_DEFAULT
 """Default per-request timeout in seconds: the default of ``http.timeout`` (AAP 0.4.5).
 
-A hand-built :class:`SessionSettings` carries it so a session constructed without configuration
-behaves like a suite that configured nothing.
+Defined once in :mod:`foundry.core.limits` -- this package may not read the configuration model
+(AAP 0.4.8) -- and re-published as the value a hand-built :class:`SessionSettings` carries.
 """
 
-MAX_TIMEOUT: Final[float] = 300.0
-"""Largest accepted per-request timeout in seconds: the upper bound of ``http.timeout``."""
+MAX_TIMEOUT: Final[float] = HTTP_TIMEOUT_MAX
+"""Largest accepted per-request timeout in seconds: ``http.timeout``'s upper bound, enforced by
+:func:`_validated_timeout` and defined once in :mod:`foundry.core.limits` beside its default.
+"""
 
 DEFAULT_RETRY_POLICY: Final[RetryPolicy] = RetryPolicy()
 """The default ``http.retries.*`` policy: three attempts, ``0.2`` s growing to ``2.0`` s.
@@ -125,8 +121,8 @@ change the policy another session runs under.
 _TIMEOUT_KEY: Final[str] = "http.timeout"
 """The dotted configuration key every timeout fault this module raises names."""
 
-_TIMEOUT_CONSTRAINT: Final[str] = f"0 < t <= {MAX_TIMEOUT:g}"
-"""The accepted range of ``http.timeout``, spelled as the configuration registry spells it."""
+_TIMEOUT_CONSTRAINT: Final[str] = HTTP_TIMEOUT_RANGE
+"""The accepted range of ``http.timeout``, the constraint text the configuration registry states."""
 
 _HINT_TIMEOUT: Final[str] = (
     "set http.timeout in foundry.toml, in FOUNDRY_HTTP__TIMEOUT, or with --foundry-http.timeout"
@@ -138,6 +134,20 @@ _HINT_CLOSED: Final[str] = (
     "no transport left to send on"
 )
 """The next step a request on a closed session offers."""
+
+_ARGUMENT_FAULTS: Final[tuple[type[BaseException], ...]] = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    httpx.InvalidURL,
+)
+"""The faults a request argument raises inside ``httpx``, refused here as a ``ConfigError``.
+
+``TypeError`` for a method or path that is not a string, refused before ``.upper()`` or ``join_url``
+can coerce it, and for a body the encoder cannot serialise; ``AttributeError`` for a headers or
+params shape it cannot read; ``ValueError`` for a body that refers to itself; ``httpx.InvalidURL``
+for an unparseable target. Nothing else is caught, so a transport fault reaches the retry loop.
+"""
 
 _COMPONENT: Final[str] = "http.session"
 """The component name a plumbing-failure event from this module reports itself under."""
@@ -214,6 +224,14 @@ def _validated_timeout(value: object) -> float:
     if not math.isfinite(number) or not 0.0 < number <= MAX_TIMEOUT:
         raise _timeout_fault(value)
     return number
+
+
+def _argument_fault(name: str, phrase: str, cause: BaseException) -> ConfigError:
+    """Return the fault naming one request argument a caller supplied unusably.
+
+    The value the caller gave never reaches that message (AAP 0.3.2).
+    """
+    return ConfigError(f"request argument {name!r} {phrase}: {type(cause).__name__}")
 
 
 def _cassette_mode_name(cassette: CassetteSession, fallback: str) -> str:
@@ -306,36 +324,29 @@ class FoundrySession:
     """One HTTP session: a configured request pipeline, and the responses it returns.
 
     Built by the ``foundry_http`` and ``foundry_api`` fixtures (AAP 0.4.3), and usable directly by a
-    caller that wants the pipeline without pytest. The pipeline is AAP 0.7.3's, in this order: the
-    closed-session guard, URL resolution against ``http.base_url``, the header merge, the timeout,
-    the transport the cassette mode calls for, the retry loop, and the response wrapper. The module
-    docstring above states what each step owns.
+    caller that wants the pipeline without pytest. The pipeline is AAP 0.7.3's, and the module
+    docstring names each step and everything that escapes a request: a status is always a value, and
+    a caller's unusable argument is a :class:`~foundry.core.exceptions.ConfigError` naming it. A
+    cassette miss is a ``FoundryError`` the loop deliberately does not catch, so it reaches the test
+    as the typed error naming the method, the path and the document (AAP 0.4.7).
 
     A non-2xx response is a value
-        Nothing here inspects ``status_code`` and raises. A ``404``, a ``429``, a ``500`` and an
+        Nothing here inspects ``status_code`` and raises: a ``404``, a ``429``, a ``500`` and an
         unfollowed ``302`` all come back as a
         :class:`~foundry.http.response.FoundryResponse`, and :mod:`foundry.assertions` is what
         turns a status or a body into an assertion failure.
-
-    Only these escape a request
-        :class:`~foundry.core.exceptions.TransportError` and
-        :class:`~foundry.core.exceptions.RetryExhaustedError` from the retry loop,
-        :class:`~foundry.core.exceptions.ConfigError` for an unusable base URL or timeout, and
-        :class:`~foundry.core.exceptions.FoundryError` for a request on a closed session. A cassette
-        miss is a ``FoundryError`` the loop deliberately does not catch, so it reaches the test as
-        the typed error naming the method, the path and the document (AAP 0.4.7).
 
     No client, and nothing a client would add
         There is no cookie jar, no redirect following and no proxy discovery, because no
         ``httpx.Client`` is built: the transport's :meth:`~httpx.BaseTransport.handle_request` is
         called directly (AAP 0.3.1). The session holds no state a request can change, so two
-        identical requests send identical bytes -- which is what lets two runs of a suite replay
-        identically.
+        identical requests send identical bytes -- which is what lets two runs replay identically.
 
     ``close()`` is the whole teardown
         The fixture that owns a session calls :meth:`close` and must not also call the cassette
         session's ``finish()``: this class is the single writer, which is a correctness property of
-        ``record`` mode. :meth:`close` is idempotent and never raises (AAP 0.14.3).
+        ``record`` mode. :meth:`close` is idempotent, never raises, and closes the transport the
+        session actually sent on (AAP 0.14.3).
     """
 
     _settings: SessionSettings
@@ -369,18 +380,18 @@ class FoundrySession:
     ) -> None:
         """Resolve ``settings`` into the collaborators one request runs through.
 
-        Nothing is sent and no socket is opened here beyond what the cassette mode needs to choose a
-        transport: a ``replay`` session loads its cassette, because the transport that serves it is
-        built from that document. Construction happens once per test (``foundry_api`` is function
-        scoped), so it stays free of filesystem and network work.
+        Nothing is sent and no socket is opened here: a cassette session builds the transport its
+        mode calls for, and a live transport is built only when it is the object this session will
+        send on. Construction happens once per test (``foundry_api`` is function scoped), so it
+        stays free of filesystem and network work.
 
         Args:
             settings: The resolved ``http.*`` values, as plain primitives.
             cassette: The test's cassette session, or ``None`` when the run keeps no cassette. It
                 decides which transport a request is sent on and saves the capture at teardown.
             transport: A transport to send on instead of the one this session would build, which is
-                what a test uses to observe the exact request that went out. When it is given, no
-                live transport is built.
+                what a test uses to observe the exact request that went out. When it is given, this
+                session builds no transport at all.
             sleep: The callable that performs a backoff wait, defaulting to :func:`time.sleep`. A
                 test injects a recording fake, so a backoff is asserted rather than paid.
             environ: The environment a credential is read from. ``None`` means the process
@@ -410,12 +421,11 @@ class FoundrySession:
         # carry, so no value ever enters the settings, a dump, a cassette or a log line (I9).
         self._auth = resolve_auth(settings.auth, environ=environ)
         self._cassette = cassette
-        # The transport is chosen once, here, and never per request. A replay's transport comes from
-        # its document and holds no live transport at all, which makes offline replay structural.
+        # The transport is chosen once, here, and never per request. A live transport is built only
+        # when it is the object this session sends on: a cassette session answers with its own, and
+        # a replay's comes from its document, which is what makes offline replay structural.
         self._transport = (
-            transport
-            if transport is not None
-            else select_transport(build_live_transport(), cassette)
+            transport if transport is not None else select_transport(build_live_transport, cassette)
         )
         self._runner = RetryRunner(settings.retry, sleep=sleep, redactor=self._redactor)
         self._closed = False
@@ -462,10 +472,10 @@ class FoundrySession:
         is resolved against ``http.base_url``, which is what lets ``foundry_http`` (no base URL)
         take absolute URLs while ``foundry_api`` takes relative paths.
 
-        ``params`` is handed to :class:`httpx.Request`, which merges it with any query already
-        present in ``path`` and lets the parameters win on a duplicate key. This module does not
-        sort them: the order a caller supplies is the order the peer sees, and order-insensitive
-        comparison belongs to the cassette matcher.
+        ``params`` is handed to :class:`httpx.Request`, which merges it with any query already in
+        ``path`` and lets the parameters win on a duplicate key. This module does not sort them: the
+        order a caller supplies is the order the peer sees, and order-insensitive comparison belongs
+        to the cassette matcher.
 
         Args:
             method: The HTTP method. Any verb is accepted and upper-cased, so
@@ -485,43 +495,56 @@ class FoundrySession:
 
         Raises:
             FoundryError: The session is closed.
-            ConfigError: The path is relative and ``http.base_url`` is unusable, or the effective
-                timeout is outside its range.
+            ConfigError: An argument this session cannot use -- the method, the path, the headers,
+                the params or the json body -- the path is relative and ``http.base_url`` is
+                unusable, or the effective timeout is outside its range.
             TransportError: A transport fault the retry policy does not retry.
             RetryExhaustedError: Every attempt failed with a fault the policy does retry.
         """
         # 1. A closed session has no transport left and no cassette left to save.
         if self._closed:
             raise FoundryError("FoundrySession is closed", hint=_HINT_CLOSED)
+        # 2. through 4. Each caller-supplied value is checked and coerced under its own guard, so a
+        #    fault it raises leaves as the ConfigError naming that argument (AAP 0.14.3).
+        if not isinstance(method, str):
+            raise _argument_fault("method", "cannot be used as an HTTP method", TypeError())
+        if not isinstance(path, str):
+            raise _argument_fault("path", "cannot be used as a request target", TypeError())
         verb = method.upper()
-        # 2. Resolve the target: an absolute URL passes through after its scheme is validated, and a
-        #    relative path is joined onto http.base_url or refused naming that key.
-        url = join_url(self._base_url, path)
-        # 3. Merge the headers with the later assignment winning: http.headers, then the strategy's
-        #    pair, then the caller's. httpx.Headers replaces a repeated name case-insensitively and
-        #    keeps that name's original position, so the merge is fully deterministic.
-        merged_headers = self._merged_headers(headers)
-        # 4. Resolve the deadline -- the per-request value, else http.timeout -- and refuse one
-        #    outside the published range. The extension below is mandatory: a bare httpx.Request
-        #    carries no deadline, so an unresponsive peer would hang the run rather than fail it.
+        try:
+            url = httpx.URL(join_url(self._base_url, path))
+        except _ARGUMENT_FAULTS as exc:
+            raise _argument_fault("path", "cannot be used as a request target", exc) from None
+        try:
+            merged_headers = self._merged_headers(headers)
+        except _ARGUMENT_FAULTS as exc:
+            raise _argument_fault("headers", "cannot be used as request headers", exc) from None
+        # ``params`` is encoded here, so a shape httpx cannot read is named as ``params``.
+        try:
+            query_params = (
+                None if params is None else httpx.QueryParams(cast("QueryParamTypes", params))
+            )
+        except _ARGUMENT_FAULTS as exc:
+            raise _argument_fault("params", "cannot be encoded as query parameters", exc) from None
+        # The deadline is mandatory -- a bare httpx.Request carries no deadline at all.
         effective_timeout = _validated_timeout(
             self._settings.timeout if timeout is None else timeout
         )
-        # ``params`` is declared exactly as AAP 0.4.3 publishes it rather than as httpx's private
-        # alias, and this module reinterprets no value; the cast states the contract to the checker.
-        query_params = cast("QueryParamTypes", params)
         sent: list[httpx.Request] = []
 
         def send() -> httpx.Response:
             """Build one attempt's request and send it on the session's transport."""
-            attempt = httpx.Request(
-                method=verb,
-                url=url,
-                params=query_params,
-                headers=merged_headers,
-                json=json,
-                extensions={"timeout": timeout_extension(effective_timeout)},
-            )
+            try:
+                attempt = httpx.Request(
+                    method=verb,
+                    url=url,
+                    params=query_params,
+                    headers=merged_headers,
+                    json=json,
+                    extensions={"timeout": timeout_extension(effective_timeout)},
+                )
+            except _ARGUMENT_FAULTS as exc:
+                raise _argument_fault("json", "cannot be serialised", exc) from None
             sent.append(attempt)
             return self._transport.handle_request(attempt)
 
@@ -612,9 +635,9 @@ class FoundrySession:
 
         A transport that fails to close and a cassette that fails to save are both reported as one
         ``WARNING`` on the ``foundry`` logger, and neither changes a test's outcome or the run's
-        exit code (AAP 0.1.2, AAP 0.14.3). A replay session's transport is the cassette's own,
-        whose ``close`` closes only the fallback it may hold; the live transport built for the mode
-        selection is unreferenced in a replay and holds no socket, so nothing is left open.
+        exit code (AAP 0.1.2, AAP 0.14.3). What it closes is the transport this session sent on --
+        a cassette's own in every cassette mode, and the live transport this session built only
+        when it had no cassette to send on -- so none is left behind for a caller to close.
 
         Calling this a second time does nothing.
         """

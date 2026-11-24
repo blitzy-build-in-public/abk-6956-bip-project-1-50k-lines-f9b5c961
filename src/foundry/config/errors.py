@@ -52,6 +52,7 @@ __all__: Final[tuple[str, ...]] = (
     "MISSING_FILE_TEMPLATE",
     "MISSING_REQUIRED_TEMPLATE",
     "MISSING_SECRET_TEMPLATE",
+    "OPTION_NOT_SETTABLE_TEMPLATE",
     "PROFILE_INVALID_TEMPLATE",
     "PROFILE_LAYER_PREFIX",
     "PROFILE_OVERRIDE_TEMPLATE",
@@ -59,6 +60,7 @@ __all__: Final[tuple[str, ...]] = (
     "RECORD_AND_REPLAY_TEMPLATE",
     "UNKNOWN_KEY_HINT_TEMPLATE",
     "UNKNOWN_KEY_TEMPLATE",
+    "UNKNOWN_VARIABLE_TEMPLATE",
     "UNREADABLE_FILE_TEMPLATE",
     "VALIDATION_OK_TEMPLATE",
     "bad_env_value",
@@ -73,12 +75,14 @@ __all__: Final[tuple[str, ...]] = (
     "missing_file",
     "missing_required_for",
     "missing_secret_variable",
+    "option_not_settable",
     "profile_invalid",
     "profile_layer",
     "profile_override_attempt",
     "range_violation",
     "success_message",
     "unknown_key",
+    "unknown_variable",
     "unreadable_file",
 )
 
@@ -174,6 +178,13 @@ UNKNOWN_KEY_TEMPLATE: Final[str] = "unknown configuration key: {key}"
 UNKNOWN_KEY_HINT_TEMPLATE: Final[str] = "did you mean '{closest}'?"
 """The suggestion half of an unknown-key hint, carrying ``difflib``'s nearest key."""
 
+UNKNOWN_VARIABLE_TEMPLATE: Final[str] = "unknown configuration variable: {variable}"
+"""A ``FOUNDRY_*`` name that spells no key at all, such as the bare ``FOUNDRY_``.
+
+AAP 0.4.5 encodes a key as the ``FOUNDRY_`` prefix followed by its segments, so such a name
+leaves :func:`unknown_key` an empty key; the variable itself is named instead.
+"""
+
 RANGE_TEMPLATE: Final[str] = RANGE_FAULT_TEMPLATE
 """AAP 0.4.5 worked case: ``http.timeout = -1`` reports the key and its range.
 
@@ -199,6 +210,12 @@ ENV_NOT_SUPPORTED_TEMPLATE: Final[str] = (
     "environment variable {variable} cannot set {key}: a table has no single-variable form"
 )
 """A mapping-kind key such as ``http.headers`` attempted through the environment."""
+
+OPTION_NOT_SETTABLE_TEMPLATE: Final[str] = (
+    "invalid value for option {option}: {key} is not settable from the command line; "
+    "set it in foundry.toml"
+)
+"""A list- or table-valued key named on the command line; the file layer carries all three."""
 
 MISSING_SECRET_TEMPLATE: Final[str] = "required environment variable is not set: {variable}"
 """AAP 0.4.5: an absent secret variable is named alone, never with a value."""
@@ -363,6 +380,30 @@ def unknown_key(key: str, *, closest: str | None, layer: str, detail: str) -> Co
     )
 
 
+def unknown_variable(variable: str) -> ConfigError:
+    """Build the error for an environment variable whose name spells no key at all.
+
+    AAP 0.4.5 encodes a key as the ``FOUNDRY_`` prefix followed by its ``__``-joined
+    segments, so the bare ``FOUNDRY_`` leaves :func:`unknown_key` an empty key to report and
+    a message ending after its colon. This builder names the variable the environment held,
+    and its hint states the encoding, because an empty key-part gives ``difflib`` nothing to
+    match. Only the name is taken, so no credential can reach this message (requirement I9).
+
+    Args:
+        variable: The variable's name as the environment held it, for example ``FOUNDRY_``.
+
+    Returns:
+        A :class:`ConfigError` carrying the ``env`` layer and no key, because none was
+        spelled.
+    """
+    return ConfigError(
+        UNKNOWN_VARIABLE_TEMPLATE.format(variable=variable),
+        layer=LAYER_ENV,
+        hint="A configuration variable names a key after the FOUNDRY_ prefix, for example "
+        "FOUNDRY_HTTP__TIMEOUT",
+    )
+
+
 def range_violation(
     key: str,
     value: str,
@@ -469,6 +510,31 @@ def env_key_unsupported(variable: str, key: str) -> ConfigError:
         key=key,
         layer=LAYER_ENV,
         hint=f"Set {key} in the configuration file instead",
+    )
+
+
+def option_not_settable(option: str, key: str) -> ConfigError:
+    """Build the error for a list- or table-valued key named on the command line.
+
+    AAP 0.4.4 registers ``--foundry-<dotted.key>`` for the scalar keys only, so the three
+    non-scalar keys of AAP 0.4.5 arrive as a dotted key or an unregistered spelling, and AAP
+    0.4.5's value-format text would invite the very form this layer rejects. The message
+    therefore states the refusal and names the layer that can carry the key: the file.
+
+    Args:
+        option: The option's spelling, already carrying its leading ``--`` as
+            :func:`cli_detail` renders it.
+        key: The dotted key the option would set.
+
+    Returns:
+        A :class:`ConfigError` carrying the key, the ``cli`` layer and the option as its
+        layer note.
+    """
+    return ConfigError(
+        OPTION_NOT_SETTABLE_TEMPLATE.format(option=option, key=key),
+        key=key,
+        layer=LAYER_CLI,
+        hint=_layer_note(LAYER_CLI, option),
     )
 
 

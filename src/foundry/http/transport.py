@@ -25,9 +25,10 @@ The mode policy lives in :mod:`foundry.cassette.modes`, not here
     :class:`~foundry.cassette.transport.RecordingTransport` in ``record``, a
     :class:`~foundry.cassette.transport.ReplayTransport` in ``replay``, and a replay with a live
     fallback in ``passthrough`` (AAP 0.7.3) -- and writes the capture at teardown. This module only
-    decides *whether* a session's transport is used at all (:func:`select_transport`), so the mode
-    table exists once. Branching on a mode name here, or accepting one as an argument, would be a
-    second copy of that policy that could disagree with the first.
+    decides *whether* a session's transport is used at all (:func:`select_transport`), by taking the
+    live transport as a factory and calling it in the branch that needs it, so the mode table exists
+    once. Branching on a mode name here, or accepting one as an argument, would be a second copy of
+    that policy that could disagree with the first.
 
 Redirects are never followed (AAP 0.3.1)
     A request is issued by calling :meth:`httpx.BaseTransport.handle_request`, and
@@ -54,6 +55,7 @@ Closing never changes a test's outcome (AAP 0.1.2, AAP 0.14.3)
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -202,11 +204,11 @@ class LiveTransport(httpx.BaseTransport):
 def build_live_transport(*, verify: bool = DEFAULT_VERIFY) -> httpx.BaseTransport:
     """Return a fresh live transport for a session that may reach a peer.
 
-    The annotation is :class:`httpx.BaseTransport` on purpose. This object is handed to
-    :func:`select_transport`, which may answer with a cassette transport instead, so a caller that
-    depended on the concrete :class:`LiveTransport` would break the moment the cassettes in use
-    changed. One transport per session, closed by the fixture that built it through
-    :func:`close_quietly`.
+    The annotation is :class:`httpx.BaseTransport` on purpose: this is what :func:`select_transport`
+    answers with for a session that has no cassette to send on, so a caller that depended on the
+    concrete :class:`LiveTransport` would break the moment the cassettes in use changed. One live
+    transport per session at most, and it is the object the session sends requests on, so that
+    session's ``close`` releases it through :func:`close_quietly`.
 
     Args:
         verify: Whether the peer's certificate is verified; :data:`DEFAULT_VERIFY` unless a caller
@@ -220,29 +222,32 @@ def build_live_transport(*, verify: bool = DEFAULT_VERIFY) -> httpx.BaseTranspor
 
 
 def select_transport(
-    live: httpx.BaseTransport, cassette: CassetteSession | None = None
+    live: Callable[[], httpx.BaseTransport], cassette: CassetteSession | None = None
 ) -> httpx.BaseTransport:
     """Return the transport a request is sent on: the live one, or the cassette's.
 
     The whole of this module's part in record/replay: a session is asked for the transport its mode
     calls for and nothing here looks at the mode (AAP 0.7.3). The mode table, the capture sink and
     the save at teardown all stay in :mod:`foundry.cassette.modes`, so there is one copy of that
-    policy.
+    policy. ``live`` is a factory rather than an object because the transport that can reach a peer
+    is built only when it is the object a request is sent on: a session that sends on a cassette
+    never builds one, so it holds nothing it would have to close.
 
     Args:
-        live: The transport :func:`build_live_transport` returned. It is handed back unchanged when
-            no session is given, and it is the very object a session in ``off`` mode answers with.
+        live: Builds the transport that can reach a peer -- :func:`build_live_transport` at the one
+            call site. It is called only when ``cassette`` is ``None``, and the object it returns is
+            the very one such a session sends requests on.
         cassette: The test's cassette session, or ``None`` when the run keeps no cassette. Its
             :meth:`~foundry.cassette.modes.CassetteSession.transport` answers which transport its
             mode calls for, building it on first use.
 
     Returns:
-        ``live`` itself when ``cassette`` is ``None``; otherwise the transport that session's mode
-        calls for -- the caller's own object in ``off``, a recording wrapper in ``record``, and a
-        replay in ``replay`` and ``passthrough``. No second live transport is ever built here.
+        ``live()`` when ``cassette`` is ``None``; otherwise the transport that session's mode calls
+        for -- the caller's own object in ``off``, a recording wrapper in ``record``, and a replay
+        in ``replay`` and ``passthrough``. No live transport is ever built for a cassette here.
     """
     if cassette is None:
-        return live
+        return live()
     return cassette.transport()
 
 

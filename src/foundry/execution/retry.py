@@ -62,7 +62,13 @@ from dataclasses import dataclass
 from typing import Final
 
 from foundry.core.exceptions import ConfigError
-from foundry.core.limits import range_fault_message
+from foundry.core.limits import (
+    EXECUTION_RETRIES_DEFAULT,
+    EXECUTION_RETRIES_MAX,
+    EXECUTION_RETRIES_MIN,
+    EXECUTION_RETRIES_RANGE,
+    range_fault_message,
+)
 from foundry.core.types import Phase
 from foundry.execution.state import AttemptPayload
 from foundry.http.retries import classify
@@ -87,21 +93,20 @@ __all__: Final[tuple[str, ...]] = (
 RETRIES_KEY: Final[str] = "execution.retries"
 """The dotted configuration key this module implements, and the key a fault names (AAP 0.4.5)."""
 
-MIN_RETRIES: Final[int] = 0
+MIN_RETRIES: Final[int] = EXECUTION_RETRIES_MIN
 """Smallest accepted ``execution.retries``: the test runs once and is not repeated."""
 
-MAX_RETRIES: Final[int] = 10
+MAX_RETRIES: Final[int] = EXECUTION_RETRIES_MAX
 """Largest accepted ``execution.retries``: ten repeats after the first attempt, eleven attempts."""
 
-RETRIES_RANGE_TEXT: Final[str] = f"{MIN_RETRIES}..{MAX_RETRIES}"
+RETRIES_RANGE_TEXT: Final[str] = EXECUTION_RETRIES_RANGE
 """The accepted range as every message states it: ``0..10``.
 
-The same numbers are published by :class:`foundry.config.keys.KeySpec` -- as the constraint text of
-``execution.retries`` -- and by the field bounds of the resolved configuration model, which keeps
-them private. ``foundry.execution`` may import ``foundry.config`` (AAP 0.4.8), but neither a string
-from the key registry nor a private module constant is a usable bound, so the two numbers are
-restated here and the constraint text is recomposed from them rather than quoted, giving one
-sentence that cannot disagree with itself.
+Both numbers are defined once in :mod:`foundry.core.limits`, which ``foundry.execution`` may import
+(AAP 0.4.8) and whose constants are usable as bounds; this module re-publishes them, and the range
+text with them, under the names its callers use. ``tests/unit/test_config_constants.py`` pins all
+three against the constraint text the key registry publishes for ``execution.retries``, so a copy
+cannot drift from the published surface AAP 0.4.9 fixes.
 """
 
 RETRYABLE_PHASES: Final[tuple[Phase, ...]] = ("call",)
@@ -167,7 +172,7 @@ class ExecutionRetries:
             the test runs once and a failure is final.
     """
 
-    repeats: int = 0
+    repeats: int = EXECUTION_RETRIES_DEFAULT
 
     def __post_init__(self) -> None:
         """Validate ``repeats`` against AAP 0.4.5, so no instance holds a value outside ``0..10``.

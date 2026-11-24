@@ -24,8 +24,9 @@ Two readers share one set of rules. :func:`read_env` is the merge path: it carri
 variable spelling per key and every message AAP 0.4.5 pins, because the wording lives in
 :mod:`foundry.config.errors` and the coercion in :mod:`foundry.config.validation`. A table
 such as ``http.headers`` is refused, an unrecognised ``FOUNDRY_*`` name is reported as an
-unknown key with its nearest registered spelling, and ``FOUNDRY_CONFIG`` is skipped
-because it selects a configuration file rather than setting a key.
+unknown key with its nearest registered spelling, a name carrying no key after the prefix
+is reported as an unknown variable, and ``FOUNDRY_CONFIG`` is skipped because it selects a
+configuration file rather than setting a key.
 :func:`payload_from_source` is the cross-check: it runs the
 :mod:`pydantic_settings` source machinery over the same mapping -- which is what proves
 the prefix, the ``__`` nesting and the case folding come from the library rather than from
@@ -514,6 +515,12 @@ def _unknown_variable(spelling: str, folded_name: str) -> ConfigError:
     was spelling, the hint carries the closest registered key and the variable itself, and
     nothing about the value is quoted.
 
+    A name that spells no key at all -- the bare ``FOUNDRY_`` -- leaves that message's key
+    slot empty, so it would read "unknown configuration key: " and name the variable only in
+    its hint. Such a name is answered by
+    :func:`foundry.config.errors.unknown_variable` instead, which names what the environment
+    actually held.
+
     Args:
         spelling: The variable's name as the environment held it.
         folded_name: The same name upper-cased, from which the intended key is derived.
@@ -522,6 +529,8 @@ def _unknown_variable(spelling: str, folded_name: str) -> ConfigError:
         The :class:`foundry.core.exceptions.ConfigError` the caller raises.
     """
     intended = _intended_key(folded_name)
+    if not intended:
+        return errors.unknown_variable(spelling)
     return errors.unknown_key(
         intended,
         closest=keys.closest_key(intended),

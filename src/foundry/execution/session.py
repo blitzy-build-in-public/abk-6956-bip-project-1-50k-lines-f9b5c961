@@ -72,8 +72,8 @@ if TYPE_CHECKING:
 __all__: Final[tuple[str, ...]] = (
     "FAILURE_EXIT_CODE",
     "PYTEST_PASSTHROUGH_EXIT_CODES",
-    "SUCCESS_EXIT_CODE",
     "PhaseReport",
+    "SUCCESS_EXIT_CODE",
     "SessionState",
     "assemble_payload",
     "bootstrap_session",

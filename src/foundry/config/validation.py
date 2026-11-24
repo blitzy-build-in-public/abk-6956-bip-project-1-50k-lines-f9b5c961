@@ -1,37 +1,32 @@
 """Unknown-key rejection, value coercion and error translation for the configuration layer.
 
-:mod:`foundry.config` resolves one configuration through four layers -- defaults, the file,
-the ``FOUNDRY_*`` environment and the ``--foundry-*`` command line -- and each layer hands
-this module two jobs for its payload (AAP 0.4.5): reject a key the registry does not declare,
-naming the closest valid spelling, and turn the layer's own text into the value its
-:class:`~foundry.config.keys.KeySpec` declares, naming the variable or option when the text
-cannot be read. :func:`translate_validation_error` closes the loop by turning the first
-failure of a :class:`pydantic.ValidationError` into the one
-:class:`~foundry.core.exceptions.ConfigError` a person meets, because pydantic's message, its
-documentation URL and its echoed input are not the wording AAP 0.4.5 pins and can show a value
-nobody should read.
+:mod:`foundry.config` resolves one configuration through four layers -- defaults, the file, the
+``FOUNDRY_*`` environment and the ``--foundry-*`` command line -- and each layer hands this module
+two jobs for its payload (AAP 0.4.5): reject a key the registry does not declare, naming the
+closest valid spelling, and turn the layer's own text into the value its
+:class:`~foundry.config.keys.KeySpec` declares. The file layer, whose values arrive typed rather
+than as text, is also checked by :func:`validate_file_values`, so a value -- or a list member -- of
+a Python type its key does not declare is never coerced. :func:`translate_validation_error` closes
+the loop by turning the first failure of a :class:`pydantic.ValidationError` into the one
+:class:`~foundry.core.exceptions.ConfigError` a person meets, never pydantic's own wording.
 
 **Ordering requirement.** Every layer calls :func:`validate_unknown_keys` -- or its payload
 wrapper, :func:`validate_payload_shape` -- on its *flat* dotted payload **before**
-:class:`~foundry.config.models.FoundryConfig` is constructed. ``extra="forbid"`` rejects an
-unknown constructor key too, but only as a pydantic error carrying no closest-key suggestion,
-and the environment and command-line layers arrive already flattened, so this registry check
-is what makes AAP 0.4.5's rejection message possible at every layer.
+:class:`~foundry.config.models.FoundryConfig` is constructed: ``extra="forbid"`` rejects an
+unknown constructor key only as a pydantic error carrying no closest-key suggestion, so this
+registry check is what makes AAP 0.4.5's rejection message possible at every layer.
 
-**Every message belongs to :mod:`foundry.config.errors`.** Nothing here composes prose: it
-chooses the builder and supplies the arguments, so the texts AAP 0.4.5 pins read the same from
-the plugin, the command line and ``foundry doctor``. **No value that could be a credential
-reaches a message**: the configuration stores the *name* of the variable holding a credential,
-never its value (implicit requirement I9), and the one value rendered here is a scalar passed
-through :mod:`foundry.obs.redaction`, the single redaction engine (AAP 0.3.2): a table or a
-sequence is described rather than printed, and nothing the scalar carries -- URL userinfo, a
-deny-listed query parameter, a credential-shaped or ``name=value`` secret -- is printed.
+**Every message belongs to :mod:`foundry.config.errors`.** Nothing here composes prose: it chooses
+the builder and supplies the arguments, so the texts AAP 0.4.5 pins read alike at every surface.
+**No value that could be a credential reaches a message**: the configuration stores the *name* of
+the variable holding a credential, never its value (I9), and every value rendered here -- a scalar,
+or the one member a rejected list is faulted for -- passes through :mod:`foundry.obs.redaction`,
+the single engine (AAP 0.3.2).
 
 The module performs no I/O, reads no environment variable (the mapping is always passed in),
-configures no logger and holds no mutable state. It imports :mod:`pydantic` at module scope,
-which is safe because nothing on the plugin startup path imports *this* module: the
-configuration modules are imported by it and never import it in return, which keeps
-``import foundry.config.keys`` inside the 150 ms startup budget (AAP 0.14.2, I5).
+configures no logger and holds no mutable state. It imports :mod:`pydantic` at module scope, which
+is safe because nothing on the plugin startup path imports it, so ``import foundry.config.keys``
+stays inside the 150 ms startup budget (AAP 0.14.2, I5).
 """
 
 from __future__ import annotations
@@ -68,6 +63,7 @@ __all__ = [
     "parse_env_value",
     "success_message",
     "translate_validation_error",
+    "validate_file_values",
     "validate_payload_shape",
     "validate_unknown_keys",
 ]
@@ -84,8 +80,8 @@ BOOL_FALSE: Final[frozenset[str]] = frozenset({"false", "0", "no", "off"})
 CLI_BOOL_WORDS: Final[frozenset[str]] = frozenset({"true", "false"})
 """The two words a ``--foundry-*`` option accepts for a boolean (AAP 0.4.4).
 
-Narrower than the environment form on purpose: AAP 0.4.4 names exactly ``true`` and
-``false`` for the generic option, so ``--foundry-data.schema_strict 1`` is rejected while
+Narrower than the environment form on purpose: AAP 0.4.4 names exactly ``true`` and ``false``
+for the generic option, so ``--foundry-data.schema_strict 1`` is rejected while
 ``FOUNDRY_DATA__SCHEMA_STRICT=1`` is accepted.
 """
 
@@ -93,17 +89,17 @@ _ENV_BOOL_WORDS: Final[frozenset[str]] = BOOL_TRUE | BOOL_FALSE
 """Every word an environment variable may spell a boolean with."""
 
 _UNATTRIBUTED_LAYER: Final[str] = "resolved"
-"""Layer label used when a caller cannot say which layer supplied a rejected value.
-
-``resolved`` says what is known -- the value came from the merged configuration -- rather
-than inventing one of the four layers.
-"""
+"""Layer label used when no caller can say which layer supplied a rejected value: ``resolved``
+says what is known -- the value came from the merged configuration -- not a guessed layer."""
 
 _NO_KEY: Final[str] = "configuration"
 """Key named when a rejected value belongs to no single registered key."""
 
 _DOCUMENTED_VALUE: Final[str] = "the documented value"
 """Accepted-value text used when a rejected key is not in the registry."""
+
+_STRING_VALUE: Final[str] = "a string value"
+"""Accepted-value text used when a rejected key is an entry of a mapping-kind table."""
 
 _TABLE_VALUE: Final[str] = "(a table)"
 """What a message shows in place of a rejected table, whose entries may hold credentials."""
@@ -113,6 +109,12 @@ _SEQUENCE_VALUE: Final[str] = "(a list)"
 
 _EMPTY_VALUE: Final[str] = "(no value)"
 """What a message shows in place of a rejected ``None``."""
+
+_EMPTY_PATH_VALUE: Final[str] = "(an empty path)"
+"""What a message shows in place of a path value that is empty or only whitespace."""
+
+_INT_FAULT_TYPES: Final[frozenset[str]] = frozenset({"int_from_float", "int_parsing"})
+"""The pydantic error types reporting a value that is not a whole number for an ``int`` key."""
 
 _UNRENDERABLE_VALUE: Final[str] = "(a value of an unsupported type)"
 """What a message shows in place of a value of any other type."""
@@ -133,8 +135,8 @@ _BOUNDS_LIMIT_RE: Final[re.Pattern[str]] = re.compile(r"^(\d+(?:\.\d+)?) < t <= 
 def accepted_range(spec: KeySpec) -> str:
     """Return the accepted values or range of ``spec``, phrased for a message.
 
-    The single accessor of :attr:`~foundry.config.keys.KeySpec.constraint`, so no caller
-    re-derives a range and a message can never disagree with the registry.
+    The single accessor of :attr:`~foundry.config.keys.KeySpec.constraint`: no caller re-derives
+    a range, and a message can never disagree with the registry.
 
     Args:
         spec: The key definition to read.
@@ -148,26 +150,21 @@ def accepted_range(spec: KeySpec) -> str:
 def validate_unknown_keys(values: Mapping[str, object], *, layer: str, detail: str) -> None:
     """Reject the first key of a flat payload that the configuration registry lacks.
 
-    Called by every layer before the settings model is built (see the module docstring).
-    Iteration follows the mapping's insertion order, so the key reported is the first offender
-    of a payload built from sorted TOML keys, a sorted variable list or a fixed option order:
-    deterministic across runs and across xdist workers.
-
-    A key nested beneath a mapping-kind key is accepted rather than rejected: a flattened
-    ``[http.headers]`` table yields ``http.headers.Accept``, and those entries are the
-    operator's header names, not configuration keys.
+    Every layer calls this before the settings model is built (see the module docstring). Iteration
+    follows the mapping's insertion order, so the key reported is the first offender of a payload
+    built from sorted TOML keys, a sorted variable list or a fixed option order -- deterministic
+    across runs and across xdist workers. A key nested beneath a mapping-kind key is accepted,
+    because those entries are the operator's header names, not configuration keys.
 
     Args:
         values: The layer's flattened ``dotted key -> value`` payload.
-        layer: The layer label that supplied the payload, for example ``file`` or
-            ``profile:ci``.
+        layer: The layer label that supplied it, for example ``file`` or ``profile:ci``.
         detail: The file path, variable spelling or option spelling of that layer.
 
     Raises:
-        ConfigError: For the first key the registry does not declare. The message names the
-            key and the hint carries the closest valid spelling and the layer that supplied
-            it (AAP 0.4.5); a registry lookup and a ``difflib`` comparison raise nothing, so
-            no other exception type can leave this function.
+        ConfigError: For the first key the registry does not declare, naming the key with the
+            closest valid spelling as its hint (AAP 0.4.5). A registry lookup and a ``difflib``
+            comparison raise nothing, so no other exception type can leave this function.
     """
     for key in values:
         if spec_for(key) is not None:
@@ -180,9 +177,8 @@ def validate_unknown_keys(values: Mapping[str, object], *, layer: str, detail: s
 def validate_payload_shape(payload: Mapping[str, object], *, layer: str) -> None:
     """Reject an unknown key in an already-flat payload, with no layer detail to name.
 
-    The shortcut a :mod:`foundry.config` layer takes when it knows nothing more specific than
-    the layer itself; one that knows the file path, the variable or the option it read calls
-    :func:`validate_unknown_keys` instead, so the hint can name it.
+    The shortcut for a layer that knows nothing more specific than itself; one that knows the file
+    path, the variable or the option calls :func:`validate_unknown_keys`, whose hint names it.
 
     Args:
         payload: The layer's flattened ``dotted key -> value`` payload.
@@ -194,29 +190,67 @@ def validate_payload_shape(payload: Mapping[str, object], *, layer: str) -> None
     validate_unknown_keys(payload, layer=layer, detail="")
 
 
+def validate_file_values(values: Mapping[str, object], *, layer: str, detail: str) -> None:
+    """Reject the first file-layer value whose Python type its key does not declare.
+
+    TOML parses a boolean, an integer and a float into three distinct types, while the settings
+    model runs in pydantic's lax mode -- the mode that lets the environment layer's text coerce --
+    so without this check a stray ``true`` in a numeric slot becomes a one-second timeout, though
+    AAP 0.4.5 declares one type per key. Refused: a boolean for an ``int`` or ``float`` key, a
+    non-boolean for a ``bool`` key, a ``path`` that is empty or only whitespace, and a member the
+    enumeration of a list-kind key does not name, reported with its 1-based position. A whole-number
+    float or numeric text for an ``int`` key still reaches the model; an undeclared key, or an entry
+    nested under a mapping-kind key, is left to :func:`validate_unknown_keys`.
+
+    Args:
+        values: The layer's flattened ``dotted key -> value`` payload.
+        layer: The layer label that supplied the payload, for example ``file`` or ``profile:ci``.
+        detail: The file path that layer read.
+
+    Raises:
+        ConfigError: For the first value, in sorted key order, of a type its key does not declare,
+            worded like every value AAP 0.4.5 rejects: ``invalid value for http.timeout:
+            true (expected 0 < t <= 300)``.
+    """
+    for key in sorted(values):
+        spec = spec_for(key)
+        if spec is None or _nested_under_mapping_key(key):
+            continue
+        value = values[key]
+        bool_for_number = spec.kind in {"int", "float"} and isinstance(value, bool)
+        number_for_bool = spec.kind == "bool" and not isinstance(value, bool)
+        empty_path = spec.kind == "path" and isinstance(value, str) and not value.strip()
+        if bool_for_number or number_for_bool or empty_path:
+            rendered = _EMPTY_PATH_VALUE if empty_path else _render_value(value)
+            raise range_violation(key, rendered, spec.constraint, layer=layer, detail=detail)
+        if spec.kind == "list" and spec.enum_type is not None and isinstance(value, (list, tuple)):
+            for index, element in enumerate(value, start=1):
+                if parse_enum(spec.enum_type, str(element)) is None:
+                    note = f"element {index} is {_render_value(element)!r}"
+                    raise range_violation(key, note, spec.constraint, layer=layer, detail=detail)
+
+
 def parse_env_value(spec: KeySpec, raw: str, *, variable: str) -> object:
     """Turn one ``FOUNDRY_*`` variable's text into the value its key declares.
 
-    Every environment form AAP 0.4.5 declares is accepted, including a list whose elements are
-    comma separated (assumption A3): ``timeout,status_429`` parses to the two retry predicates
-    and an empty value to an empty tuple. A mapping-kind key has no single-variable form and is
-    refused before any parsing happens.
+    Every environment form AAP 0.4.5 declares is accepted, a list's elements comma separated
+    (assumption A3): ``timeout,status_429`` parses to the two retry predicates and an empty value
+    to an empty tuple. A mapping-kind key has no single-variable form and is refused first.
 
     Args:
         spec: The key the variable sets, as the registry declares it.
         raw: The variable's value, exactly as the environment holds it.
-        variable: The variable's spelling as the environment layer matched it, for example
-            ``FOUNDRY_HTTP__TIMEOUT``. It is quoted in every error raised here and is the only
-            evidence of the layer that reaches the message (implicit requirement I2).
+        variable: The variable's spelling, for example ``FOUNDRY_HTTP__TIMEOUT``; it is quoted in
+            every error raised here and is the only evidence of the layer that reaches the
+            message (implicit requirement I2).
 
     Returns:
         The parsed value: ``str``, :class:`pathlib.Path`, ``int``, ``float``, ``bool``, an enum
         member, or a ``tuple`` for a list-kind key.
 
     Raises:
-        ConfigError: When the key cannot be set from one variable, or when the text does not
-            parse. The message names the variable and the expected type and never echoes a
-            value belonging to another key.
+        ConfigError: When the key cannot be set from one variable, or when the text does not parse,
+            naming the variable and the expected type and never echoing another key's value.
     """
     if not is_env_settable(spec):
         raise env_key_unsupported(variable, spec.dotted)
@@ -233,27 +267,23 @@ def coerce_cli_value(spec: KeySpec, raw: object, *, option: str) -> object:
     """Turn one ``--foundry-*`` option's value into the value its key declares.
 
     click may hand through the type its parser declared for a named alias -- an ``int`` for
-    ``--foundry-retries`` -- or the raw text of the generic ``--foundry-<dotted.key>`` form, so
-    both arrive: a value already of the target type is passed through after a range probe, and
-    text is parsed by the rules the environment layer applies, except that a boolean accepts
-    only ``true`` and ``false`` (AAP 0.4.4). The probe reads the same constraint text the
-    message quotes (:func:`_bounds`), so a rejected override and its message cannot disagree;
-    a constraint stating no numeric bounds is left to the model, which owns that rule.
+    ``--foundry-retries`` -- or the raw text of the generic ``--foundry-<dotted.key>`` form, so a
+    value already of the target type passes through after a range probe and text is parsed by the
+    environment rules, except that a boolean accepts only ``true`` and ``false`` (AAP 0.4.4).
+    The probe reads the constraint text the message quotes, so the two cannot disagree.
 
     Args:
         spec: The key the option sets, as the registry declares it.
         raw: The value the option parser produced, or ``None`` when the option was not supplied.
-        option: The option's spelling as the operator wrote it, for example
-            ``--foundry-http.timeout``. It is quoted in every error raised here.
+        option: The option's spelling, for example ``--foundry-http.timeout``, quoted in each error.
 
     Returns:
-        The coerced value, or ``None`` when ``raw`` is ``None`` -- an option nobody passed
-        carries ``None``, which the command-line layer records as no override at all.
+        The coerced value, or ``None`` when ``raw`` is ``None``, which the command-line layer
+        records as no override at all.
 
     Raises:
-        ConfigError: When the value cannot be parsed or lies outside the key's accepted range.
-            The message names the option spelling rather than an environment variable, because
-            its reader has a command line to fix.
+        ConfigError: When the value cannot be parsed or lies outside the key's accepted range,
+            naming the option spelling rather than an environment variable.
     """
     spelling = cli_detail(option)
 
@@ -294,19 +324,15 @@ def _parse_scalar(
 ) -> object:
     """Parse one atomic value by the rules the environment and the command line share.
 
-    ``error_for`` builds the error for the calling layer -- naming the variable or the option
-    -- so both surfaces parse identically while each message names the spelling its reader can
-    change.
+    ``error_for`` builds the error for the calling layer, so both surfaces parse identically while
+    each message names the spelling its reader can change. An empty or whitespace-only path is
+    refused here rather than built, because ``Path("")`` is ``Path(".")``.
 
     Args:
         spec: The key whose declared kind selects the parsing rule.
         raw: The text to parse.
         bool_words: The words a boolean may be spelled with in this layer.
-        error_for: Factory building the layer's error for an unparseable value, given the
-            expected type or accepted values.
-
-    Returns:
-        The parsed scalar.
+        error_for: Factory building the layer's error for an unparseable value.
 
     Raises:
         ConfigError: When ``raw`` does not parse as the declared kind.
@@ -314,7 +340,10 @@ def _parse_scalar(
     if spec.kind == "str":
         return _without_trailing_newline(raw)
     if spec.kind == "path":
-        return Path(_without_trailing_newline(raw))
+        text = _without_trailing_newline(raw)
+        if not text.strip():
+            raise error_for(spec.constraint)
+        return Path(text)
     if spec.kind == "int":
         try:
             return int(raw)
@@ -348,13 +377,9 @@ def _coerce_list_value(
     """Parse a list-kind option given as comma-separated text or as a split sequence.
 
     Args:
-        spec: The list-kind key, whose ``enum_type`` decides whether an element is a member of
-            an enumeration or free text.
+        spec: The list-kind key, whose ``enum_type`` decides how an element is parsed.
         raw: Either the option's text or a sequence click already split.
         error_for: Factory building the layer's error for a bad element.
-
-    Returns:
-        The parsed elements in the order given, with the empty ones dropped.
 
     Raises:
         ConfigError: When an element is not an accepted value of the key's enumeration, or when
@@ -372,21 +397,18 @@ def _parse_list_elements(
 ) -> tuple[object, ...]:
     """Parse the elements of a list-kind value, dropping the empty ones.
 
-    ``timeout,status_429`` yields the two retry predicates, ``a, b ,`` yields ``("a", "b")``
-    for the redaction keys, and an empty or all-empty value yields ``()`` -- the spelling that
-    clears a list the file layer supplied.
+    ``timeout,status_429`` yields the two retry predicates, ``a, b ,`` yields ``("a", "b")`` for
+    the redaction keys, and an empty or all-empty value yields ``()`` -- the spelling that clears
+    a list the file layer supplied. The elements come back in the order given.
 
     Args:
         spec: The list-kind key, whose ``enum_type`` decides how an element is parsed.
         elements: The elements to parse, already split and possibly padded with blanks.
         error_for: Factory building the layer's error for a bad element.
 
-    Returns:
-        The parsed elements in the order given.
-
     Raises:
-        ConfigError: When an element is not an accepted value of the key's enumeration. The
-            message names the variable or option and the accepted values.
+        ConfigError: When an element is not an accepted value of the key's enumeration, naming the
+            variable or option, the accepted values, and the element with its 1-based position.
     """
     kept = [element.strip() for element in elements]
     kept = [element for element in kept if element]
@@ -396,10 +418,10 @@ def _parse_list_elements(
         return tuple(kept)
     expected = accepted_values_text(spec.enum_type)
     members: list[object] = []
-    for element in kept:
+    for index, element in enumerate(kept, start=1):
         member = parse_enum(spec.enum_type, element)
         if member is None:
-            raise error_for(expected)
+            raise error_for(f"{expected} (element {index} is {_render_value(element)!r})")
         members.append(member)
     return tuple(members)
 
@@ -407,14 +429,12 @@ def _parse_list_elements(
 def _bool_value(raw: str, *, words: frozenset[str]) -> bool | None:
     """Return the boolean ``raw`` spells with ``words``, or ``None`` when it spells none.
 
+    ``True`` comes back for a word in :data:`BOOL_TRUE`, ``False`` for one in :data:`BOOL_FALSE`;
+    the caller builds the error for ``None``, which keeps the layer's wording out of the parser.
+
     Args:
         raw: The text to read, surrounding whitespace ignored and case folded.
         words: The words this layer accepts.
-
-    Returns:
-        ``True`` for a word in :data:`BOOL_TRUE`, ``False`` for one in :data:`BOOL_FALSE`, and
-        ``None`` otherwise -- the caller builds the error, which keeps this layer's wording out
-        of the parser.
     """
     lowered = raw.strip().lower()
     if lowered not in words:
@@ -444,17 +464,16 @@ def _without_trailing_newline(raw: str) -> str:
 def _bounds(spec: KeySpec) -> tuple[float, bool, float, bool] | None:
     """Return the numeric bounds the key's constraint text states, if it states any.
 
-    The registry keeps a key's accepted range as the text a message quotes, because that text
-    is a published surface (AAP 0.4.9). Reading the same text here rather than declaring the
-    numbers a second time is what makes the probe and its message incapable of disagreeing.
+    The registry keeps a key's accepted range as the text a message quotes, because that text is
+    a published surface (AAP 0.4.9). Reading the same text here rather than declaring the numbers
+    a second time is what makes the probe and its message incapable of disagreeing.
 
     Args:
         spec: The key definition to read.
 
     Returns:
-        ``(low, low_inclusive, high, high_inclusive)`` for a constraint written as ``1..10``
-        or ``0 < t <= 300``, and ``None`` for any other constraint -- ``true or false``, an
-        accepted-values list, free text -- whose rules belong to the settings model.
+        ``(low, low_inclusive, high, high_inclusive)`` for a constraint written as ``1..10`` or
+        ``0 < t <= 300``, and ``None`` for any other, whose rules belong to the settings model.
     """
     text = spec.constraint.strip()
     interval = _BOUNDS_INTERVAL_RE.match(text)
@@ -475,9 +494,8 @@ def _probe_range(spec: KeySpec, value: float, *, option: str) -> None:
         option: The option's spelling, recorded as the layer's detail in the message.
 
     Raises:
-        ConfigError: For a value outside the range, naming the key, the value and the range as
-            AAP 0.4.5's worked case reads it: ``invalid value for http.timeout: -1 (expected 0
-            < t <= 300)``.
+        ConfigError: For a value outside the range, in AAP 0.4.5's worked wording: ``invalid
+            value for http.timeout: -1 (expected 0 < t <= 300)``.
     """
     bounds = _bounds(spec)
     if bounds is None:
@@ -501,10 +519,9 @@ def translate_validation_error(
     """Return the :class:`ConfigError` describing the first failure in ``exc``.
 
     The settings model reports one entry per rejected field in field-declaration order, so the
-    first entry is the first key a person should fix and the report is deterministic. It is
-    turned into the wording AAP 0.4.5 documents, never into pydantic's own: the message, the
-    documentation URL and the echoed input all stay out of the text -- the input of a
-    model-level rule is the whole configuration, which may carry a header value.
+    first entry is the first key a person should fix. It is turned into the wording AAP 0.4.5
+    documents, never into pydantic's own: the message, the documentation URL and the echoed input
+    all stay out, because the input of a model-level rule is the whole configuration.
 
     Args:
         exc: The validation failure the settings model raised.
@@ -513,10 +530,11 @@ def translate_validation_error(
         detail: The file path, variable spelling or option spelling of that layer.
 
     Returns:
-        The error for the first failure, built by the builder that owns its wording: a value
-        outside its accepted range or values by ``errors.range_violation``, a rejected table by
-        ``errors.invalid_shape``, and a cross-field rule -- ``bearer`` without
-        ``http.auth.token_env`` -- by ``errors.missing_required_for``.
+        The error for the first failure, built by the builder that owns its wording: a range
+        violation by ``errors.range_violation``, a rejected table by ``errors.invalid_shape``, a
+        cross-field rule by ``errors.missing_required_for``. An ``int`` key given a value that is
+        not a whole number names the type too, and an entry of a mapping-kind table -- a key the
+        registry does not hold -- states the string its value has to be.
     """
     label = layer if layer is not None else _UNATTRIBUTED_LAYER
     reported = exc.errors()
@@ -532,7 +550,12 @@ def translate_validation_error(
     spec = spec_for(key)
     if spec is not None and spec.kind == "mapping":
         return invalid_shape(key, spec.constraint, layer=label)
-    constraint = accepted_range(spec) if spec is not None else _DOCUMENTED_VALUE
+    if spec is None:
+        constraint = _STRING_VALUE if _nested_under_mapping_key(key) else _DOCUMENTED_VALUE
+    else:
+        constraint = accepted_range(spec)
+        if spec.kind == "int" and first["type"] in _INT_FAULT_TYPES:
+            constraint = f"an integer in {constraint}"
     return range_violation(
         key, _render_value(first["input"]), constraint, layer=label, detail=detail
     )
@@ -547,7 +570,7 @@ def _dotted_from_loc(loc: tuple[int | str, ...]) -> str:
     Returns:
         The dotted key with the integer parts dropped, for example ``http.timeout``. A location
         naming a nested model only -- ``("http", "auth")`` -- yields a path that is not a
-        registered key, which is how the caller recognises it is not a leaf.
+        registered key, which is how the caller knows it is not a leaf.
     """
     return ".".join(str(part) for part in loc if isinstance(part, str))
 
@@ -571,10 +594,9 @@ def _clean_message(message: str) -> str:
 def _cross_field_error(message: str) -> ConfigError | None:
     """Return the cross-field error ``message`` states, or ``None`` when it states none.
 
-    A model validator writes the text of its own rule, for example ``http.auth.token_env is
-    required when http.auth.strategy is 'bearer'``, and pydantic keeps it verbatim, so both
-    keys and the strategy's value can be read back out of it and the sentence rebuilt through
-    the builder that owns the wording (AAP 0.4.5).
+    A model validator writes its rule's text, for example ``http.auth.token_env is required when
+    http.auth.strategy is 'bearer'``, and pydantic keeps it verbatim, so both keys and the strategy
+    value can be read back out of it and the sentence rebuilt by the builder that owns its wording.
 
     Args:
         message: The cleaned validator message.
@@ -613,10 +635,10 @@ def _render_value(value: object) -> str:
     than printed, so no entry of it can reach a terminal, a CI log or a report.
 
     Args:
-        value: The input pydantic reported for the rejected key.
+        value: The input pydantic reported for the rejected key, or the file value being checked.
 
     Returns:
-        The value as text for a boolean, a number or a string, the string rendered through
+        The value as text for a boolean, a number or a string, the string through
         :func:`_redacted_text`, and a placeholder describing the shape for anything else.
     """
     if isinstance(value, bool):
@@ -639,18 +661,11 @@ def _render_value(value: object) -> str:
 def _redacted_text(value: str) -> str:
     """Return ``value`` as the single redaction engine renders it.
 
-    A rejected value is quoted back to the operator through ``errors.RANGE_TEMPLATE`` -- stderr
-    at exit 2, therefore a CI log -- and a configuration value can carry a credential: URL
-    userinfo and deny-listed query parameters are documented leak channels (AAP 0.2.1). The
-    value therefore goes through :mod:`foundry.obs.redaction`, which holds the only
-    implementation (AAP 0.3.2) and drops userinfo, redacts deny-listed query values, and
-    redacts credential-shaped and ``name=value`` secrets. ``Redactor.text`` is total -- it
-    returns the marker rather than raising when it cannot read the text -- so there is no fault
-    path to handle here.
-
-    The import sits inside the function on purpose, as in
-    :func:`foundry.contract.violations._resolve_redactor`: importing the engine at module scope
-    would put it on the plugin's startup path, which the startup budget measures (AAP 0.14.2).
+    A rejected value reaches stderr at exit 2, therefore a CI log, so the string goes through
+    :mod:`foundry.obs.redaction`, the only engine (AAP 0.3.2): it strips the documented leak
+    channels -- URL userinfo and deny-listed query values (AAP 0.2.1) -- and its ``Redactor.text``
+    is total, so no fault path is handled here. The import stays inside the function because at
+    module scope it would put the engine on the plugin's startup path (AAP 0.14.2).
 
     Args:
         value: The rejected string, a scalar one layer of the configuration supplied.
@@ -666,9 +681,8 @@ def _redacted_text(value: str) -> str:
 def _nested_under_mapping_key(dotted: str) -> bool:
     """Return whether ``dotted`` is an entry of a table a mapping-kind key declares.
 
-    A flattened configuration file produces ``http.headers.Accept`` for the ``[http.headers]``
-    table, and those entries are the operator's header names rather than configuration keys, so
-    rejecting them would refuse a valid configuration.
+    A flattened file produces ``http.headers.Accept`` for the ``[http.headers]`` table, and those
+    entries are the operator's own header names rather than configuration keys.
 
     Args:
         dotted: The key to inspect.

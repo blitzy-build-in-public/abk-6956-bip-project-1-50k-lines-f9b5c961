@@ -14,12 +14,14 @@ raises. Only a fault below the protocol escapes a request, as
 :class:`~foundry.core.exceptions.TransportError` or
 :class:`~foundry.core.exceptions.RetryExhaustedError` from :mod:`foundry.http.retries`.
 
-**The two artifact payloads (AAP 0.4.6).** ``request_dump()`` is ``request.json`` -- method, path,
-query, headers with secrets redacted, the raw body's hash and a redacted body excerpt -- and
-``response_dump()`` is its additive counterpart (AAP 0.4.9 permits additions): status, redacted
-headers, a redacted body excerpt and ``source``. Both come from the object that held the exchange
-rather than being re-derived by the artifact writer, so a dump cannot describe an exchange that did
-not happen.
+**The two artifact payloads (AAP 0.4.6).** ``request_dump()`` is ``request.json`` -- method, the
+request path without its query string, the query in a field of its own, headers with secrets
+redacted, the raw body's hash and a redacted body excerpt -- and ``response_dump()`` is its additive
+counterpart (AAP 0.4.9 permits additions): status, redacted headers, a redacted body excerpt and
+``source``. Path and query are separate fields carrying the meaning the cassette document gives
+them, so a consumer of AAP 0.4.6 reads the query once from either document. Both come from the
+object that held the exchange rather than being re-derived by the artifact writer, so a dump cannot
+describe an exchange that did not happen.
 
 **Redaction before serialisation (AAP 0.3.2).** The injected
 :class:`~foundry.obs.redaction.Redactor` is the single route a header value, a query value or a body
@@ -62,10 +64,10 @@ from foundry.http.url import path_and_query
 from foundry.obs.redaction import MAX_EXCERPT_BYTES, Redactor
 
 __all__: Final[tuple[str, ...]] = (
+    "FoundryResponse",
     "SOURCE_CASSETTE",
     "SOURCE_EXTENSION_KEY",
     "SOURCE_LIVE",
-    "FoundryResponse",
     "from_httpx",
 )
 
@@ -198,7 +200,9 @@ class _RequestSnapshot:
 
     Attributes:
         method: The request method as ``httpx`` built it, in the casing the caller used.
-        path: The request target, as :func:`foundry.http.url.path_and_query` renders it.
+        path: The request path without its query string, which the dump reports in its own
+            ``query`` member -- the meaning the cassette document gives the same field name
+            (AAP 0.4.6).
         query: The decoded query parameter pairs, repeats included.
         headers: The request headers, as ``httpx`` holds them.
         body: The raw request body, or ``b""`` when the request carried none.
@@ -259,10 +263,13 @@ class FoundryResponse:
 
         Raises:
             ContractError: The body is not JSON. ``json_path`` is ``$``, because the whole document
-                is the violation, and ``detail`` is a single-line redacted excerpt of at most
-                :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, so a reader sees the shape
-                of what arrived without a secret in it (AAP 0.4.7). The message names the decoder's
-                fault and its position and quotes no part of the body.
+                is the violation, and ``detail`` is a single-line redacted excerpt whose body
+                prefix is at most :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, followed
+                by the ``...`` marker :func:`foundry.contract.excerpt` appends when anything was
+                cut, so a truncated excerpt occupies at most ``MAX_EXCERPT_BYTES + len("...")`` --
+                never the bare budget. A reader sees the shape of what arrived without a secret in
+                it (AAP 0.4.7). The message names the decoder's fault and its position and quotes
+                no part of the body.
         """
         try:
             return json.loads(self.text)
@@ -270,7 +277,7 @@ class FoundryResponse:
             raise ContractError(
                 f"response body is not JSON: {exc.msg} at line {exc.lineno} column {exc.colno}",
                 json_path="$",
-                detail=excerpt(self.text, redact=self._redactor.text),
+                detail=excerpt(self.text, limit=MAX_EXCERPT_BYTES, redact=self._redactor.text),
             ) from exc
 
     def request_dump(self) -> dict[str, object]:
@@ -285,12 +292,15 @@ class FoundryResponse:
 
         Returns:
             A JSON-serialisable mapping with exactly the keys ``method`` (upper-case), ``path``
-            (path and query, with the query's secret values scrubbed), ``query`` (the decoded
-            pairs, sorted, as ``[name, value]`` lists), ``headers`` (a dict ordered by name, with
-            names lower-cased as ``httpx`` normalises them and values redacted), ``body_sha256``
-            (a lower-case hex digest, or ``None`` when the request carried no body) and ``body``
-            (a redacted excerpt of at most :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES`
-            bytes, or ``None`` when empty).
+            (the request path without its query string, anything the engine masks scrubbed, which
+            is the meaning the cassette document gives that field), ``query`` (the decoded pairs,
+            sorted, as ``[name, value]`` lists, the one place the query appears), ``headers`` (a
+            dict ordered by name, with names lower-cased as ``httpx`` normalises them and values
+            redacted), ``body_sha256`` (a lower-case hex digest, or ``None`` when the request
+            carried no body) and ``body`` (a redacted excerpt whose body is at most
+            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, followed by
+            :data:`~foundry.obs.redaction.TRUNCATION_MARKER` when anything was cut -- at most the
+            budget plus the marker -- or ``None`` when empty).
         """
         redactor = self._redactor
         snapshot = self._request
@@ -318,9 +328,11 @@ class FoundryResponse:
         Returns:
             A JSON-serialisable mapping with exactly the keys ``status`` (the integer status),
             ``headers`` (a dict ordered by name, with names lower-cased as ``httpx`` normalises
-            them and values redacted), ``body`` (a redacted excerpt of at most
-            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, or ``None`` when the body is
-            empty) and ``source`` (``"live"`` or ``"cassette"``).
+            them and values redacted), ``body`` (a redacted excerpt whose body is at most
+            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, followed by
+            :data:`~foundry.obs.redaction.TRUNCATION_MARKER` when anything was cut -- at most the
+            budget plus the marker -- or ``None`` when the body is empty) and ``source``
+            (``"live"`` or ``"cassette"``).
         """
         return {
             "status": self.status_code,
@@ -356,11 +368,12 @@ def _dumped_body(body: str | bytes, redactor: Redactor) -> str | None:
         redactor: The run's redaction engine.
 
     Returns:
-        A single-line redacted excerpt of at most
-        :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes with the engine's truncation marker
-        when anything was cut, or ``None`` when the body is empty -- a request with no body and one
-        with a zero-length body are the same request, which is the rule
-        :func:`foundry.cassette.models.body_sha256_of` applies to the hash beside it.
+        A single-line redacted excerpt whose body is at most
+        :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, followed by
+        :data:`~foundry.obs.redaction.TRUNCATION_MARKER` when anything was cut, so a truncated
+        excerpt occupies at most the budget plus the marker -- or ``None`` when the body is empty:
+        a request with no body and one with a zero-length body are the same request, which is the
+        rule :func:`foundry.cassette.models.body_sha256_of` applies to the hash beside it.
     """
     if not body:
         return None
@@ -388,6 +401,28 @@ def _request_body(request: httpx.Request) -> bytes:
         return b""
 
 
+def _request_path(url: str) -> str:
+    """Return the path of ``url`` alone, with no query string, as a request dump reports it.
+
+    A request dump reports the path and the query as two fields (AAP 0.4.6), and the query it
+    reports is decoded into the pairs of its own field, so the path it reports has to be the request
+    target without them. That is the meaning the cassette document gives its own ``path`` field,
+    which is what lets one reader of AAP 0.4.6 read the query once from either document. The
+    empty-path and leading-slash rules live in :func:`foundry.http.url.path_and_query`, so this cuts
+    that one rendering at the ``?`` that opens the query instead of restating them.
+
+    Args:
+        url: An absolute URL or a relative reference.
+
+    Returns:
+        A string starting with ``/``, such as ``"/api/orders"``: a bare origin renders as ``"/"``
+        rather than as an empty string, and a relative reference gains the ``/`` that makes it a
+        request target.
+    """
+    path, _, _ = path_and_query(url).partition("?")
+    return path
+
+
 def _request_snapshot(request: httpx.Request) -> _RequestSnapshot:
     """Return the parts of ``request`` that :meth:`FoundryResponse.request_dump` reports.
 
@@ -395,14 +430,14 @@ def _request_snapshot(request: httpx.Request) -> _RequestSnapshot:
         request: The request the response answers, as ``httpx`` built it.
 
     Returns:
-        The snapshot, with the target rendered by
-        :func:`foundry.http.url.path_and_query` and the query decoded into pairs, so the dump
-        carries no scheme, host or port -- a recording made on one port therefore dumps the same as
-        a replay on another (assumption A7).
+        The snapshot, with the path rendered by :func:`_request_path` and the query decoded into
+        pairs, so the dump carries no scheme, host or port -- a recording made on one port
+        therefore dumps the same as a replay on another (assumption A7) -- and no query in its
+        ``path``, which the dump reports in the member of its own (AAP 0.4.6).
     """
     return _RequestSnapshot(
         method=request.method,
-        path=path_and_query(str(request.url)),
+        path=_request_path(str(request.url)),
         query=tuple(request.url.params.multi_items()),
         headers=request.headers,
         body=_request_body(request),

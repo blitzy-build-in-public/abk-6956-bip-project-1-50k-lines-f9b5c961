@@ -508,8 +508,8 @@ def _ordered(value: Iterable[object]) -> tuple[object, ...]:
 
     A list or a tuple keeps the order it was authored in, which is the order the environment layer
     sets and the document publishes. An unordered collection is sorted, so rendering cannot depend
-    on hashing (AAP 0.13.1); the settings model parses both list-valued keys into tuples, so this is
-    a guard rather than the usual path.
+    on hashing (AAP 0.13.1); the settings model parses both list-valued keys into lists, so this
+    is a guard rather than the usual path.
 
     Args:
         value: The collection to order.

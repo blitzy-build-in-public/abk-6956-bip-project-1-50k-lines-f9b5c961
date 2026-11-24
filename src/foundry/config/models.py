@@ -1,23 +1,21 @@
 """The resolved configuration: one frozen pydantic tree over the 28 published keys.
 
 AAP 0.4.5 fixes Foundry's configuration surface -- 28 leaf keys, each with a type, a default and an
-accepted range -- and this module is that surface as a value: :class:`FoundryConfig` with ten
-nested models beneath it, one per ``[section]`` of ``foundry.toml``. Adding, renaming or removing a
-key breaks a published surface (AAP 0.4.9), so the field list below and the registry in
+accepted range -- and this module is that surface as a value: :class:`FoundryConfig` with ten nested
+models beneath it, one per ``[section]`` of ``foundry.toml``. Adding, renaming or removing a key
+breaks a published surface (AAP 0.4.9), so the field list below and the registry in
 :mod:`foundry.config.keys` are the same 28 keys.
 
 Resolution is *not* here: :mod:`foundry.config.merge` applies the layers of AAP 0.4.5, records a
 :class:`foundry.config.sources.ConfigSource` per key, and this model validates the result. No
-validator reads a file, an environment variable or a clock, so equal inputs stay equal.
-
-A rejected value is pydantic's own ``ValidationError``: the wording that names the key and its range
-belongs to :func:`foundry.config.validation.translate_validation_error`, which ends the session with
-exit code 2 (assumption A4). The one ``ConfigError`` raised here is
-:meth:`FoundryConfig.source_of`'s refusal of an unregistered key. Every credential key stores the
-*name* of the environment variable holding a secret, never its value (requirement I9); the numeric
-defaults and bounds come from :mod:`foundry.core.limits`, the ranges are ``Field(gt=..., le=...)``
-rather than the deprecated ``confloat``/``conint`` as AAP 0.7.2 permits, and nothing on the plugin
-startup path imports this module at module scope (requirement I5).
+validator reads a file, an environment variable or a clock, so equal inputs stay equal. A rejected
+value is pydantic's own ``ValidationError``, worded for the operator by
+:func:`foundry.config.validation.translate_validation_error`, which exits 2 (assumption A4); the
+only ``ConfigError`` raised here is :meth:`FoundryConfig.source_of`'s refusal of an unregistered
+key. Every credential key stores the *name* of the variable holding a secret, never its value
+(requirement I9); bounds come from :mod:`foundry.core.limits` as ``Field(gt=..., le=...)``, which
+AAP 0.7.2 permits, and no module-scope import of this module is on the plugin startup path
+(requirement I5).
 """
 
 from __future__ import annotations
@@ -25,10 +23,18 @@ from __future__ import annotations
 import re
 import warnings
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from foundry.config import errors, keys
@@ -57,9 +63,16 @@ from foundry.core.limits import (
     CAPTURE_LINES_MAX,
     CAPTURE_LINES_MIN,
     CASSETTE_DIR_DEFAULT,
+    EXECUTION_RETRIES_DEFAULT,
+    EXECUTION_RETRIES_MAX,
+    EXECUTION_RETRIES_MIN,
+    HTTP_TIMEOUT_DEFAULT,
+    HTTP_TIMEOUT_MAX,
+    HTTP_TIMEOUT_MIN,
     MAX_ATTEMPTS_DEFAULT,
     MAX_ATTEMPTS_MAX,
     MAX_ATTEMPTS_MIN,
+    TIMEOUT_DEFAULT,
     TIMEOUT_MAX,
     TIMEOUT_MIN,
 )
@@ -77,18 +90,6 @@ __all__: Final[tuple[str, ...]] = (
     "ReportingConfig",
     "SecretsConfig",
 )
-
-_HTTP_TIMEOUT_MAX: Final[float] = 300.0
-"""Upper bound of ``http.timeout`` in seconds: one request waits at most five minutes."""
-
-_EXECUTION_TIMEOUT_DEFAULT: Final[float] = 60.0
-"""Default of ``execution.timeout`` in seconds: one minute for a single test."""
-
-_EXECUTION_RETRIES_MIN: Final[int] = 0
-"""Smallest accepted ``execution.retries``: the test runs once and is not repeated."""
-
-_EXECUTION_RETRIES_MAX: Final[int] = 10
-"""Largest accepted ``execution.retries``: ten repeats after the first attempt."""
 
 _BASE_URL_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 """The two URL schemes ``http.base_url`` accepts; anything else is a configuration fault."""
@@ -129,9 +130,8 @@ _AUTH_HEADER_KEYS: Final[tuple[str, ...]] = ("http.auth.header_name", "http.auth
 class HttpRetriesConfig(BaseModel):
     """The ``http.retries.*`` table: attempts per request and the wait between them.
 
-    Read by :mod:`foundry.http.retries` for every request a
-    :class:`foundry.http.session.FoundrySession` issues. Frozen and ``extra="forbid"``, so a
-    misspelt ``http.retries.backoff_maxx`` is a fault, not a silently ignored line (AAP 0.4.5).
+    Read by :mod:`foundry.http.retries` for every session request, frozen and ``extra="forbid"``,
+    so a misspelt key is a fault, not a silently ignored line (AAP 0.4.5).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -139,10 +139,8 @@ class HttpRetriesConfig(BaseModel):
     max_attempts: int = Field(
         default=MAX_ATTEMPTS_DEFAULT, ge=MAX_ATTEMPTS_MIN, le=MAX_ATTEMPTS_MAX
     )
-    """Total attempts per request, the first included.
-
-    Not to be confused with :attr:`ExecutionConfig.retries`, which counts repeats (assumption A2).
-    """
+    """Total attempts per request, the first included -- not :attr:`ExecutionConfig.retries`, which
+    counts repeats (assumption A2)."""
 
     backoff_base: float = Field(
         default=BACKOFF_BASE_DEFAULT, ge=BACKOFF_BASE_MIN, le=BACKOFF_BASE_MAX
@@ -152,27 +150,24 @@ class HttpRetriesConfig(BaseModel):
     backoff_max: float = Field(default=BACKOFF_MAX_DEFAULT, ge=BACKOFF_MAX_MIN, le=BACKOFF_MAX_MAX)
     """Cap on any single wait in seconds, so an exponential backoff cannot run away."""
 
-    retry_on: tuple[RetryPredicate, ...] = RETRY_PREDICATES[:3]
+    retry_on: list[RetryPredicate] = Field(default_factory=lambda: list(RETRY_PREDICATES[:3]))
     """Predicates that make a request retryable, in authored order.
 
-    The default is the first three of :data:`foundry.config.enums.RETRY_PREDICATES` --
-    ``timeout``, ``connect``, ``status_5xx`` -- leaving ``status_429`` opt-in.
+    The default is the first three of :data:`foundry.config.enums.RETRY_PREDICATES`, leaving
+    ``status_429`` opt-in.
     """
 
     @field_validator("retry_on", mode="before")
     @classmethod
-    def _parse_retry_on(cls, value: object) -> object:
-        """Turn the key's authored form into a tuple of retry predicates.
+    def _parse_retry_on(cls, value: object) -> list[RetryPredicate]:
+        """Turn the key's authored form into a list of retry predicates.
 
-        A file supplies a list and the environment layer its comma-separated elements (assumption
-        A3); authored order is kept. An unordered collection is sorted, so the result cannot depend
-        on set iteration order (AAP 0.13.1).
+        A file supplies a list and the environment its comma-separated elements (assumption A3);
+        authored order is kept and an unordered collection is sorted, so nothing depends on set
+        iteration order (AAP 0.13.1).
 
         Args:
             value: The raw value a layer supplied.
-
-        Returns:
-            A tuple of :class:`foundry.config.enums.RetryPredicate` members.
 
         Raises:
             ValueError: If an element names no predicate. The message names the accepted ones.
@@ -180,18 +175,18 @@ class HttpRetriesConfig(BaseModel):
         if isinstance(value, (set, frozenset)):
             value = sorted(value, key=str)
         authored = list(value) if isinstance(value, (list, tuple)) else [value]
-        parsed = tuple(_retry_predicate(element) for element in authored)
+        parsed = [_retry_predicate(element) for element in authored]
         if any(predicate is None for predicate in parsed):
             raise ValueError(_retry_on_expectation())
-        return tuple(predicate for predicate in parsed if predicate is not None)
+        return [predicate for predicate in parsed if predicate is not None]
 
 
 class HttpAuthConfig(BaseModel):
     """The ``http.auth.*`` table: the credential strategy and the names holding its secret.
 
-    No value lives here. Each strategy names the environment variable holding its secret, and
-    :mod:`foundry.http.auth` resolves that name once at session start (implicit requirement I9),
-    so a configuration object, ``results.json`` and a report print without exposing a credential.
+    No value lives here: each strategy names the environment variable holding its secret, which
+    :mod:`foundry.http.auth` resolves once at session start (requirement I9), so nothing Foundry
+    prints carries a credential.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -215,9 +210,8 @@ class HttpAuthConfig(BaseModel):
     def _blank_name_is_no_name(cls, value: str | None) -> str | None:
         """Normalise a name that is empty or holds only whitespace to ``None``.
 
-        A key set to ``""`` names no variable and no header, so treating it as unset keeps the
-        cross-field rule honest: such a strategy is a fault, not a session that resolves an empty
-        variable name.
+        A key set to ``""`` names no variable and no header, so reading it as unset keeps the
+        cross-field rule honest: such a strategy is a fault, not a session resolving an empty name.
         """
         if value is None:
             return None
@@ -225,14 +219,11 @@ class HttpAuthConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_companion_keys(self) -> HttpAuthConfig:
-        """Reject a strategy that is missing the key naming its credential.
+        """Reject a strategy missing the key naming its credential, returning the model unchanged.
 
         The message names the missing key and the strategy key, with the selected strategy in single
-        quotes, because ``translate_validation_error`` reads them back out of it to build the
+        quotes, because ``translate_validation_error`` reads them back out to build the
         ``ConfigError`` naming that key.
-
-        Returns:
-            The validated model, unchanged.
 
         Raises:
             ValueError: If the selected strategy is missing one of its companion keys.
@@ -249,11 +240,9 @@ class HttpAuthConfig(BaseModel):
 class HttpConfig(BaseModel):
     """The ``http.*`` table: base URL, timeout, static headers and the retry and auth tables.
 
-    Consumed by :class:`foundry.http.session.FoundrySession` through the ``foundry_http`` and
-    ``foundry_api`` fixtures. ``base_url`` may be unset -- ``foundry_http`` issues absolute
-    requests -- but ``foundry_api`` raises
-    :class:`foundry.core.exceptions.ConfigError` naming ``http.base_url`` when it is still unset
-    as that fixture is requested (AAP 0.4.7).
+    Consumed by the ``foundry_http`` and ``foundry_api`` fixtures: ``base_url`` may be unset, but
+    ``foundry_api`` raises :class:`foundry.core.exceptions.ConfigError` naming ``http.base_url``
+    while it is, as that fixture is requested (AAP 0.4.7).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -261,7 +250,7 @@ class HttpConfig(BaseModel):
     base_url: str | None = None
     """Absolute base URL the ``foundry_api`` fixture joins request paths against, or ``None``."""
 
-    timeout: float = Field(default=10.0, gt=0.0, le=_HTTP_TIMEOUT_MAX)
+    timeout: float = Field(default=HTTP_TIMEOUT_DEFAULT, gt=HTTP_TIMEOUT_MIN, le=HTTP_TIMEOUT_MAX)
     """Per-request timeout in seconds; a request argument overrides it, never the reverse."""
 
     headers: dict[str, str] = Field(default_factory=dict)
@@ -275,15 +264,13 @@ class HttpConfig(BaseModel):
     def _check_base_url(cls, value: object) -> str | None:
         """Validate that ``base_url`` is an absolute ``http`` or ``https`` URL.
 
-        The authored string is kept verbatim: no trailing-slash normalisation, no lower-casing of
-        the host. ``config show`` echoes what the operator wrote and :mod:`foundry.http.url` joins
-        against it as written, while ``HttpUrl`` would rewrite the value.
+        The authored string is kept verbatim -- no trailing-slash normalisation, no lower-casing of
+        the host, which ``HttpUrl`` would rewrite -- because ``config show`` echoes what the
+        operator wrote and :mod:`foundry.http.url` joins against it as written; it comes back
+        stripped of surrounding whitespace, or ``None`` when unset.
 
         Args:
             value: The raw value a layer supplied.
-
-        Returns:
-            The URL as authored, without surrounding whitespace, or ``None``.
 
         Raises:
             ValueError: If the value is not text, is empty, or has no host or another scheme.
@@ -306,14 +293,10 @@ class HttpConfig(BaseModel):
         """Reject an empty header name and a name holding a control character.
 
         Only names are checked: a value may be a credential, and redaction -- not validation --
-        keeps it out of every artefact (AAP 0.3.2). A faulty name is not echoed, being a control
-        sequence.
+        keeps it out of every artefact, so a faulty name is not echoed either (AAP 0.3.2).
 
         Args:
             value: The header table as written.
-
-        Returns:
-            The same table, unchanged.
 
         Raises:
             ValueError: If a header name is empty or contains a control character.
@@ -329,8 +312,8 @@ class HttpConfig(BaseModel):
 class ArtifactsConfig(BaseModel):
     """The ``artifacts.*`` table: where per-test artefact directories live and what a pass keeps.
 
-    ``dir`` roots the ``<dir>/<run_id>/`` tree AAP 0.4.6 fixes; the run id inside it is chosen by
-    the session, so two runs never overwrite each other's files (assumption A5).
+    ``dir`` roots the ``<dir>/<run_id>/`` tree of AAP 0.4.6, whose run id the session chooses, so
+    two runs never overwrite each other's files (assumption A5).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -341,12 +324,10 @@ class ArtifactsConfig(BaseModel):
     keep_passed: bool = False
 
 
-# pydantic raises ``UserWarning: Field name "json" in "ReportingConfig" shadows an attribute in
-# parent "BaseModel"`` from its metaclass, once the class body has finished, so the filter has to
-# wrap the class statement itself; mypy reports the same shadowing as an incompatible assignment
-# against BaseModel's deprecated ``json()`` method, hence the ignore below. Both are kept because
-# AAP 0.4.5 fixes the key's name and the attribute has to stay ``config.reporting.json``: a
-# renamed field would silently hand a reader that deprecated method instead of the boolean.
+# pydantic warns that the field name "json" shadows an attribute in parent "BaseModel" once the
+# class body finishes, so the filter wraps the class statement itself; mypy reports the same
+# shadowing against the deprecated ``json()`` method, hence the ignore below. AAP 0.4.5 fixes the
+# key's name, and a renamed field would hand a reader that method instead of the boolean.
 with warnings.catch_warnings():
     warnings.filterwarnings(
         "ignore",
@@ -357,10 +338,10 @@ with warnings.catch_warnings():
     class ReportingConfig(BaseModel):
         """The ``reporting.*`` table: which of the two optional report files a run writes.
 
-        Two booleans only. The report file *names* are fixed by AAP 0.4.6 -- ``results.json`` and
+        Two booleans only: the report file *names* are fixed by AAP 0.4.6 -- ``results.json`` and
         ``report.html`` in the invocation directory, relocated together by
-        ``--foundry-json-report`` -- and are deliberately not configurable, so this table adds no
-        key the published schema lacks (assumption A6).
+        ``--foundry-json-report`` -- so this table adds no key the published schema lacks
+        (assumption A6).
         """
 
         model_config = ConfigDict(extra="forbid", frozen=True)
@@ -376,9 +357,8 @@ class DataConfig(BaseModel):
     """The ``data.*`` table: where the loaders look for data files and how strictly they check.
 
     ``dir`` is the root a :class:`foundry.data.cases.Case` name resolves against, so a test writes
-    ``foundry_data.cases("prices.csv")`` instead of a path relative to its own module.
-    ``schema_strict`` decides whether an unknown column is a collection error or is ignored
-    (AAP 0.4.5).
+    ``foundry_data.cases("prices.csv")`` rather than a module-relative path, and ``schema_strict``
+    decides whether an unknown column is a collection error or is ignored (AAP 0.4.5).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -392,9 +372,9 @@ class CassetteConfig(BaseModel):
     """The ``cassette.*`` table: where cassettes live and which record/replay mode the run uses.
 
     The directory holds one JSON document per test, named from the sanitised node id (AAP 0.4.6).
-    ``mode`` selects what :mod:`foundry.cassette.modes` does: ``off`` bypasses cassettes,
-    ``record`` writes them, ``replay`` serves them and opens no socket, and ``passthrough``
-    serves a match and otherwise falls through to the live transport (assumption A8).
+    ``mode`` selects what :mod:`foundry.cassette.modes` does -- ``off`` bypasses cassettes,
+    ``record`` writes them, ``replay`` serves them and opens no socket, ``passthrough`` falls
+    through to the live transport on a miss (assumption A8).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -408,19 +388,21 @@ class ExecutionConfig(BaseModel):
     """The ``execution.*`` table: in-framework retries, the per-test timeout and quarantine.
 
     Read by :mod:`foundry.execution.coordinator`, :mod:`foundry.execution.timeout` and
-    :mod:`foundry.execution.quarantine`. Foundry retries a test itself rather than through a
-    plugin, because an attempt interacts with quarantine state and artefact capture (AAP 0.5.1).
+    :mod:`foundry.execution.quarantine`; Foundry retries a test itself rather than through a
+    plugin, because an attempt interacts with quarantine state and artefacts (AAP 0.5.1).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    retries: int = Field(default=0, ge=_EXECUTION_RETRIES_MIN, le=_EXECUTION_RETRIES_MAX)
+    retries: int = Field(
+        default=EXECUTION_RETRIES_DEFAULT, ge=EXECUTION_RETRIES_MIN, le=EXECUTION_RETRIES_MAX
+    )
     """Repeats **after** the first attempt, so ``2`` allows three attempts (assumption A2).
 
     Not to be confused with :attr:`HttpRetriesConfig.max_attempts`, which counts attempts.
     """
 
-    timeout: float = Field(default=_EXECUTION_TIMEOUT_DEFAULT, gt=TIMEOUT_MIN, le=TIMEOUT_MAX)
+    timeout: float = Field(default=TIMEOUT_DEFAULT, gt=TIMEOUT_MIN, le=TIMEOUT_MAX)
 
     quarantine_mode: QuarantineMode = QuarantineMode.REPORT
     """Whether a quarantined failure fails the run (``strict``) or only the report (``report``).
@@ -433,13 +415,13 @@ class SecretsConfig(BaseModel):
     """The ``secrets.*`` table: the key names redacted from everything Foundry writes.
 
     :class:`foundry.obs.redaction.Redactor` is the only consumer: it matches these names, plus its
-    own header and URL-parameter deny-lists, case-insensitively, and runs before any artefact,
-    cassette, result document or report is serialised (AAP 0.3.2).
+    own deny-lists, case-insensitively, before any artefact, cassette, result document or report is
+    serialised (AAP 0.3.2).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    redact_keys: tuple[str, ...] = _DEFAULT_REDACT_KEYS
+    redact_keys: list[str] = Field(default_factory=lambda: list(_DEFAULT_REDACT_KEYS))
     """Header and JSON key names to redact, deduplicated case-insensitively in authored order."""
 
     @field_validator("redact_keys", mode="before")
@@ -453,9 +435,6 @@ class SecretsConfig(BaseModel):
         Args:
             value: The raw value a layer supplied.
 
-        Returns:
-            The value as supplied, or the sorted form of an unordered collection.
-
         Raises:
             ValueError: If the value is a single string.
         """
@@ -467,18 +446,15 @@ class SecretsConfig(BaseModel):
 
     @field_validator("redact_keys", mode="after")
     @classmethod
-    def _deduplicate(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+    def _deduplicate(cls, value: list[str]) -> list[str]:
         """Drop repeated and blank names, comparing case-insensitively.
 
-        A duplicate deny-list entry cannot change what redaction does, so it is removed; the first
-        spelling wins. Matching stays case-insensitive in :mod:`foundry.obs.redaction`, and a blank
-        name is dropped as a no-op.
+        A duplicate deny-list entry cannot change what redaction does, so it is removed and the
+        first spelling wins; matching stays case-insensitive in :mod:`foundry.obs.redaction`, and
+        a blank name is dropped as a no-op. Names keep first-occurrence order.
 
         Args:
             value: The names as authored.
-
-        Returns:
-            The names in first-occurrence order, without duplicates or blanks.
         """
         seen: set[str] = set()
         unique: list[str] = []
@@ -489,16 +465,16 @@ class SecretsConfig(BaseModel):
                 continue
             seen.add(folded)
             unique.append(stripped)
-        return tuple(unique)
+        return unique
 
 
 class LoggingConfig(BaseModel):
     """The ``logging.*`` table: the ``foundry`` logger's level and the capture ring size.
 
     ``level`` configures Foundry's own logger only -- never root logging, which belongs to the
-    project (AAP 0.13.1). ``capture_lines`` sizes both the bounded ring
-    :class:`foundry.obs.capture.LogRing` keeps per test and the log tail a failed test's artefact
-    directory and report panel carry (AAP 0.4.6).
+    project (AAP 0.13.1) -- and ``capture_lines`` sizes the bounded
+    :class:`foundry.obs.capture.LogRing` per test and the log tail a failed test's artefact and
+    report panel carry (AAP 0.4.6).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -515,17 +491,15 @@ class FoundryConfig(BaseSettings):
     """One resolved, immutable configuration: the 28 published keys plus their provenance.
 
     A run builds exactly one of these, in :func:`foundry.config.merge.resolve`, from what the four
-    layers of AAP 0.4.5 supplied, and every consumer -- the ``foundry_config`` fixture, the CLI,
-    the HTTP session, the cassette store, the artefact writer, the report -- reads that instance.
-    It is frozen, so no consumer alters what another sees, and provenance is attached afterwards
-    with :meth:`with_sources` rather than by mutation.
+    layers of AAP 0.4.5 supplied, and every consumer -- the fixture, the CLI, the HTTP session, the
+    cassette store, the artefact writer, the report -- reads that instance. It is frozen, so no
+    consumer alters what another sees, and provenance is attached with :meth:`with_sources`.
 
     It subclasses :class:`pydantic_settings.BaseSettings` so the ``FOUNDRY_`` prefix and ``__``
     nesting of AAP 0.4.5 are declared where pydantic-settings reads them, while
-    :meth:`settings_customise_sources` keeps the caller's mapping as the only source. An ambient
-    read of ``os.environ`` here would add a fifth, unrecorded layer -- making the precedence test
-    and ``foundry config show`` non-deterministic -- and would read a source AAP 0.4.8 reserves
-    for :mod:`foundry.config.env` and :mod:`foundry.http.auth`.
+    :meth:`settings_customise_sources` keeps the caller's mapping as the only source: an ambient
+    ``os.environ`` read here would add a fifth, unrecorded layer and make ``foundry config show``
+    non-deterministic (AAP 0.4.8).
     """
 
     model_config = SettingsConfigDict(
@@ -553,14 +527,43 @@ class FoundryConfig(BaseSettings):
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
-    sources: dict[str, ConfigSource] = Field(default_factory=dict, repr=False)
+    sources: ConfigSources = Field(default_factory=dict, repr=False)
     """Which layer supplied each key, as :mod:`foundry.config.merge` recorded it.
 
-    Empty when a configuration is built without provenance, and then :meth:`source_of` reports every
-    registered key as ``default``. Not a configuration key: no layer sets it, and a ``sources``
-    table in a file is rejected as an unknown key. ``ConfigSource`` compares by value, so equal
-    resolutions compare equal.
+    A read-only mapping of the ``Mapping[str, ConfigSource]`` AAP 0.7.2 publishes, installed as a
+    :class:`types.MappingProxyType` because ``frozen=True`` stops a field being rebound but not a
+    ``dict`` inside it being edited, and it drives ``config show``, ``doctor`` and the report. Empty
+    when a configuration is built without provenance, and then :meth:`source_of` reports every
+    registered key as ``default``; no layer sets it, so a ``sources`` table in a file is an unknown
+    key, and ``ConfigSource`` comparing by value keeps equal resolutions equal.
     """
+
+    @model_validator(mode="after")
+    def _read_only_sources(self) -> FoundryConfig:
+        """Install the read-only view of the provenance the field declares.
+
+        The declared type is a mapping and this is what makes the value honour it: pydantic stores
+        the mapping it validated, which is mutable, so it is replaced by a
+        :class:`types.MappingProxyType` over a private copy, and an already read-only value is kept
+        as it is. The configuration returned carries :attr:`sources` read-only.
+        """
+        if not isinstance(self.sources, MappingProxyType):
+            object.__setattr__(self, "sources", MappingProxyType(dict(self.sources)))
+        return self
+
+    @field_serializer("sources", mode="plain")
+    def _sources_as_mapping(self, sources: ConfigSources) -> dict[str, ConfigSource]:
+        """Serialise the provenance as a plain mapping of its records.
+
+        ``model_dump`` cannot serialise a :class:`types.MappingProxyType` against the field's
+        declared type, so the read-only view is unwrapped here and a dump carries ``sources`` as the
+        object AAP 0.4.5 publishes -- what :func:`foundry.execution.session.worker_payload` ferries
+        to the xdist workers, kept a JSON object rather than a string.
+
+        Args:
+            sources: The read-only provenance this configuration holds.
+        """
+        return dict(sources)
 
     @classmethod
     def settings_customise_sources(
@@ -624,7 +627,8 @@ class FoundryConfig(BaseSettings):
 
         How :func:`foundry.config.merge` attaches attribution once the values validate, and how a
         suite overriding the ``foundry_config`` fixture rebuilds a configuration with an injected
-        ``http.base_url``. ``model_copy`` does not revalidate, so the records pass through.
+        ``http.base_url``. ``model_copy`` revalidates nothing, so the copy installs the read-only
+        view itself and the result's provenance cannot be rewritten either.
 
         Args:
             sources: The per-key provenance to attach, keyed by dotted key.
@@ -632,18 +636,17 @@ class FoundryConfig(BaseSettings):
         Returns:
             A new configuration equal to this one except in its provenance.
         """
-        return self.model_copy(update={"sources": dict(sources)})
+        return self.model_copy(update={"sources": MappingProxyType(dict(sources))})
 
     def leaf_values(self) -> dict[str, object]:
         """Return the resolved values as the 28 flat dotted keys AAP 0.4.5 publishes.
 
         The dotted-key spelling exists once, in :func:`foundry.config.layers.flatten`, which the
-        merge also applies a layer with, so ``config show`` and the merge agree. Values stay the
-        objects the model holds; every renderer formats its own output.
+        merge also applies a layer with, so ``config show`` and the merge agree; values stay the
+        objects the model holds.
 
         Returns:
-            One entry per leaf key, ordered by key: ``http.retries.max_attempts``,
-            ``http.timeout``, ``profile`` and the other 25.
+            One entry per leaf key, ordered by key: ``http.timeout``, ``profile`` and 26 more.
         """
         return flatten(self.model_dump(exclude={"sources"}, mode="python"))
 
@@ -652,12 +655,9 @@ def _retry_predicate(element: object) -> RetryPredicate | None:
     """Return the retry predicate ``element`` names, or ``None`` when it names none.
 
     Args:
-        element: One authored element of ``http.retries.retry_on`` -- a member, or the text
-            naming one in any case.
-
-    Returns:
-        The matching member, or ``None`` so the caller raises one message naming every accepted
-        predicate.
+        element: One authored element of ``http.retries.retry_on`` -- a member, or the text naming
+            one in any case. Nothing matched, the answer is ``None``, so the caller raises one
+            message naming every accepted predicate.
     """
     if isinstance(element, RetryPredicate):
         return element
@@ -669,9 +669,7 @@ def _retry_predicate(element: object) -> RetryPredicate | None:
 def _retry_on_expectation() -> str:
     """Return the message naming the predicates ``http.retries.retry_on`` accepts.
 
-    Returns:
-        The expected shape, with the accepted values taken from the enum, so a member added there
-        cannot leave the message behind.
+    The accepted values come from the enum, so a member added there cannot leave the message behind.
     """
     return f"expected a list of {accepted_values_text(RetryPredicate)}"
 
@@ -681,9 +679,8 @@ def _require_present(
 ) -> None:
     """Raise if one of ``companions`` is unset while ``strategy`` is the selected strategy.
 
-    The message names the missing key and the strategy key with the selected strategy in single
-    quotes, because :func:`foundry.config.validation.translate_validation_error` reads the two keys
-    and the quoted value back out of it to build the ``ConfigError`` naming the missing key.
+    The message names the missing key and the strategy key, quoted strategy included, because
+    :func:`foundry.config.validation.translate_validation_error` reads both back for its error.
 
     Args:
         model: The auth table being validated.

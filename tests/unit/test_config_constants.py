@@ -28,8 +28,8 @@ from foundry.cassette import paths
 from foundry.config import errors, keys
 from foundry.core import limits
 from foundry.core.exceptions import ConfigError
-from foundry.execution import timeout
-from foundry.http import retries
+from foundry.execution import retry, timeout
+from foundry.http import retries, session
 from foundry.obs import capture
 from foundry.reporting import panels
 
@@ -37,22 +37,26 @@ _RANGE_PATTERN = re.compile(r"^(?P<low>-?\d+(?:\.\d+)?)\.\.(?P<high>-?\d+(?:\.\d
 """A closed range as the registry spells one, for example ``1..10``."""
 
 _TIMEOUT_PATTERN = re.compile(r"^(?P<low>-?\d+(?:\.\d+)?) < t <= (?P<high>-?\d+(?:\.\d+)?)$")
-"""``execution.timeout``'s open-lower-bound constraint, ``0 < t <= 3600``."""
+"""A range with an exclusive lower bound, the other spelling the registry uses: ``0 < t <= 300``."""
 
 _BOUND_CASES: tuple[tuple[str, float, float], ...] = (
     ("logging.capture_lines", limits.CAPTURE_LINES_MIN, limits.CAPTURE_LINES_MAX),
+    ("http.timeout", limits.HTTP_TIMEOUT_MIN, limits.HTTP_TIMEOUT_MAX),
     ("http.retries.max_attempts", limits.MAX_ATTEMPTS_MIN, limits.MAX_ATTEMPTS_MAX),
     ("http.retries.backoff_base", limits.BACKOFF_BASE_MIN, limits.BACKOFF_BASE_MAX),
     ("http.retries.backoff_max", limits.BACKOFF_MAX_MIN, limits.BACKOFF_MAX_MAX),
+    ("execution.retries", limits.EXECUTION_RETRIES_MIN, limits.EXECUTION_RETRIES_MAX),
     ("execution.timeout", limits.TIMEOUT_MIN, limits.TIMEOUT_MAX),
 )
 """Every numeric range the single source covers, with the bounds it states for it."""
 
 _RANGE_TEXT_CASES: tuple[tuple[str, str], ...] = (
     ("logging.capture_lines", limits.CAPTURE_LINES_RANGE),
+    ("http.timeout", limits.HTTP_TIMEOUT_RANGE),
     ("http.retries.max_attempts", limits.MAX_ATTEMPTS_RANGE),
     ("http.retries.backoff_base", limits.BACKOFF_BASE_RANGE),
     ("http.retries.backoff_max", limits.BACKOFF_MAX_RANGE),
+    ("execution.retries", limits.EXECUTION_RETRIES_RANGE),
     ("execution.timeout", limits.TIMEOUT_RANGE),
 )
 """Every ``*_RANGE`` text beside the key whose published constraint it must equal."""
@@ -64,6 +68,8 @@ _CAPABILITY_CASES: tuple[tuple[str, object, object], ...] = (
     ("panels.DEFAULT_LOG_TAIL_LINES", panels.DEFAULT_LOG_TAIL_LINES, limits.CAPTURE_LINES_DEFAULT),
     ("panels.MAX_LOG_TAIL_LINES", panels.MAX_LOG_TAIL_LINES, limits.CAPTURE_LINES_MAX),
     ("paths.DEFAULT_CASSETTE_DIR", paths.DEFAULT_CASSETTE_DIR, limits.CASSETTE_DIR_DEFAULT),
+    ("session.DEFAULT_TIMEOUT", session.DEFAULT_TIMEOUT, limits.HTTP_TIMEOUT_DEFAULT),
+    ("session.MAX_TIMEOUT", session.MAX_TIMEOUT, limits.HTTP_TIMEOUT_MAX),
     ("retries.MIN_ATTEMPTS", retries.MIN_ATTEMPTS, limits.MAX_ATTEMPTS_MIN),
     ("retries.MAX_ATTEMPTS", retries.MAX_ATTEMPTS, limits.MAX_ATTEMPTS_MAX),
     ("retries.MIN_BACKOFF_BASE", retries.MIN_BACKOFF_BASE, limits.BACKOFF_BASE_MIN),
@@ -73,6 +79,9 @@ _CAPABILITY_CASES: tuple[tuple[str, object, object], ...] = (
     ("timeout.MIN_TIMEOUT_SECONDS", timeout.MIN_TIMEOUT_SECONDS, limits.TIMEOUT_MIN),
     ("timeout.MAX_TIMEOUT_SECONDS", timeout.MAX_TIMEOUT_SECONDS, limits.TIMEOUT_MAX),
     ("timeout.TIMEOUT_RANGE_TEXT", timeout.TIMEOUT_RANGE_TEXT, limits.TIMEOUT_RANGE),
+    ("retry.MIN_RETRIES", retry.MIN_RETRIES, limits.EXECUTION_RETRIES_MIN),
+    ("retry.MAX_RETRIES", retry.MAX_RETRIES, limits.EXECUTION_RETRIES_MAX),
+    ("retry.RETRIES_RANGE_TEXT", retry.RETRIES_RANGE_TEXT, limits.EXECUTION_RETRIES_RANGE),
 )
 """Every public constant a capability package re-publishes, beside the single source's value."""
 
@@ -98,6 +107,11 @@ _FAULT_CASES: tuple[tuple[str, Callable[[], object], str], ...] = (
         "execution.timeout",
         lambda: timeout.TimeoutPolicy(seconds=0.0),
         "invalid value for execution.timeout: 0.0 (expected 0 < t <= 3600)",
+    ),
+    (
+        "execution.retries",
+        lambda: retry.ExecutionRetries(repeats=11),
+        "invalid value for execution.retries: 11 (expected 0..10)",
     ),
 )
 """One out-of-range value per capability validator, with the message AAP 0.4.5 fixes for it."""
@@ -153,6 +167,21 @@ def test_capability_constant_is_the_single_source_value(
 def test_retry_policy_default_is_the_single_source_value(field: str, expected: object) -> None:
     """``RetryPolicy()``'s field defaults are the ``http.retries.*`` defaults of AAP 0.4.5."""
     assert getattr(retries.RetryPolicy(), field) == expected
+
+
+def test_session_settings_default_timeout_is_the_single_source_value() -> None:
+    """A hand-built ``SessionSettings`` carries the published ``http.timeout`` default.
+
+    ``foundry.http`` may not read the configuration model (AAP 0.4.8), so the session's own default
+    is the one copy of ``http.timeout`` a suite sees before any fixture runs: a changed published
+    default must move it, and this assertion is what fails when it does not.
+    """
+    assert session.SessionSettings().timeout == limits.HTTP_TIMEOUT_DEFAULT
+
+
+def test_execution_retries_default_is_the_single_source_value() -> None:
+    """The retry loop's own default is the published ``execution.retries`` default."""
+    assert retry.ExecutionRetries().repeats == limits.EXECUTION_RETRIES_DEFAULT
 
 
 def test_range_template_is_the_single_source_template() -> None:

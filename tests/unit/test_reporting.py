@@ -450,6 +450,9 @@ def test_a_failure_element_carries_a_redacted_message_and_every_phase() -> None:
     assert failure is not None
     assert "***" in failure.get("message", "")
     assert (failure.text or "").startswith("[call] ")
+    # ``error`` is the other failing outcome of AAP 0.4.6, and it renders as the sibling element.
+    errored = _junit_root(_record(outcome=Outcome.ERROR))
+    assert errored.find("testcase/error") is not None and errored.get("errors") == "1"
 
 
 @pytest.mark.parametrize(
@@ -488,6 +491,9 @@ def test_a_quarantined_test_that_passed_carries_a_removal_note() -> None:
     note = testcase.find("system-out")
     assert note is not None
     assert "remove the foundry_quarantine marker" in (note.text or "")
+    # ``xpassed`` is the other success outcome of AAP 0.4.6 that carries a note, and it renders it.
+    xpassed = _junit_root(_record(outcome=Outcome.XPASSED)).find("testcase/system-out")
+    assert xpassed is not None and junit.XPASSED_NOTE in (xpassed.text or "")
 
 
 def test_a_run_error_becomes_a_system_err_on_the_suite() -> None:

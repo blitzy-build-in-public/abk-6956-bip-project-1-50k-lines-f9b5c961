@@ -6,9 +6,9 @@ messages that quote it. Those numbers have to be readable from outside ``foundry
 because five capability packages use them and may not import that package: AAP 0.4.8 lets
 ``foundry.obs``, ``foundry.reporting``, ``foundry.cassette``, ``foundry.http`` and
 ``foundry.execution`` reach the foundation rung only. This module is the one home for them, so
-``logging.capture_lines``, ``cassette.dir``, ``http.retries.max_attempts``,
-``http.retries.backoff_base``, ``http.retries.backoff_max`` and ``execution.timeout`` each have a
-single definition site for their default and their bounds.
+``logging.capture_lines``, ``cassette.dir``, ``http.timeout``, ``http.retries.max_attempts``,
+``http.retries.backoff_base``, ``http.retries.backoff_max``, ``execution.retries`` and
+``execution.timeout`` each have a single definition site for their default and their bounds.
 
 The two statements are tied rather than merely intended to agree:
 ``tests/unit/test_config_constants.py`` parses the bounds back out of
@@ -45,11 +45,20 @@ __all__: Final[tuple[str, ...]] = (
     "CAPTURE_LINES_MIN",
     "CAPTURE_LINES_RANGE",
     "CASSETTE_DIR_DEFAULT",
+    "EXECUTION_RETRIES_DEFAULT",
+    "EXECUTION_RETRIES_MAX",
+    "EXECUTION_RETRIES_MIN",
+    "EXECUTION_RETRIES_RANGE",
+    "HTTP_TIMEOUT_DEFAULT",
+    "HTTP_TIMEOUT_MAX",
+    "HTTP_TIMEOUT_MIN",
+    "HTTP_TIMEOUT_RANGE",
     "MAX_ATTEMPTS_DEFAULT",
     "MAX_ATTEMPTS_MAX",
     "MAX_ATTEMPTS_MIN",
     "MAX_ATTEMPTS_RANGE",
     "RANGE_FAULT_TEMPLATE",
+    "TIMEOUT_DEFAULT",
     "TIMEOUT_MAX",
     "TIMEOUT_MIN",
     "TIMEOUT_RANGE",
@@ -131,8 +140,27 @@ BACKOFF_MAX_RANGE: Final[str] = f"{BACKOFF_MAX_MIN:g}..{BACKOFF_MAX_MAX:g}"
 """The accepted range of ``http.retries.backoff_max`` as its constraint text: ``0..60``."""
 
 
+# --- http.timeout ----------------------------------------------------------
+
+
+HTTP_TIMEOUT_DEFAULT: Final[float] = 10.0
+"""Default of ``http.timeout``: the deadline in seconds of a request that names none (AAP 0.4.5)."""
+
+HTTP_TIMEOUT_MIN: Final[float] = 0.0
+"""Exclusive lower bound of ``http.timeout``, in seconds: a zero deadline would wait for nothing."""
+
+HTTP_TIMEOUT_MAX: Final[float] = 300.0
+"""Inclusive upper bound of ``http.timeout``, in seconds: one request waits at most five minutes."""
+
+HTTP_TIMEOUT_RANGE: Final[str] = f"{HTTP_TIMEOUT_MIN:g} < t <= {HTTP_TIMEOUT_MAX:g}"
+"""The accepted range of ``http.timeout`` as its constraint text: ``0 < t <= 300``."""
+
+
 # --- execution.timeout -----------------------------------------------------
 
+
+TIMEOUT_DEFAULT: Final[float] = 60.0
+"""Default of ``execution.timeout``, in seconds: one minute for a single test (AAP 0.4.5)."""
 
 TIMEOUT_MIN: Final[float] = 0.0
 """Exclusive lower bound of ``execution.timeout``, in seconds: a zero limit would arm no timer."""
@@ -142,6 +170,22 @@ TIMEOUT_MAX: Final[float] = 3600.0
 
 TIMEOUT_RANGE: Final[str] = f"{TIMEOUT_MIN:g} < t <= {TIMEOUT_MAX:g}"
 """The accepted range of ``execution.timeout`` as its constraint text: ``0 < t <= 3600``."""
+
+
+# --- execution.retries -----------------------------------------------------
+
+
+EXECUTION_RETRIES_DEFAULT: Final[int] = 0
+"""Default of ``execution.retries``: a failing test runs once and is not repeated (AAP 0.4.5)."""
+
+EXECUTION_RETRIES_MIN: Final[int] = 0
+"""Smallest accepted ``execution.retries``: the test runs once and is not repeated."""
+
+EXECUTION_RETRIES_MAX: Final[int] = 10
+"""Largest accepted ``execution.retries``: ten repeats after the first attempt, eleven attempts."""
+
+EXECUTION_RETRIES_RANGE: Final[str] = f"{EXECUTION_RETRIES_MIN}..{EXECUTION_RETRIES_MAX}"
+"""The accepted range of ``execution.retries`` as its constraint text: ``0..10``."""
 
 
 # --- The one range-fault wording -------------------------------------------
