@@ -26,7 +26,6 @@ from foundry.reporting.record import (
     Outcome,
     ResultElement,
     ResultRecord,
-    RunError,
 )
 
 __all__: Final[tuple[str, ...]] = (
@@ -465,14 +464,23 @@ def build_panels(
 ) -> tuple[FailurePanel, ...]:
     """Build the failure panels of a run from its result elements.
 
-    One panel is produced per failing phase of every result record, and run-level errors are
-    skipped: a :class:`foundry.reporting.record.RunError` describes the run rather than a test, so
-    the report lists it in its own Errors section. Records that carry no failures produce no panel.
+    One panel is produced per failing phase of every result record, and records that carry no
+    failures produce no panel. A :class:`foundry.reporting.record.RunError` describes the run rather
+    than a test, so it is skipped rather than dereferenced and the report lists it in its own Errors
+    section; any other element kind is skipped the same way, which is why only a
+    :class:`foundry.reporting.record.ResultRecord` is ever read here. A ``report.html`` caller never
+    reaches that skip: :func:`foundry.reporting.html.build_context` validates the sequence first and
+    raises :class:`foundry.core.exceptions.ElementTypeError` for anything else (AAP 0.14.3).
 
     The panels are sorted by :func:`_panel_sort_key`, which makes the section byte-identical between
     two runs of the same suite (criterion 14). Every message and log line is redacted before its
     panel is constructed, and every artifact read is isolated, so a missing or escaping artifact
     leaves that section out and logs one ``WARNING`` instead of failing the report (AAP 0.14.3).
+
+    ``report_dir`` is the directory the document will be written into, and every artifact href is
+    relative to it. Omitted, the link base is the process working directory, which is where the
+    product writes ``report.html`` (assumption A5), so a caller rendering a document for any other
+    directory must pass it.
 
     Returns:
         The failure panels, ordered by node id, then phase in execution order, then message. An
@@ -485,7 +493,7 @@ def build_panels(
 
     panels: list[FailurePanel] = []
     for element in records:
-        if isinstance(element, RunError) or not element.failures:
+        if not isinstance(element, ResultRecord) or not element.failures:
             continue
         panels.extend(
             _panels_for_record(

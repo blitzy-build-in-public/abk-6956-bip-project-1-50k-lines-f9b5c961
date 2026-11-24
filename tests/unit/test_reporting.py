@@ -551,6 +551,36 @@ def test_a_failure_panel_links_the_dumps_and_shows_the_log_tail(tmp_path: Path) 
     assert _SECRET not in document
 
 
+def _hrefs(document: str) -> list[str]:
+    """Return every ``href`` value a rendered document carries, in document order."""
+    return [remainder.split('"', 1)[0] for remainder in document.split('href="')[1:]]
+
+
+def test_the_link_base_defaults_to_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An omitted ``report_dir`` links from the working directory, where ``report.html`` is written.
+
+    AAP 0.14.6 A5 writes the report into the invocation directory, so a caller that renders the
+    document from inside it passes nothing and gets the hrefs the explicit argument gives. The
+    second half is the other side of that contract: a document rendered for another directory must
+    be told which one, because the working directory would resolve its hrefs somewhere else.
+    """
+    record, run_dir = _failing_capture(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    from_working_directory = _hrefs(_render([record], artifacts_root=run_dir))
+    explicit = _hrefs(_render([record], artifacts_root=run_dir, report_dir=tmp_path))
+    assert explicit != []
+    assert from_working_directory == explicit
+    assert all(href.startswith("artifacts/") for href in explicit)
+
+    elsewhere = tmp_path / "reports"
+    elsewhere.mkdir()
+    other = _hrefs(_render([record], artifacts_root=run_dir, report_dir=elsewhere))
+    assert other != explicit
+    assert all(not href.startswith("/") and "://" not in href for href in other)
+
+
 def test_a_run_with_no_records_states_that_nothing_was_collected() -> None:
     document = _render([], run_id=_RUN_ID, profile=_PROFILE)
     assert "no tests collected" in document

@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Final
 
+from foundry.core.exceptions import ElementTypeError
 from foundry.core.ids import to_iso8601
 from foundry.obs.events import emit_html_fallback
 from foundry.obs.redaction import Redactor, default_redactor
@@ -390,6 +391,46 @@ def _artifacts_disabled(results: Sequence[ResultRecord]) -> bool:
 # --- Building the context ---------------------------------------------------
 
 
+def _partition(records: Sequence[ResultElement]) -> tuple[list[ResultRecord], list[RunError]]:
+    """Split the run's elements into its result records and its run errors, each sorted.
+
+    The sequence is validated once, here, before any panel is built, so an element of neither kind
+    is the published exception rather than a builtin escaping from a renderer into the session
+    (AAP 0.14.3). It is the same partition :func:`foundry.reporting.store.dumps` and
+    :func:`foundry.reporting.junit._partition` perform for their own documents.
+
+    Args:
+        records: The run's elements in any order.
+
+    Returns:
+        The result records sorted by node id, and the run errors sorted by worker id and message.
+
+    Raises:
+        ElementTypeError: An element is neither a
+            :class:`foundry.reporting.record.ResultRecord` nor a
+            :class:`foundry.reporting.record.RunError`. It subclasses ``TypeError`` and
+            :class:`foundry.core.exceptions.FoundryError`, so a caller catching either documented
+            type still catches it, and a caller defect surfaces instead of being absorbed into a
+            report that would silently omit a test.
+    """
+    results: list[ResultRecord] = []
+    errors: list[RunError] = []
+    for element in records:
+        if isinstance(element, ResultRecord):
+            results.append(element)
+        elif isinstance(element, RunError):
+            errors.append(element)
+        else:
+            raise ElementTypeError(
+                "report.html holds only ResultRecord and RunError elements, "
+                f"got {type(element).__name__}",
+                hint="pass ResultRecord and RunError elements, as the run's recorder produces them",
+            )
+    results.sort(key=_record_sort_key)
+    errors.sort(key=_run_error_sort_key)
+    return results, errors
+
+
 def build_context(
     records: Sequence[ResultElement],
     *,
@@ -407,6 +448,15 @@ def build_context(
     performs no I/O of its own: reading the captured log tails is
     :func:`foundry.reporting.panels.build_panels`'s work, and it isolates every fault it meets.
 
+    The element sequence is validated once, here, before any panel is built, so only a result record
+    and a run error ever reach the document and :func:`_partition` performs that check for the whole
+    sequence (AAP 0.14.3).
+
+    ``report_dir`` is the directory the document will be written into, and every artifact href in it
+    is relative to that directory. Omitted, the link base is the process working directory -- where
+    the product writes ``report.html`` (assumption A5) -- so a caller rendering a document for any
+    other directory must pass it.
+
     Determinism (AAP 0.13.1, criterion 14): the result records are sorted by node id, the run errors
     by worker id and message, the counts follow the outcome declaration order, and every other
     collection is derived from those. Redaction (AAP 0.3.2): a run error's message is scrubbed here
@@ -415,17 +465,17 @@ def build_context(
 
     Returns:
         The context, with every collection sorted and every free-text value redacted.
+
+    Raises:
+        ElementTypeError: An element is neither a
+            :class:`foundry.reporting.record.ResultRecord` nor a
+            :class:`foundry.reporting.record.RunError`. It subclasses ``TypeError`` and
+            :class:`foundry.core.exceptions.FoundryError`, so a caller catching either documented
+            type still catches it.
     """
     scrubber = default_redactor() if redactor is None else redactor
     bundle = DEFAULT_ASSETS if assets is None else assets
-    results = sorted(
-        (element for element in records if isinstance(element, ResultRecord)),
-        key=_record_sort_key,
-    )
-    run_errors = sorted(
-        (element for element in records if isinstance(element, RunError)),
-        key=_run_error_sort_key,
-    )
+    results, run_errors = _partition(records)
     rows = tuple(_row_for(record) for record in results)
     return ReportContext(
         run_id=_run_id_for(results, run_id),
@@ -439,7 +489,7 @@ def build_context(
         rows=rows,
         quarantined=_quarantined_rows(rows),
         panels=build_panels(
-            records,
+            results,
             artifacts_root=artifacts_root,
             report_dir=report_dir,
             redactor=scrubber,
@@ -534,6 +584,11 @@ def render(
     deliberately not applied to the finished document, because a failure message may legitimately
     quote a URL.
 
+    ``report_dir`` is the directory the document will be written into, and every artifact href in it
+    is relative to that directory; it reaches :func:`build_context` unchanged. Omitted, the link
+    base is the process working directory -- where the product writes ``report.html`` (assumption
+    A5) -- so a caller rendering a document for any other directory must pass it.
+
     Returns:
         The rendered document, or ``None`` when the template is missing or cannot be rendered -- in
         which case the caller writes no ``report.html``, keeps ``results.json``, writes no
@@ -542,6 +597,10 @@ def render(
     Raises:
         FoundryError: The asset bundle is not self-contained, which is a programmer error in
             :mod:`foundry.reporting.assets` rather than a fault of the run.
+        ElementTypeError: An element is neither a
+            :class:`foundry.reporting.record.ResultRecord` nor a
+            :class:`foundry.reporting.record.RunError`, which
+            :func:`foundry.reporting.html.build_context` reports before anything is rendered.
     """
     scrubber = default_redactor() if redactor is None else redactor
     bundle = DEFAULT_ASSETS if assets is None else assets

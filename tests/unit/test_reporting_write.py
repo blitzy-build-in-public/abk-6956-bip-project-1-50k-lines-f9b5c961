@@ -13,6 +13,12 @@ and ``foundry.reporting.store.write_text`` own:
   ``os.fsdecode`` gives a path with undecodable bytes) must cost that one string rather than every
   document. AAP 0.1.2 and 0.14.3 require a plumbing fault to log at ``WARNING`` on the ``foundry``
   logger and to change neither a test's outcome nor the run's exit code.
+* cr1-f01-element-type-boundary -- a writer handed an element that is neither a result record nor a
+  run error must raise the published ``ElementTypeError`` rather than a builtin escaping from a
+  renderer (AAP 0.14.3), which is the exception ``write_all`` and ``write_html_report`` document.
+  The HTML path used to honour that only because ``store.dumps`` ran first, so the cases below
+  refuse the element with ``reporting.json`` both on and off and with the HTML writer called
+  directly, and each one asserts that no document was written on the way out.
 
 Determinism and isolation: records are built inline from fixed timestamps, so no assertion reads
 the wall clock; every document goes under ``tmp_path``; nothing sleeps and nothing touches the
@@ -27,11 +33,13 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from foundry.core.exceptions import ElementTypeError
 from foundry.reporting import renderers, store
-from foundry.reporting.record import FailureRecord, Outcome, ResultRecord
+from foundry.reporting.record import FailureRecord, Outcome, ResultElement, ResultRecord
 
 # --- Fixed fixtures --------------------------------------------------------
 #
@@ -72,6 +80,16 @@ def _record_for(name: str, **overrides: object) -> ResultRecord:
     }
     fields.update(overrides)
     return ResultRecord.model_validate(fields)
+
+
+def _foreign_elements() -> list[ResultElement]:
+    """Return a one-element sequence holding a builtin object: the caller defect under test.
+
+    It is cast because the writers' contract is typed for the two foundry element kinds; a caller
+    that hands one of them anything else is the state AAP 0.14.3 requires them to report rather
+    than to crash on.
+    """
+    return cast("list[ResultElement]", [object()])
 
 
 # --- The switches are independent (AAP 0.4.5) ------------------------------
@@ -118,6 +136,38 @@ def test_the_html_fallback_keeps_only_the_result_document(
         None,
     )
     assert [path.name for path in tmp_path.iterdir()] == ["results.json"]
+
+
+# --- The element boundary of the writers (AAP 0.14.3) ---------------------
+
+
+@pytest.mark.parametrize(
+    ("write_json", "document"),
+    [(True, "results.json"), (False, "report.html")],
+    ids=["result-document-first", "html-path-alone"],
+)
+def test_a_foreign_element_is_refused_before_a_document_is_written(
+    tmp_path: Path, write_json: bool, document: str
+) -> None:
+    """Each step reports the element itself, whichever documents are switched on.
+
+    With ``reporting.json`` off the HTML step is the first consumer of the sequence, so it is the
+    case that proves the declared ``ElementTypeError`` no longer depends on ``store.dumps`` having
+    run first; the message names the document that refused the element.
+    """
+    with pytest.raises(ElementTypeError) as excinfo:
+        renderers.write_all(_foreign_elements(), tmp_path, write_json=write_json)
+    assert document in str(excinfo.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_html_writer_refuses_a_foreign_element(tmp_path: Path) -> None:
+    """``write_html_report`` raises the exception it documents and writes no file."""
+    target = tmp_path / "report.html"
+    with pytest.raises(ElementTypeError) as excinfo:
+        renderers.write_html_report(_foreign_elements(), target)
+    assert "report.html" in str(excinfo.value)
+    assert not target.exists()
 
 
 # --- Failure isolation of the write (AAP 0.1.2, AAP 0.14.3) ----------------
