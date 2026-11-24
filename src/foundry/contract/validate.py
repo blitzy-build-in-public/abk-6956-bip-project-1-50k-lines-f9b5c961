@@ -369,6 +369,9 @@ def iter_violations(instance: object, schema: SchemaSource) -> tuple[Violation, 
             under its metaschema, declaring a draft this build cannot supply, or referencing a
             subschema that does not exist.
     """
+    # ``referencing`` is a declared runtime dependency of this distribution -- see ``[project]
+    # dependencies`` in pyproject.toml and the recorded reason in docs/verification.md -- not a
+    # transitive import borrowed from jsonschema.
     from referencing.exceptions import Unresolvable
 
     document = load_schema(schema)
