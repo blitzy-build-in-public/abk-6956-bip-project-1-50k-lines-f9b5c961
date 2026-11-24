@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Representative JSON response body used by the contract and assertion tests.",
+  "properties": {
+    "items": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "quantity": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sku": {
+            "pattern": "^SKU-[0-9]{4}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quantity",
+          "sku"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "order_id": {
+      "pattern": "^ORD-[0-9]{6}$",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "cancelled",
+        "paid",
+        "pending"
+      ],
+      "type": "string"
+    },
+    "totals": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "enum": [
+            "EUR",
+            "GBP",
+            "USD"
+          ],
+          "type": "string"
+        },
+        "grand_total_cents": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "currency",
+        "grand_total_cents"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "items",
+    "order_id",
+    "status",
+    "totals"
+  ],
+  "title": "Foundry example response body",
+  "type": "object"
+}

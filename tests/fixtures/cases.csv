@@ -1,0 +1,13 @@
+case_id,currency,tier,quantity,unit_price,expected_total
+C-001,EUR,bronze,2,10.00,20.00
+C-002,EUR,silver,3,12.50,37.50
+C-003,EUR,gold,1,25.00,25.00
+C-004,EUR,platinum,4,30.25,121.00
+C-005,GBP,bronze,5,4.20,21.00
+C-006,GBP,silver,2,15.75,31.50
+C-007,GBP,gold,3,19.99,59.97
+C-008,GBP,platinum,1,42.00,42.00
+C-009,USD,bronze,6,3.50,21.00
+C-010,USD,silver,4,8.25,33.00
+C-011,USD,gold,2,27.40,54.80
+C-012,USD,platinum,3,33.33,99.99
