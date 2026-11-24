@@ -5,24 +5,18 @@ build-backend = "hatchling.build"
 [project]
 name = "pytest-foundry"
 version = "0.1.0"
-description = "Layered configuration, HTTP helpers, contract validation, data-driven cases, record/replay, retries, quarantine, sharding, artifact capture and reporting for pytest suites."
+description = "Test-automation framework for pytest suites: layered configuration, HTTP/API helpers, contract validation, data-driven cases, record/replay, retries with quarantine, sharding, artifact capture and reporting."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
-license = { text = "MIT" }
-authors = [{ name = "Foundry contributors" }]
-keywords = ["pytest", "plugin", "testing", "http", "contract", "record-replay", "sharding"]
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
-  "Development Status :: 4 - Beta",
-  "Framework :: Pytest",
-  "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: MacOS",
-  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Topic :: Software Development :: Testing",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
   "Typing :: Typed",
 ]
 dependencies = [
@@ -69,43 +63,36 @@ include = [
   "examples",
   "scripts",
   "docs",
+  "pyproject.toml",
+  "uv.lock",
   "README.md",
   "CHANGELOG.md",
   "LICENSE",
-  "pyproject.toml",
-  "uv.lock",
+  ".gitignore",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests", "examples"]
-extend-exclude = ["blitzy"]
+src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "PTH", "D"]
-# D213 is mutually exclusive with D212, and D203 with D211; pick the D212/D211
-# pair so ruff does not emit its "incompatible rules" warning on every run.
-ignore = ["D213", "D203"]
 
-[tool.ruff.lint.isort]
-known-first-party = ["foundry"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+"examples/**" = ["D"]
+"**/__init__.py" = ["D"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 warn_unused_ignores = true
-show_error_codes = true
 files = ["src/foundry"]
 
 [tool.pytest.ini_options]
-minversion = "8.2"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-
-[tool.coverage.run]
-source = ["foundry"]
-branch = true
-
-[tool.coverage.report]
-show_missing = true
