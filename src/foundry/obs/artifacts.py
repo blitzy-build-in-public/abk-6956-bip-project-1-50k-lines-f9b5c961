@@ -5,13 +5,15 @@ A run records what each test produced under ``artifacts/<run_id>/<sanitized-node
 ``log_tail.log`` and ``manifest.json``. This is the artifact-owning module of the three AAP 0.4.8
 permits writes in, so every artifact reaches the disk through :class:`ArtifactWriter`, which writes
 each final name directly rather than through a temporary file and rename, since a worker writes only
-inside its own item's directory. Payloads pass through :class:`foundry.obs.redaction.Redactor`, the
-node id included, so a configured secret has no route onto the disk (AAP 0.3.2); a failing write is
-reported once at ``WARNING``, disabling capture for the run while the manifest is still attempted as
-the record of the fault (AAP 0.4.7); an escaping path, a nameless kind or an unbound writer raises
-``ArtifactError``. ``sort_keys=True`` JSON, one trailing newline, explicit UTF-8 and sorted artifact
-tuples keep two runs byte-identical (AAP 0.14.3); importing the module defines names only
-(AAP 0.4.8).
+inside its own item's directory. :meth:`ArtifactWriter.ensure_run_dir` is the one place the run
+directory itself is made, so an unwritable ``artifacts.dir`` becomes the one warning of AAP 0.4.7
+instead of a second write site. Payloads pass through :class:`foundry.obs.redaction.Redactor`,
+the node id included, so a configured secret has no route onto the disk (AAP 0.3.2); a failing
+write is reported once at ``WARNING``, disabling capture for the run while the manifest is still
+attempted as the record of the fault (AAP 0.4.7); an escaping path, a nameless kind or an unbound
+writer raises ``ArtifactError``. ``sort_keys=True`` JSON, one trailing newline, explicit UTF-8 and
+sorted artifact tuples keep two runs byte-identical (AAP 0.14.3); importing the module defines
+names only (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -188,6 +190,32 @@ class ArtifactWriter:
         """
         return tuple(sorted(self._refs.values(), key=lambda ref: (ref.kind, ref.path)))
 
+    def ensure_run_dir(self) -> bool:
+        """Create this run's ``artifacts/<run_id>/`` directory and report whether capture is on.
+
+        The one place the run directory is made: this module is one of the three AAP 0.4.8 permits a
+        filesystem write in, and a run's artifact tree belongs to the writer that fills it. A
+        directory that cannot be created is AAP 0.4.7's "artifacts directory not writable" row --
+        the fault is reported once at ``WARNING`` through :meth:`_disable`, capture is disabled for
+        the run so every record reports ``artifacts_disabled: true`` and carries no artifact paths,
+        and the run continues with the exit code its tests alone decide. A second call on a disabled
+        writer returns ``False`` without touching the filesystem or warning again, and such a writer
+        still attempts its ``manifest.json`` as the record of the fault (AAP 0.4.6).
+
+        Returns:
+            ``True`` once the run directory exists, ``False`` when capture is disabled.
+        """
+        if self._state.disabled:
+            return False
+        try:
+            self._run_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._disable(
+                f"artifact capture disabled: cannot create {self._run_dir.as_posix()}", exc
+            )
+            return False
+        return True
+
     def dir_for(self, nodeid: str) -> Path:
         """Return, and create, the artifact directory of one test, named by its scrubbed node id.
 
@@ -316,8 +344,6 @@ class ArtifactWriter:
             return None
         nodeid = self._bound_nodeid()
         directory = self.dir_for(nodeid)
-        if self._state.disabled and kind != "manifest":
-            return None
         target = self._target(directory, kind, name)
         # Replacement rather than failure: a lone surrogate reaches here from a non-UTF-8 file name.
         payload = text.encode(_ENCODING, errors="replace")

@@ -7,12 +7,15 @@ produces it, and :func:`write_all` is the single call a run makes to produce the
 in the tree decides a report's file name, or the order in which the three are written.
 
 Order of writes
-    ``results.json`` first, then ``report.html``, then ``junit.xml``. The order is what makes the
-    documented HTML fallback reachable: when the template cannot be rendered, ``report.html`` is
-    skipped, ``results.json`` alone remains, and ``junit.xml`` is not produced either, with the
-    run's exit code untouched (AAP 0.4.7). ``results.json`` comes first because the other two
-    describe it, and because a run whose result document could not be written has nothing to
-    visualise.
+    ``results.json`` first, then ``report.html``, then ``junit.xml``. The three switches are
+    independent, as AAP 0.4.5 publishes them: ``reporting.json`` decides whether the result
+    document is written and ``reporting.html`` whether the report is, so a run with
+    ``reporting.json`` off still writes ``report.html``, because every writer here consumes the
+    records it is given and never the file written before it. The one dependency the state table
+    does add is the documented HTML fallback: when ``write_html`` asks for ``report.html`` and the
+    template cannot be rendered, ``report.html`` is skipped and ``junit.xml`` is not produced
+    either, with the run's exit code untouched (AAP 0.4.7). Writing in this order is what keeps
+    that fallback reachable, and turning ``write_html`` off is not a fallback.
 
 The registration table
     :data:`RENDERERS` is populated once, at import, from the literals below, and is never mutated
@@ -23,10 +26,10 @@ The registration table
 
 Failure isolation
     Writing a report is plumbing, and plumbing never changes a test's outcome or a run's exit code
-    (AAP 0.14.3). Every writer this module calls has already isolated a filesystem refusal into one
-    ``WARNING`` on the ``foundry`` logger and a ``None`` return, so nothing here catches ``OSError``
-    and :func:`write_all` reports exactly what was written. What is *not* absorbed is a caller
-    defect: an element that is neither a result record nor a run error raises
+    (AAP 0.14.3). Every writer this module calls has already isolated a filesystem or encoding
+    refusal into one ``WARNING`` on the ``foundry`` logger and a ``None`` return, so nothing here
+    catches ``OSError`` and :func:`write_all` reports exactly what was written. What is *not*
+    absorbed is a caller defect: an element that is neither a result record nor a run error raises
     :class:`foundry.core.exceptions.ElementTypeError` from the writer that met it, because that is
     a bug in the caller rather than a fault of the run.
 
@@ -349,23 +352,26 @@ def write_all(
     follow beside it (assumption A5/A6); a caller that wants the document somewhere its siblings
     should not go calls :func:`foundry.reporting.store.write` directly instead.
 
-    Each step depends on the one before it, which is what reproduces the documented state table:
+    Each switch is honoured on its own; the one dependency between the steps is the one the state
+    table documents:
 
-    1. ``results.json``, when ``write_json``. Its writer reports a filesystem refusal at ``WARNING``
-       and returns ``None`` rather than raising.
-    2. ``report.html``, when ``write_html`` **and** the result document was written: a run that
-       could not record its results has nothing to visualise.
-    3. ``junit.xml``, when ``write_junit``, the result document was written, and the HTML step did
-       not fall back. A template that cannot be rendered means ``report.html`` is skipped,
-       ``results.json`` alone remains and ``junit.xml`` is deliberately not produced either, with
-       the run's exit code unchanged (AAP 0.4.7). Turning ``write_html`` off is not a fallback, so
-       JUnit is still written.
+    1. ``results.json``, when ``write_json``. Its writer reports a filesystem or encoding refusal at
+       ``WARNING`` and returns ``None`` rather than raising.
+    2. ``report.html``, when ``write_html``, whatever ``write_json`` was: the renderer consumes the
+       ``records`` argument and never the document written by step 1, so ``reporting.json`` and
+       ``reporting.html`` are the independent switches AAP 0.4.5 publishes.
+    3. ``junit.xml``, when ``write_junit`` and the HTML step did not fall back. A template that
+       cannot be rendered means ``report.html`` is skipped, ``results.json`` alone remains and
+       ``junit.xml`` is deliberately not produced either, with the run's exit code unchanged
+       (AAP 0.4.7). Turning ``write_html`` off is not a fallback and neither is turning
+       ``write_json`` off, so JUnit is still written in both cases.
 
-    Nothing here raises on a filesystem fault -- every writer isolates ``OSError`` into a
-    ``WARNING`` and a ``None`` -- and the returned :class:`ReportPaths` is an exact account of what
-    was written. A caller defect does surface: an element that is neither a result record nor a run
-    error raises :class:`foundry.core.exceptions.ElementTypeError` from the writer that met it,
-    because that is not a plumbing fault.
+    Nothing here raises on a plumbing fault -- every writer isolates ``OSError`` and
+    ``UnicodeEncodeError`` into a ``WARNING`` and a ``None`` -- and the returned
+    :class:`ReportPaths` is an exact account of what was written. A caller defect does surface: an
+    element that is neither a result record nor a run error raises
+    :class:`foundry.core.exceptions.ElementTypeError` from the writer that met it, because that is
+    not a plumbing fault.
 
     Whether to write at all is the caller's decision, made from the session's state: a run whose
     tests were all deselected exits ``4`` and writes no report file at all (AAP 0.4.6), and only the
@@ -384,10 +390,13 @@ def write_all(
         profile: The profile to label the report with, on the same terms as ``run_id``.
         write_json: Whether to write ``results.json``, from the resolved ``reporting.json``.
         write_html: Whether to write ``report.html``, from the resolved ``reporting.html``.
-        write_junit: Whether to write ``junit.xml``.
+        write_junit: Whether to write ``junit.xml``. A requested HTML step that fell back suppresses
+            it (AAP 0.4.7); the other two switches do not change it.
 
     Returns:
-        The files written, each carried only when it was actually written.
+        The files written, each carried only when it was actually written: a switch that was off, a
+        refusal a writer isolated into a ``WARNING`` and the HTML fallback each leave their entry
+        ``None``.
 
     Raises:
         ElementTypeError: An element is neither a result record nor a run error.
@@ -398,7 +407,7 @@ def write_all(
         if write_json
         else None
     )
-    html_requested = write_html and results is not None
+    html_requested = write_html
     html = (
         renderer_for(_HTML_FORMAT).writer(
             records,
@@ -413,11 +422,12 @@ def write_all(
         else None
     )
     # An HTML step that was requested and wrote nothing is the template fallback, and AAP 0.4.7 then
-    # produces no junit.xml either; a step that was never requested leaves JUnit unaffected.
+    # produces no junit.xml either; a step that was never requested leaves JUnit unaffected, and so
+    # does a result document that was not written, because this writer reads the records too.
     html_fell_back = html_requested and html is None
     junit = (
         renderer_for(_JUNIT_FORMAT).writer(records, base / JUNIT_FILENAME, redactor=redactor)
-        if write_junit and results is not None and not html_fell_back
+        if write_junit and not html_fell_back
         else None
     )
     return ReportPaths(results=results, html=html, junit=junit)

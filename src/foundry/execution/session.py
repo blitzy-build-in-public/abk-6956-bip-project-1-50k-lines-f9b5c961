@@ -21,7 +21,8 @@ run-level failure is ``RunErrorPayload``, so no reporting type crosses either wa
 **Items that never ran** (assumption A12) get a record from :func:`not_run_payload` carrying the
 partial data the run holds, rather than being dropped from the document.
 
-**Failure isolation** (AAP 0.1.2): an artifact directory that cannot be created warns once through
+**Failure isolation** (AAP 0.1.2): the run's directory is created by ``foundry.obs.artifacts``, the
+module AAP 0.4.8 permits that write in, and a directory that cannot be created warns once through
 ``emit_plumbing_failure``, sets ``artifacts_enabled`` false and lets the run continue, so every
 record reports ``artifacts_disabled: true`` and the exit code follows the tests alone.
 
@@ -62,7 +63,7 @@ from foundry.execution.state import (
 )
 from foundry.execution.timeout import TimeoutPolicy
 from foundry.obs.artifacts import ArtifactRef, ArtifactWriter
-from foundry.obs.events import emit_plumbing_failure, emit_run_start
+from foundry.obs.events import emit_run_start
 from foundry.obs.redaction import Redactor
 
 if TYPE_CHECKING:
@@ -102,9 +103,6 @@ PYTEST_PASSTHROUGH_EXIT_CODES: Final[tuple[int, ...]] = (2, 3, 4, 5)
 Foundry never rewrites them (AAP 0.4.4): a configuration fault already ends the session with
 ``pytest.exit(returncode=2)``, so code 2 means the same thing on both surfaces.
 """
-
-_ARTIFACTS_COMPONENT: Final[str] = "artifacts"
-"""The component a capture failure names, so the one warning says what failed."""
 
 _FAILED: Final[str] = "failed"
 _PASSED: Final[str] = "passed"
@@ -213,8 +211,9 @@ def create_state(
 
     The single constructor of :class:`SessionState`: the controller's bootstrap calls it, and so
     does every worker, with the controller's run id, start and invocation directory. Taking the
-    configuration as an argument is what keeps resolution single. The artifact directory is
-    created here, with the one-warning failure isolation of AAP 0.4.7.
+    configuration as an argument is what keeps resolution single. The artifact directory is created
+    by :meth:`foundry.obs.artifacts.ArtifactWriter.ensure_run_dir`, whose one-warning failure
+    isolation is AAP 0.4.7's.
 
     ``run_id`` defaults to one minted from ``started_at``; a worker passes the controller's, which
     is what makes one run share one artifact directory. ``invocation_dir`` defaults to the working
@@ -243,7 +242,7 @@ def create_state(
         config=config,
         invocation_dir=directory,
         artifacts_root=writer.run_dir,
-        artifacts_enabled=_ensure_artifacts_root(parent / identifier, redactor),
+        artifacts_enabled=writer.ensure_run_dir(),
         writer=writer,
         redactor=redactor,
         capture_lines=int(config.logging.capture_lines),
@@ -551,25 +550,6 @@ def _artifacts_parent(configured: Path, invocation_dir: Path) -> Path:
     (AAP 0.4.6) instead of where a worker's process happens to sit.
     """
     return configured if configured.is_absolute() else invocation_dir / configured
-
-
-def _ensure_artifacts_root(root: Path, redactor: Redactor) -> bool:
-    """Create the run's artifact directory, warning once and returning ``False`` when it cannot.
-
-    The whole of AAP 0.4.7's "artifacts directory not writable" row: no exception, one ``WARNING``,
-    and a run that continues with capture disabled.
-    """
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        emit_plumbing_failure(
-            _ARTIFACTS_COMPONENT,
-            f"artifact capture disabled: cannot create {root.as_posix()}",
-            exc=exc,
-            redactor=redactor,
-        )
-        return False
-    return True
 
 
 def _payload_text(payload: Mapping[str, object], key: str) -> str:

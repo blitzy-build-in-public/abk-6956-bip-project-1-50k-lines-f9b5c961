@@ -31,9 +31,16 @@ Failure isolation
     Writing is plumbing, and plumbing never changes a test's outcome or a run's exit code
     (AAP 0.14.3). A writer that cannot create its directory, cannot open its temporary file or
     cannot rename it reports one ``WARNING`` on the ``foundry`` logger and returns ``None``; it
-    never raises into the pytest session and never calls ``sys.exit``. Only :exc:`OSError` is
-    isolated that way: a ``TypeError`` from ``json.dumps`` is a defect in the record models, not
-    a filesystem fault, and it surfaces instead of being hidden.
+    never raises into the pytest session and never calls ``sys.exit``. Both :exc:`OSError` and
+    :exc:`UnicodeEncodeError` are isolated that way, so an encoding fault costs one document rather
+    than every document after it. Text is written with the ``replace`` error handler, so a
+    character UTF-8 cannot represent -- a lone surrogate decoded from a path with undecodable
+    bytes, which a node id or a failure message can carry -- becomes the replacement character
+    instead of losing the file, and the same input still produces the same bytes (AAP 0.14.1).
+    Because that degradation must not be silent, it is reported as one ``WARNING`` naming the file
+    while the write completes and returns its path. What is *not* isolated is a ``TypeError`` from
+    ``json.dumps``: that is a defect in the record models, not a filesystem fault, and it surfaces
+    instead of being hidden.
 
 Reading
     :func:`read` is the one path the command line drives on a document it did not write, so every
@@ -223,26 +230,41 @@ def write_text(text: str, path: str | Path) -> Path | None:
     into place, so a reader never sees a half-written document and a re-run of the same content
     produces byte-identical bytes.
 
+    Text that UTF-8 cannot encode -- a lone surrogate, as a node id or a failure message decoded
+    from a path with undecodable bytes carries -- is written with the ``replace`` error handler, so
+    the character degrades into the replacement character rather than the document being lost. The
+    degradation is reported as one ``WARNING`` on the ``foundry`` logger naming ``path``, and the
+    write still completes.
+
     Args:
         text: The document's complete text, written as given -- including any trailing newline.
         path: The file to write. Missing parent directories are created.
 
     Returns:
-        The path written, or ``None`` when the filesystem refused the write. A refusal is a
-        plumbing fault: it is reported at ``WARNING`` on the ``foundry`` logger and changes
-        neither a test's outcome nor the run's exit code (AAP 0.14.3).
+        The path written, or ``None`` when the write was refused. A refusal -- a filesystem fault
+        or, should one reach the encoder despite the ``replace`` handler, an encoding fault -- is a
+        plumbing fault: it is reported once at ``WARNING`` on the ``foundry`` logger, no temporary
+        file is left behind, and neither a test's outcome nor the run's exit code changes
+        (AAP 0.14.3).
     """
     target = Path(path)
     temporary = target.with_name(target.name + _TEMP_SUFFIX)
+    degraded = not _is_encodable(text)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        with temporary.open("w", encoding=_ENCODING, newline=_NEWLINE) as handle:
+        with temporary.open("w", encoding=_ENCODING, newline=_NEWLINE, errors="replace") as handle:
             handle.write(text)
         temporary.replace(target)
-    except OSError as exc:
+    except (OSError, UnicodeEncodeError) as exc:
         emit_plumbing_failure(_COMPONENT, f"could not write report file {target}", exc=exc)
         _discard(temporary)
         return None
+    if degraded:
+        emit_plumbing_failure(
+            _COMPONENT,
+            f"report file {target} carries characters {_ENCODING} cannot encode, "
+            "written as replacement characters",
+        )
     emit_report_written(target.name, str(target))
     return target
 
@@ -381,16 +403,34 @@ def _redact_run_error(error: RunError, scrub: Redactor) -> dict[str, object]:
 # --- Filesystem ------------------------------------------------------------
 
 
+def _is_encodable(text: str) -> bool:
+    """Return whether UTF-8 can encode ``text`` as it stands.
+
+    Asking before the file is opened is what lets :func:`write_text` report a degradation with one
+    ``WARNING``: the document is encoded once here to find out, and the write itself is what
+    imposes the ``replace`` handler, so nothing has to be re-read afterwards to compare. The
+    answer depends on the text alone, so it keeps the write deterministic (AAP 0.14.1).
+    """
+    try:
+        text.encode(_ENCODING)
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _discard(temporary: Path) -> None:
     """Remove a temporary file a failed write left behind, ignoring a second failure.
 
     A write that could not be renamed into place must not leave a stray ``.tmp`` beside the
     document, and the cleanup is itself plumbing: if the file cannot be removed either, there is
-    nothing further to report without turning one isolated failure into two.
+    nothing further to report without turning one isolated failure into two. A name that cannot be
+    encoded is covered as well as a filesystem refusal, because the undecodable bytes that make a
+    document's text unrepresentable can make its path unrepresentable too, and the cleanup must not
+    be the step that lets that fault reach the session (AAP 0.1.2, AAP 0.14.3).
     """
     try:
         temporary.unlink(missing_ok=True)
-    except OSError:
+    except (OSError, UnicodeEncodeError):
         # Failure-isolation rule: the warning for the original fault has already been emitted, so
         # a refused cleanup ends the attempt quietly rather than raising into the pytest session.
         return

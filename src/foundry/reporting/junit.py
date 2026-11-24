@@ -39,9 +39,15 @@ describes a failure of the run rather than of a test: it becomes a ``<system-err
 Escaping and determinism
     Every value is written through :mod:`xml.etree.ElementTree`, so a test id containing
     ``<script>`` reaches the document as ``&lt;script&gt;`` and a message holding ``&``, ``"`` or
-    ``'`` round-trips through a parser unchanged. Nothing here joins markup by hand. The document
-    carries no timestamp, no hostname and no wall clock -- a ``<testsuite>`` timestamp attribute
-    would make two runs of one suite differ -- so it is byte-identical for identical records.
+    ``'`` round-trips through a parser unchanged; nothing here joins markup by hand. Escaping alone
+    cannot carry a code point outside XML 1.0's ``Char`` production -- a C0 control other than tab,
+    newline and carriage return, a lone surrogate, ``#xFFFE`` or ``#xFFFF`` -- and ElementTree
+    passes such a point through as it found it, so every record-derived string is reduced to that
+    production first (:func:`_sanitise_tree`). Those characters are removed rather than replaced:
+    XML text carries no meaning for them, and a replacement character would push a clipped
+    ``<failure>`` message past :data:`FAILURE_MESSAGE_BYTES`. The document carries no timestamp, no
+    hostname and no wall clock -- a ``<testsuite>`` timestamp attribute would make two runs of one
+    suite differ -- so it is byte-identical for identical records, its sanitised strings included.
     Records are sorted by node id, run errors by worker id and message, no set is ever iterated,
     and durations are summed with :func:`math.fsum`, whose result does not depend on the order the
     terms arrive in.
@@ -64,6 +70,7 @@ I/O, no environment read, no logger configuration and no mutable module state.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
@@ -306,6 +313,50 @@ def _seconds(duration_ms: float) -> str:
         The duration in seconds, formatted with exactly three decimals.
     """
     return f"{duration_ms / 1000.0:.3f}"
+
+
+# --- XML character safety --------------------------------------------------
+
+_XML_FORBIDDEN: Final[re.Pattern[str]] = re.compile(
+    r"[^\t\n\r\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]"
+)
+"""Every code point XML 1.0's ``Char`` production excludes, as one compiled pattern.
+
+That production is ``#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]``;
+ElementTree escapes only ``& < > " '``, so ``#x7F`` and the C1 range ``#x80-#x9F`` are kept and a
+C0 control, a lone surrogate, ``#xFFFE`` or ``#xFFFF`` is not.
+"""
+
+
+def _sanitise(text: str) -> str:
+    """Return the already-redacted ``text`` carrying only characters XML 1.0 admits.
+
+    Args:
+        text: A string a record contributed to the document.
+
+    Returns:
+        The text with every code point outside the ``Char`` production removed.
+    """
+    return _XML_FORBIDDEN.sub("", text)
+
+
+def _sanitise_tree(root: ElementTree.Element) -> None:
+    """Reduce every attribute value and text node of ``root`` to characters XML admits.
+
+    One walk over the built tree covers each record-derived string once -- the testcase
+    ``classname`` and ``name``, every property value, the failure or error ``message`` attribute
+    and body, and a run error's ``<system-err>`` text -- and it covers a field a later record
+    adds. Only :func:`_sanitise` changes a value, so no order changes and two renders of one record
+    set stay byte-identical (AAP 0.13.1).
+
+    Args:
+        root: The suite element built from the run's records, before it is indented.
+    """
+    for element in root.iter():
+        if element.text is not None:
+            element.text = _sanitise(element.text)
+        for name, value in tuple(element.attrib.items()):
+            element.attrib[name] = _sanitise(value)
 
 
 # --- Building the tree -----------------------------------------------------
@@ -584,10 +635,11 @@ def render(records: Sequence[ResultElement], *, redactor: Redactor | None = None
 
     Every value goes through :mod:`xml.etree.ElementTree`, so the library escapes text and
     attribute values and a test id containing ``<script>`` can never reach the document as markup
-    (AAP 0.3.2). The outcome mapping -- which of the nine outcomes produces a ``<failure>``, an
-    ``<error>``, a ``<skipped>`` or a ``<system-out>`` note, and which of the suite's counters it
-    feeds -- is the module's, and one testcase per result record plus one ``<system-err>`` per run
-    error is AAP 0.4.6's shape.
+    (AAP 0.3.2); a code point outside XML 1.0's ``Char`` production, which escaping cannot carry,
+    is removed from every record-derived string first (:func:`_sanitise_tree`). The outcome mapping
+    -- which of the nine outcomes produces a ``<failure>``, an ``<error>``, a ``<skipped>`` or a
+    ``<system-out>`` note, and which of the suite's counters it feeds -- is the module's, and one
+    testcase per result record plus one ``<system-err>`` per run error is AAP 0.4.6's shape.
 
     Nothing here depends on the wall clock, the host or the order the caller collected its records
     in: the document is byte-identical for identical records (AAP 0.14.1 criterion 14).
@@ -610,6 +662,7 @@ def render(records: Sequence[ResultElement], *, redactor: Redactor | None = None
     scrub = default_redactor() if redactor is None else redactor
     results, errors = _partition(records)
     suite = _suite(results, errors, scrub)
+    _sanitise_tree(suite)
     ElementTree.indent(suite, space=_INDENT_SPACE)
     body = ElementTree.tostring(suite, encoding="unicode")
     return f"{_XML_DECLARATION}{_NEWLINE}{body}{_NEWLINE}"

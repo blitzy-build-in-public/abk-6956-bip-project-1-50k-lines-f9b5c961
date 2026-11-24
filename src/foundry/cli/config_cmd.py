@@ -180,6 +180,11 @@ def override_options(command: _F) -> _F:
     groups in step. It adds no import this module did not already have, so AAP 0.4.8's one-way
     direction is unchanged.
 
+    This module is therefore the one home of the override set: every subcommand that resolves
+    project configuration -- ``run``, ``config show``, ``config validate`` and ``doctor`` --
+    imports :func:`override_options` from here rather than declaring an option group of its own,
+    so the spellings AAP 0.4.4 requires those commands to share exist once and cannot drift.
+
     Args:
         command: The command callback to decorate. It is returned unchanged, so the decorator is
             applied beneath :func:`click.command` and click sees the parameters first.

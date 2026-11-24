@@ -43,7 +43,7 @@ from typing import Final
 import click
 
 from foundry.cli import exit_codes
-from foundry.cli.main import override_options
+from foundry.cli.config_cmd import override_options
 from foundry.config import cli_layer, keys, merge
 from foundry.core.exceptions import ConfigError
 
@@ -151,8 +151,8 @@ def run(pytest_args: tuple[str, ...], **foundry_options: object) -> int:
     ``context_settings`` makes this command a faithful wrapper: every argument Foundry does not
     define is collected into ``pytest_args`` untouched and reaches pytest in the order it was
     typed (AAP 0.4.4). ``@override_options`` is the shared ``--foundry-*`` option group of
-    :mod:`foundry.cli.main`, applied here exactly as on every other subcommand that resolves
-    project configuration.
+    :mod:`foundry.cli.config_cmd`, applied here exactly as on every other subcommand that
+    resolves project configuration.
 
     The configuration is resolved before pytest starts, for the reason the module docstring
     gives: a usage or configuration fault must end the run with exit 2 and no collection and no

@@ -63,12 +63,10 @@ from foundry.obs.capture import (
 )
 
 if TYPE_CHECKING:
-    from foundry.execution.coordinator import AttemptLedger
+    from foundry.config.models import FoundryConfig
     from foundry.execution.quarantine import QuarantineDecision
     from foundry.execution.session import SessionState
     from foundry.execution.sharding import NodeLedger, RunErrorLedger
-
-    from foundry.config.models import FoundryConfig
     from foundry.obs.artifacts import ArtifactWriter
 
 # --- The property vocabulary ----------------------------------------------
@@ -615,7 +613,9 @@ SESSION_NODES: Final[pytest.StashKey[NodeLedger]] = pytest.StashKey["NodeLedger"
 SESSION_RUN_ERRORS: Final[pytest.StashKey[RunErrorLedger]] = pytest.StashKey["RunErrorLedger"]()
 SESSION_STASH_KEYS: Final = (SESSION_STATE, SESSION_CONFIG, SESSION_NODES, SESSION_RUN_ERRORS)
 
-ITEM_ATTEMPTS: Final[pytest.StashKey[AttemptLedger]] = pytest.StashKey["AttemptLedger"]()
+# The per-item ledger holds the accumulated attempt records (AAP 0.7.1), declared against state's
+# own record type so the key does not depend on the driver module that fills it.
+ITEM_ATTEMPTS: Final[pytest.StashKey[list[AttemptRecord]]] = pytest.StashKey[list[AttemptRecord]]()
 ITEM_QUARANTINE: Final[pytest.StashKey[QuarantineDecision]] = pytest.StashKey[
     "QuarantineDecision"
 ]()
