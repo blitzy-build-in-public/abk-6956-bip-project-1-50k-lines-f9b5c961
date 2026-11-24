@@ -14,11 +14,12 @@ makes a failure reproducible in CI.
 
 Every value quoted in a message is rendered through the redaction engine the caller supplies --
 the one the fixture layer built from ``secrets.redact_keys`` -- and bounded by
-:data:`foundry.obs.redaction.MAX_EXCERPT_BYTES`, because a response body under test often
-carries a token and a subset failure must not print one. A caller that supplies no engine gets
-:func:`foundry.obs.redaction.default_redactor`, which carries the built-in deny-lists. A value
-sitting under a secret-bearing key is reported as ``***`` outright: a bare string carries no
-name for the engine to match on, so rendering it verbatim would print the credential.
+:data:`_RENDER_LIMIT`, a character budget kept in step with the engine's byte cap, because a
+response body under test often carries a token and a subset failure must not print one. A caller
+that supplies no engine gets :func:`foundry.obs.redaction.default_redactor`, which carries the
+built-in deny-lists. A value sitting under a secret-bearing key is reported as ``***`` outright:
+a bare string carries no name for the engine to match on, so rendering it verbatim would print
+the credential.
 
 ``actual`` and ``expected`` are annotated ``object`` rather than ``Any``. AAP 0.4.3 writes the
 signature with ``Any``, while AAP 0.4.1 and 0.13.1 forbid ``Any`` in a public signature and
@@ -45,8 +46,13 @@ __all__ = ["assert_json_subset"]
 #: that raised it without the reader having to open the traceback.
 _PREFIX: Final[str] = "foundry.assertions.assert_json_subset:"
 
+#: Character budget for one rendered value. A quoted JSON value is cut on a character boundary,
+#: so the engine's UTF-8 byte budget does not apply to it; reusing the engine's number keeps the
+#: two budgets in step.
+_RENDER_LIMIT: Final[int] = MAX_EXCERPT_BYTES
+
 #: Suffix appended to a rendering that had to be cut. Three ASCII dots rather than the redaction
-#: engine's longer marker, so a quoted value stays inside :data:`MAX_EXCERPT_BYTES`.
+#: engine's longer marker, so a quoted value stays inside :data:`_RENDER_LIMIT` characters.
 _TRUNCATION_SUFFIX: Final[str] = "..."
 
 #: Marker for "this key is absent from the actual object", so a key holding ``None`` is not
@@ -385,7 +391,7 @@ def _render(value: object, redactor: Redactor) -> str:
             redacted as well as the built-in deny-lists.
 
     Returns:
-        The redacted rendering, at most :data:`MAX_EXCERPT_BYTES` characters including the
+        The redacted rendering, at most :data:`_RENDER_LIMIT` characters including the
         ``...`` suffix when the value had to be cut, and free of newlines.
     """
     try:
@@ -399,9 +405,9 @@ def _render(value: object, redactor: Redactor) -> str:
         # A cyclic or otherwise unencodable value still has to produce a usable message.
         encoded = repr(value)
     rendered = " ".join(encoded.splitlines())
-    if len(rendered) <= MAX_EXCERPT_BYTES:
+    if len(rendered) <= _RENDER_LIMIT:
         return rendered
-    return rendered[: MAX_EXCERPT_BYTES - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
+    return rendered[: _RENDER_LIMIT - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
 
 
 def _render_leaf(value: object, *, redactor: Redactor, secret: bool) -> str:

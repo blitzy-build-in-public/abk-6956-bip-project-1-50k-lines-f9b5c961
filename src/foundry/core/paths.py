@@ -156,6 +156,12 @@ def artifact_dir_for(run_dir: Path, nodeid: str) -> Path:
     directory is only named here; creating it belongs to the artifact writer, which also
     decides what happens when the run directory is not writable.
 
+    The artifact writer renders a node id through the redaction engine before it calls this
+    function, so a parametrised node id that carries a credential cannot name a directory, and
+    a caller rebuilding a live test's directory must pass that same scrubbed node id. The final
+    component of the returned path is always :func:`sanitize_nodeid` of ``nodeid``, applied
+    exactly once.
+
     Args:
         run_dir: The run directory, normally ``artifacts/<run_id>``.
         nodeid: The pytest node id of the item whose directory is requested.

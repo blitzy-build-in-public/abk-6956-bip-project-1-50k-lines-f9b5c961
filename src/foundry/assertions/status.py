@@ -12,10 +12,10 @@ else -- never a Foundry error, never another builtin, never a new exception clas
 
 The excerpt comes from the single redaction engine, :mod:`foundry.obs.redaction`, so it is
 scrubbed before it is shown and is bounded by
-:data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` (200). :func:`assert_status` takes an optional
-``redactor``: a caller holding the configured ``secrets.redact_keys`` passes the engine it built
-from them, so a configured key the built-in deny-lists do not recognise is scrubbed as well, and
-a caller that passes ``None`` gets those built-in deny-lists. Response headers are never
+:data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` (200 bytes). :func:`assert_status` takes an
+optional ``redactor``: a caller holding the configured ``secrets.redact_keys`` passes the engine
+it built from them, so a configured key the built-in deny-lists do not recognise is scrubbed as
+well, and a caller that passes ``None`` gets those built-in deny-lists. Response headers are never
 rendered at all: a message that cannot hold a header value cannot leak one, which is the
 structural reason a configured secret header cannot reach ``results.json``, ``junit.xml``,
 ``report.html`` or the terminal through this helper.
@@ -61,7 +61,8 @@ _MIN_STATUS: Final[int] = 100
 _MAX_STATUS: Final[int] = 599
 
 #: Characters of the raw body handed to the redaction engine. Bounded before redaction as well
-#: as after it, so a multi-megabyte body is never walked whole to build a 200-character excerpt.
+#: as after it, so a multi-megabyte body is never walked whole to build a 200-byte excerpt; a
+#: character cut is never a shorter byte cut, so the engine's byte budget stays satisfiable.
 _EXCERPT_INPUT_LIMIT: Final[int] = MAX_EXCERPT_BYTES * 4
 
 #: The ``source`` values ``FoundryResponse`` declares (AAP 0.4.3). Any other value is left out
@@ -200,12 +201,13 @@ def _source_label(response: HttpResponseLike) -> str:
 def _body_excerpt(response: HttpResponseLike, redactor: Redactor | None = None) -> str:
     """Return a redacted, bounded excerpt of the response body for a failure message.
 
-    The raw body is cut to :data:`_EXCERPT_INPUT_LIMIT` characters first, so a large body is
-    never walked whole, and the redaction engine then applies the configured and built-in
-    deny-lists and the :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` cap (AAP 0.7.3). The
-    body may be empty; an empty body renders as the empty string. Reading ``response.text`` is
-    assumed not to raise, because a response that cannot report its own body is a fault of the
-    HTTP layer rather than of this assertion, and this helper does not mask it.
+    The raw body is cut to :data:`_EXCERPT_INPUT_LIMIT` characters first, which bounds the bytes
+    handed to the engine too, so a large body is never walked whole; the redaction engine then
+    applies the configured and built-in deny-lists and the
+    :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` byte cap (AAP 0.7.3). The body may be empty;
+    an empty body renders as the empty string. Reading ``response.text`` is assumed not to raise,
+    because a response that cannot report its own body is a fault of the HTTP layer rather than of
+    this assertion, and this helper does not mask it.
 
     Args:
         response: The response whose body is quoted.
@@ -213,8 +215,8 @@ def _body_excerpt(response: HttpResponseLike, redactor: Redactor | None = None) 
             build one carrying only the built-in deny-lists.
 
     Returns:
-        The redacted excerpt, at most :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES`
-        characters plus the redaction engine's truncation marker.
+        The redacted excerpt, at most :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes plus
+        the redaction engine's truncation marker.
     """
     engine = default_redactor() if redactor is None else redactor
     body: object = response.text
@@ -258,7 +260,7 @@ def assert_status(
         AssertionError: When the status is not one of the expected codes. The message names the
             received status, the expected set, where the response came from when it reports a
             documented source, and a redacted body excerpt of at most
-            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` characters. It is also raised, with
+            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes. It is also raised, with
             the same ``foundry.assertions.assert_status:`` prefix, when ``expected`` is a
             ``bool``, a string, an iterable holding a non-int or an out-of-range code, or an
             iterable holding no code at all.

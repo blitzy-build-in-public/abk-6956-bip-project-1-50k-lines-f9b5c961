@@ -45,8 +45,8 @@ Rendered outcomes
     The last outcome is quoted in the failure message, which is why it is scrubbed through the
     redaction engine the caller supplies -- the one built from ``secrets.redact_keys``, with
     :func:`foundry.obs.redaction.default_redactor` as the fallback for a caller that holds no
-    configured keys -- and bounded by :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` before
-    interpolation: a polled value is frequently a response body, a header set or a
+    configured keys -- and bounded by :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes
+    before interpolation: a polled value is frequently a response body, a header set or a
     token-bearing payload, and the message reaches the terminal, ``results.json``,
     ``junit.xml`` and ``report.html``. Every message is a single line and never carries a
     traceback.
@@ -390,7 +390,7 @@ def _excerpt(rendered: str, redactor: Redactor | None = None) -> str:
             deny-lists.
 
     Returns:
-        The excerpt, bounded by :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` plus its
+        The excerpt, bounded by :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes plus its
         truncation marker, containing no newline.
     """
     engine = default_redactor() if redactor is None else redactor

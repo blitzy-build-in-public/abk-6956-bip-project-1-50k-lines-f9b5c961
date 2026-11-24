@@ -350,8 +350,12 @@ def emit_resolution(key: str, layer: str, detail: str) -> None:
 
 
 def emit_cassette_mode(mode: str, nodeid: str) -> None:
-    """Record the cassette mode a test's session runs in, at ``DEBUG``."""
-    _emit("cassette_mode", LEVEL_DEBUG, _pairs(mode=mode, nodeid=nodeid))
+    """Record the cassette mode a test's session runs in, at ``DEBUG``.
+
+    The node id is scrubbed first: a parametrised node id can carry a credential
+    (``test_x[token=...]``) and this record reaches the terminal, the log ring and the report.
+    """
+    _emit("cassette_mode", LEVEL_DEBUG, _pairs(mode=mode, nodeid=_scrubbed(nodeid)))
 
 
 def emit_sharding_decision(worker_id: str, count: int) -> None:
@@ -360,20 +364,35 @@ def emit_sharding_decision(worker_id: str, count: int) -> None:
 
 
 def emit_attempt(nodeid: str, attempt: int, outcome: str) -> None:
-    """Record one attempt of a test and the outcome it reached, at ``DEBUG``."""
-    _emit("attempt", LEVEL_DEBUG, _pairs(nodeid=nodeid, attempt=attempt, outcome=outcome))
+    """Record one attempt of a test and the outcome it reached, at ``DEBUG``.
+
+    The node id is scrubbed for the reason :func:`emit_cassette_mode` documents.
+    """
+    _emit(
+        "attempt",
+        LEVEL_DEBUG,
+        _pairs(nodeid=_scrubbed(nodeid), attempt=attempt, outcome=outcome),
+    )
 
 
 def emit_artifact_written(nodeid: str, kind: str, path: str, size_bytes: int, sha256: str) -> None:
     """Record an artifact the writer produced, at ``DEBUG``, with its kind, size and digest.
 
     ``path`` is the run-relative artifact path, which is already sanitised, so nothing here has to
-    strip a directory or encode a separator.
+    strip a directory or encode a separator. ``nodeid`` is free text and is scrubbed for the reason
+    :func:`emit_cassette_mode` documents: the writer already redacts the node id it uses as a path
+    component, and the record must not carry the unredacted form of the same node id beside it.
     """
     _emit(
         "artifact_written",
         LEVEL_DEBUG,
-        _pairs(nodeid=nodeid, kind=kind, path=path, size_bytes=size_bytes, sha256=sha256),
+        _pairs(
+            nodeid=_scrubbed(nodeid),
+            kind=kind,
+            path=path,
+            size_bytes=size_bytes,
+            sha256=sha256,
+        ),
     )
 
 

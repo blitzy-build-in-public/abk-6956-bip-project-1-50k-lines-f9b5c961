@@ -2,19 +2,18 @@
 
 A run records what each test produced under ``artifacts/<run_id>/<sanitized-nodeid>/`` (AAP
 0.4.6): ``request.json``, ``response.json``, ``stdout.log``, ``stderr.log``, ``traceback.txt``,
-``log_tail.log`` and ``manifest.json``. Filesystem writes are permitted in only three modules
-(AAP 0.4.8) and this is the one that owns that layout, so every artifact a test produces reaches
-the disk through :class:`ArtifactWriter` and nothing else does.
+``log_tail.log`` and ``manifest.json``. Writes are permitted in three modules (AAP 0.4.8) and this
+one owns that layout, so every artifact reaches the disk through :class:`ArtifactWriter`.
 
 One directory per test
     A worker writes only inside its own item's directory, so two workers never contend for one
-    file, and that is why :meth:`ArtifactWriter.write` writes the final name with
-    :meth:`pathlib.Path.write_bytes` rather than a temporary file plus a rename.
+    file: that is why :meth:`ArtifactWriter.write` writes the final name with
+    :meth:`pathlib.Path.write_bytes` rather than a temporary file and a rename.
 
 Redaction first
-    Every payload passes through :class:`foundry.obs.redaction.Redactor` before it is encoded, so a
-    configured secret has no route onto the disk (AAP 0.3.2): :attr:`ArtifactRef.redacted` records
-    that the engine ran and the manifest entry carries the flag on (AAP 0.4.6).
+    Every payload passes through :class:`foundry.obs.redaction.Redactor` before it is encoded, and a
+    node id is scrubbed before it names a directory, so a configured secret has no route onto the
+    disk (AAP 0.3.2); :attr:`ArtifactRef.redacted` records that the engine ran (AAP 0.4.6).
 
 Failure isolation
     A directory or file that cannot be created or written is reported once at ``WARNING`` through
@@ -97,8 +96,9 @@ def node_dir(run_dir: str | Path, nodeid: str) -> Path:
     """Return the artifact directory one test writes into, without creating it.
 
     The pure half of :meth:`ArtifactWriter.dir_for`, for a caller that wants the path without a
-    writer: a report link, a test asserting the layout, a diagnostic. The percent-encoding rule
-    stays in :func:`foundry.core.paths.sanitize_nodeid` alone.
+    writer: a report link, a test asserting the layout, a diagnostic. The encoding rule stays in
+    :func:`foundry.core.paths.sanitize_nodeid` alone; the writer scrubs the node id before it calls
+    here, so a caller rebuilding the path from a raw node id must do the same.
 
     Args:
         run_dir: The run directory, normally ``artifacts/<run_id>``.
@@ -274,7 +274,7 @@ class ArtifactWriter:
         return tuple(sorted(self._refs.values(), key=lambda ref: (ref.kind, ref.path)))
 
     def dir_for(self, nodeid: str) -> Path:
-        """Return, and create, the artifact directory of one test.
+        """Return, and create, the artifact directory of one test, named by its scrubbed node id.
 
         Args:
             nodeid: The pytest node id of the test whose directory is wanted.
@@ -287,7 +287,7 @@ class ArtifactWriter:
             FoundryError: If ``nodeid`` is empty or whitespace-only.
             ArtifactError: If the derived path escapes the run directory.
         """
-        directory = node_dir(self._run_dir, nodeid)
+        directory = node_dir(self._run_dir, self._redactor.text(nodeid))
         if self._state.disabled:
             return directory
         try:
