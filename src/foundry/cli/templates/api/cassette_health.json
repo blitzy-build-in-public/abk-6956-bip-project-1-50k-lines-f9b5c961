@@ -1,0 +1,22 @@
+{
+  "recorded_at": "2025-01-01T00:00:00.000+00:00",
+  "redacted_keys": [],
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/health",
+        "query": [],
+        "body_sha256": null,
+        "headers_subset": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"status\": \"ok\"}"
+      }
+    }
+  ]
+}
