@@ -1,0 +1,67 @@
+# foundry.toml, written by `foundry init --template api`.
+#
+# Configuration resolves in four layers, lowest precedence first: the built-in
+# defaults, this file, the FOUNDRY_* environment variables, and the --foundry-*
+# command-line options. An environment variable spells a nested key with `__`,
+# for example FOUNDRY_HTTP__TIMEOUT=3.5. Every entry commented out below states
+# a documented default, and uncommenting one overrides it.
+# The profiles are `default`, `local`, `ci` and `staging`: select one with
+# --foundry-profile NAME or FOUNDRY_PROFILE, and override a key per profile in
+# a [profiles.<name>] table. `foundry config show --resolved` prints every
+# resolved value together with the layer it came from.
+
+# profile = "default"
+
+# The address the recorded interaction was captured against. Replay matches on
+# method, path, query and body hash, never on host or port, so nothing has to
+# listen at this address.
+[http]
+base_url = "http://127.0.0.1:8000"
+# timeout = 10.0
+# headers = {}
+
+# [http.retries]
+# max_attempts = 3
+# backoff_base = 0.2
+# backoff_max = 2.0
+# retry_on = ["timeout", "connect", "status_5xx"]
+
+# The credential entries below are commented examples rather than defaults: each
+# is unset by default, and each names the environment variable that holds the
+# secret, or the header to send it in. The secret itself is never written here.
+# [http.auth]
+# strategy = "none"
+# token_env = "FOUNDRY_API_TOKEN"
+# user_env = "FOUNDRY_API_USER"
+# password_env = "FOUNDRY_API_PASSWORD"
+# header_name = "X-Api-Key"
+# header_value_env = "FOUNDRY_API_KEY"
+
+# [artifacts]
+# dir = "artifacts"
+# keep_passed = false
+
+# [reporting]
+# html = true
+# json = true
+
+# [data]
+# dir = "testdata"
+# schema_strict = true
+
+# Replay serves the recorded interaction and opens no socket.
+[cassette]
+mode = "replay"
+# dir = "cassettes"
+
+# [execution]
+# retries = 0
+# timeout = 60.0
+# quarantine_mode = "report"
+
+# [secrets]
+# redact_keys = ["authorization", "set-cookie", "cookie", "x-api-key"]
+
+# [logging]
+# level = "INFO"
+# capture_lines = 200
