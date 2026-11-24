@@ -33,12 +33,15 @@ first call is ``rollback()`` itself.
 **Teardown never raises** (AAP 0.1.2 and AAP 0.14.3, failure isolation).
 :func:`rollback_and_close` is Foundry's own plumbing: a fixture that cannot roll back or
 cannot close its session must not turn a passing test into a failing one or change the run's
-exit code, so each step is wrapped, a fault is reported at ``WARNING`` on the ``foundry``
-logger, and the function returns. The swallowing is deliberately narrow. It covers this
-function's own steps only -- a test's exception belongs to pytest and is never caught,
-rewritten or reported here -- and no message it builds carries a connection string, because a
-database URL can hold ``user:password`` and a log line reaches the terminal, the captured-log
-artifact and the report (AAP 0.3.2 Security).
+exit code, so each step is wrapped, a fault is reported at ``WARNING`` through
+:func:`foundry.obs.events.emit_plumbing_failure`, and the function returns. The swallowing is
+deliberately narrow. It covers this function's own steps only -- a test's exception belongs to
+pytest and is never caught, rewritten or reported here -- and no message it builds carries a
+connection string, because a database URL can hold ``user:password`` and a log line reaches the
+terminal, the captured-log artifact and the report (AAP 0.3.2 Security). The exception itself
+contributes its class name and nothing else: a driver's message routinely embeds ``[SQL: ...]``
+with the ``[parameters: (...)]`` row values a test wrote, so recording that text would put test
+data in that same captured-log block.
 
 **SQLAlchemy is imported lazily** (implicit requirement I5). ``foundry.plugin`` is imported
 at every pytest start and has a 150 ms budget, while only a minority of tests request the
@@ -47,22 +50,24 @@ annotates with are imported under ``TYPE_CHECKING`` and the names it calls are i
 inside the function that needs them. Importing this module therefore costs two Foundry
 imports and the standard library, and ``sqlalchemy`` stays out of ``sys.modules``.
 
-Those two imports are the whole of its outward dependency. ``foundry.db`` sits on the
-foundation rung of the layering table (AAP 0.4.8), so this module imports
-:mod:`foundry.db.schema` and :mod:`foundry.obs.logging` from Foundry and nothing else, and it
-defines no exception type of its own. Nothing happens at import time beyond defining names --
-no I/O, no environment read, no logger configuration, no module-level mutable state -- and the
-lifecycle it serves is single-threaded and deterministic (AAP 0.4.8, "Fixture lifecycle
-rule"): no thread, no background task, no sleep and no socket.
+Those two imports are the whole of its outward dependency: :mod:`foundry.db.schema` for the
+schema it creates, and :mod:`foundry.obs.events` for every record it emits -- the single emission
+point AAP 0.13.1 declares, so this module acquires no logger of its own and its levels, its
+scrubbing and its class-name-only rule for exceptions are the ones the emitter applies.
+``foundry.db`` sits on the capability rung of the layering table, whose row for this package
+(AAP 0.4.8) permits exactly ``core`` and ``obs`` -- the two imports above -- and the module
+defines no exception type of its own. Nothing happens at import time beyond
+defining names -- no I/O, no environment read, no logger configuration, no module-level mutable
+state -- and the lifecycle it serves is single-threaded and deterministic (AAP 0.4.8, "Fixture
+lifecycle rule"): no thread, no background task, no sleep and no socket.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Final
 
 from foundry.db.schema import create_all, normalize_models
-from foundry.obs.logging import get_logger
+from foundry.obs.events import LEVEL_DEBUG, LifecycleEvent, emit_plumbing_failure, log_event
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Connection, Engine
@@ -73,8 +78,8 @@ if TYPE_CHECKING:
 __all__: Final[tuple[str, ...]] = ("open_session", "rollback_and_close")
 """The two calls ``foundry_db`` makes: open a transactional session, and end it."""
 
-_LOGGER: Final[logging.Logger] = get_logger(__name__)
-"""This module's logger, a child of the ``foundry`` logger (AAP 0.13.1)."""
+_COMPONENT: Final[str] = "db.session"
+"""Component name this module's plumbing-failure events carry, so a fault names its source."""
 
 _TEARDOWN_KEY: Final[str] = "foundry.db.session.torn_down"
 """Key written into ``Session.info`` so a repeated teardown performs no work.
@@ -159,7 +164,13 @@ def open_session(engine: Engine, models: ModelSpec = None) -> Session:
         # here keeps the failure from leaving the pool holding a connection nothing owns.
         _close_session(session)
         raise
-    _LOGGER.debug("opened a database session over %d model(s)", len(schema_models))
+    log_event(
+        LifecycleEvent(
+            name="db_session",
+            level=LEVEL_DEBUG,
+            fields=(("models", str(len(schema_models))),),
+        )
+    )
     return session
 
 
@@ -194,11 +205,12 @@ def rollback_and_close(session: Session) -> None:
     SQLAlchemy's ``close()`` and ``Engine.dispose()`` are idempotent -- but a teardown that
     performs no work at all is what a fixture wrapped in pytest's finalisation can rely on.
 
-    It returns nothing and it never raises. Every step is wrapped: a fault is logged at
-    ``WARNING`` on the ``foundry`` logger with the exception's own text -- never the URL,
-    which is where a credential would be -- and the remaining steps still run (AAP 0.1.2 and
-    AAP 0.14.3, failure isolation). Nothing the test did is caught, rewritten or reported
-    here: a test's own exception is pytest's business.
+    It returns nothing and it never raises. Every step is wrapped: a fault is reported at
+    ``WARNING`` through :func:`foundry.obs.events.emit_plumbing_failure`, which records the
+    exception's class name and never its message -- never the URL, which is where a credential
+    would be -- and the remaining steps still run (AAP 0.1.2 and AAP 0.14.3, failure isolation).
+    Nothing the test did is caught, rewritten or reported here: a test's own exception is
+    pytest's business.
 
     Args:
         session: The session :func:`open_session` returned. A session bound to something other
@@ -276,7 +288,7 @@ def _capture_bind(session: Session) -> Engine | Connection | None | _UnknownBind
     try:
         return session.get_bind()
     except Exception as exc:
-        _LOGGER.warning("could not read the database session's bind: %s", exc)
+        emit_plumbing_failure(_COMPONENT, "could not read the database session's bind", exc=exc)
         return _BIND_UNKNOWN
 
 
@@ -288,7 +300,7 @@ def _release_bind(bind: Engine | Connection | None | _UnknownBind) -> None:
     session is closed and the connection is left alone. A bind that is not an engine is
     reported once at ``WARNING`` naming its type -- never its value, because an engine's repr
     carries its URL and a URL can carry a password (AAP 0.3.2 Security). The sentinel is the one
-    exception: :func:`_capture_bind` has already logged that fault, so this function stays
+    exception: :func:`_capture_bind` has already reported that fault, so this function stays
     quiet rather than reporting one problem twice.
 
     Args:
@@ -301,9 +313,10 @@ def _release_bind(bind: Engine | Connection | None | _UnknownBind) -> None:
         return
     if isinstance(bind, _UnknownBind):
         return
-    _LOGGER.warning(
-        "closed the database session without disposing it: its bind is a %s, not an Engine",
-        _bind_type_name(bind),
+    emit_plumbing_failure(
+        _COMPONENT,
+        "closed the database session without disposing it: its bind is a "
+        f"{_bind_type_name(bind)}, not an Engine",
     )
 
 
@@ -339,7 +352,9 @@ def _in_transaction(session: Session) -> bool:
     try:
         return bool(session.in_transaction())
     except Exception as exc:
-        _LOGGER.warning("could not inspect the database session's transaction: %s", exc)
+        emit_plumbing_failure(
+            _COMPONENT, "could not inspect the database session's transaction", exc=exc
+        )
         return False
 
 
@@ -352,7 +367,9 @@ def _rollback_transaction(session: Session) -> None:
     try:
         session.rollback()
     except Exception as exc:
-        _LOGGER.warning("could not roll back the test's database transaction: %s", exc)
+        emit_plumbing_failure(
+            _COMPONENT, "could not roll back the test's database transaction", exc=exc
+        )
 
 
 def _close_session(session: Session) -> None:
@@ -364,7 +381,7 @@ def _close_session(session: Session) -> None:
     try:
         session.close()
     except Exception as exc:
-        _LOGGER.warning("could not close the database session: %s", exc)
+        emit_plumbing_failure(_COMPONENT, "could not close the database session", exc=exc)
 
 
 def _dispose_engine(engine: Engine) -> None:
@@ -376,4 +393,6 @@ def _dispose_engine(engine: Engine) -> None:
     try:
         engine.dispose()
     except Exception as exc:
-        _LOGGER.warning("could not dispose the in-memory database engine: %s", exc)
+        emit_plumbing_failure(
+            _COMPONENT, "could not dispose the in-memory database engine", exc=exc
+        )

@@ -32,14 +32,16 @@ this module's boundary.
 
 Importing this module defines names and does nothing else: no file is read, no environment
 variable is consulted, no logger is configured and no document is cached, so a second load of the
-same path always reflects the bytes on disk at that moment.
+same path always reflects the bytes on disk at that moment. The one record this module emits -- a
+``DEBUG`` line naming the schema path and the suffix, written before the file is read -- goes
+through :func:`foundry.obs.events.log_event`, imported inside :func:`_parse_by_suffix` so that
+this module's module-scope imports stay inside the set AAP 0.4.8 lists for ``foundry.contract``.
 """
 
 from __future__ import annotations
 
 import json
 import keyword
-import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, TypeAlias, cast
@@ -53,8 +55,6 @@ __all__: Final[tuple[str, ...]] = (
     "load_schema",
     "resolve_schema_path",
 )
-
-_LOGGER: Final[logging.Logger] = logging.getLogger(__name__)
 
 SchemaSource: TypeAlias = Mapping[str, object] | str | Path
 """Every shape :func:`load_schema` accepts: a document in memory, or a path to one."""
@@ -276,7 +276,15 @@ def _parse_by_suffix(path: Path) -> object:
             hint=f"rename {path} to .json, .yaml or .yml",
         )
 
-    _LOGGER.debug("loading schema %s (suffix %s)", path, suffix)
+    from foundry.obs.events import LEVEL_DEBUG, LifecycleEvent, log_event
+
+    log_event(
+        LifecycleEvent(
+            name="schema_load",
+            level=LEVEL_DEBUG,
+            fields=(("path", str(path)), ("suffix", suffix)),
+        )
+    )
     text = _read_text(path)
     if suffix == ".json":
         return _parse_json(text, path)

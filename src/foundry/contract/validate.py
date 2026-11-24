@@ -49,15 +49,16 @@ module, the plugin loads it on every ``pytest`` startup, and the 150 ms startup 
 measured from there (AAP 0.4.8, implicit requirement I5). The module keeps no compiled-validator
 cache and no other mutable state, so a schema edited between two calls is read by the second. It
 imports :mod:`foundry.core.exceptions`, :mod:`foundry.contract.schema` and
-:mod:`foundry.contract.violations` and nothing else from the tree, raises only
-:class:`~foundry.core.exceptions.ContractError`, and logs at most one ``DEBUG`` line per walk,
-naming the draft in use and the number of violations, never the instance and never a violation
-message.
+:mod:`foundry.contract.violations` at module scope and nothing else from the tree, and raises
+only :class:`~foundry.core.exceptions.ContractError`. It emits at most one ``DEBUG`` record per
+walk -- the draft in use and the number of violations, never the instance and never a violation
+message -- through :func:`foundry.obs.events.log_event`, imported inside
+:func:`iter_violations` so that this package's module-scope imports stay inside the set AAP 0.4.8
+lists for ``foundry.contract``.
 """
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
@@ -89,8 +90,6 @@ __all__: Final[tuple[str, ...]] = (
     "select_validator",
     "validate_instance",
 )
-
-_LOGGER: Final[logging.Logger] = logging.getLogger(__name__)
 
 _DOCUMENT_ROOT: Final[str] = "$"
 """JSON path of a document root: the ``json_path`` a schema fault with no location reports."""
@@ -397,10 +396,17 @@ def iter_violations(instance: object, schema: SchemaSource) -> tuple[Violation, 
 
     violations = sort_violations(violation_from_error(error) for error in errors)
     draft = validator_class.META_SCHEMA.get("$id")
-    _LOGGER.debug(
-        "validated against %s: %d violation(s)",
-        draft if isinstance(draft, str) else validator_class.__name__,
-        len(violations),
+    from foundry.obs.events import LEVEL_DEBUG, LifecycleEvent, log_event
+
+    log_event(
+        LifecycleEvent(
+            name="contract_validation",
+            level=LEVEL_DEBUG,
+            fields=(
+                ("draft", draft if isinstance(draft, str) else validator_class.__name__),
+                ("violations", str(len(violations))),
+            ),
+        )
     )
     return violations
 

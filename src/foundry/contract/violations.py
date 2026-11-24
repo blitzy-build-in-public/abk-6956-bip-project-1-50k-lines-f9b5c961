@@ -38,23 +38,26 @@ callable a caller holding configured ``secrets.redact_keys`` injects into the re
 
 The module does no work at import time: no I/O, no environment read, no logger configuration and
 no module-level mutable state. It imports :mod:`foundry.core.exceptions` at module scope and
-reaches :mod:`foundry.obs.redaction` through one lazy import inside :func:`_resolve_redactor`,
-which keeps the redaction engine off the plugin's startup path; ``jsonschema`` itself is imported
-only under ``TYPE_CHECKING`` for annotations, so importing this module costs a handful of stdlib
-lookups. It raises only :class:`~foundry.core.exceptions.ContractError`.
+reaches :mod:`foundry.obs` through one lazy import per function that needs it --
+:mod:`foundry.obs.redaction` inside :func:`_resolve_redactor`, which keeps the redaction engine
+off the plugin's startup path, and :mod:`foundry.obs.events` inside :func:`_redact_text`, which is
+where the one ``DEBUG`` record this module can emit comes from. Both sit inside the function on
+purpose: that is what holds this package's module-scope imports to the set AAP 0.4.8 lists for
+``foundry.contract``. ``jsonschema`` itself is imported only under ``TYPE_CHECKING`` for
+annotations, so importing this module costs a handful of stdlib lookups. It raises only
+:class:`~foundry.core.exceptions.ContractError`.
 
-That obs import is the one deliberate exception to the permitted-import column of AAP 0.4.8, which
-lists ``core`` alone. It points downward into the foundation rung, which the capability row of
-AAP 0.3.2 permits by letting a capability package import ``core``, ``obs`` and its siblings on the
-same rung, and AAP 0.14.3 makes :mod:`foundry.obs.redaction` the single engine every sink calls, so
-the :class:`~foundry.core.exceptions.ContractError` detail a failure displays is scrubbed here,
-before pytest renders it. A layering check written from AAP 0.4.8 carries exactly this one
+Those obs imports are the one deliberate exception to the permitted-import column of AAP 0.4.8,
+which lists ``core`` alone. They point downward into the foundation rung, which the capability row
+of AAP 0.3.2 permits by letting a capability package import ``core``, ``obs`` and its siblings on
+the same rung, and AAP 0.14.3 makes :mod:`foundry.obs.redaction` the single engine every sink
+calls, so the :class:`~foundry.core.exceptions.ContractError` detail a failure displays is scrubbed
+here, before pytest renders it. A layering check written from AAP 0.4.8 carries exactly this one
 exception for this package.
 """
 
 from __future__ import annotations
 
-import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -90,8 +93,6 @@ A caller that holds the configured ``secrets.redact_keys`` injects its own redac
 secret-bearing JSON key the configuration adds is scrubbed out of a violation message; a caller
 that holds none passes ``None`` and the built-in deny-lists apply.
 """
-
-_LOGGER: Final[logging.Logger] = logging.getLogger(__name__)
 
 #: A key that can follow a dot in a JSON path without quoting.
 _IDENTIFIER_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -387,9 +388,8 @@ def _resolve_redactor() -> RedactorCallable:
     This is the only place in :mod:`foundry.contract` that touches
     :mod:`foundry.obs.redaction`, and the import sits inside the function on purpose: importing
     the engine at module scope would put it on the plugin's startup path. The edge is also the
-    package's single sanctioned exception to the permitted-import column of AAP 0.4.8, kept
-    function-scope here and required by the single redaction engine AAP 0.14.3 makes
-    authoritative.
+    package's sanctioned exception to the permitted-import column of AAP 0.4.8, kept function-scope
+    at each use and required by the single redaction engine AAP 0.14.3 makes authoritative.
 
     Returns:
         A callable that scrubs secret values out of free text using the built-in header and
@@ -408,7 +408,8 @@ def _redact_text(text: str, redact: RedactorCallable | None) -> str:
         redact: The caller's redactor, which knows the configured ``secrets.redact_keys``, or
             ``None`` to apply the built-in deny-lists. A redactor that raises falls back to
             those deny-lists rather than propagating, because a redaction fault must not change
-            a test's outcome or the run's exit code.
+            a test's outcome or the run's exit code; that the fallback happened is the one
+            ``DEBUG`` record this module emits, through :func:`foundry.obs.events.log_event`.
 
     Returns:
         The scrubbed text.
@@ -418,7 +419,15 @@ def _redact_text(text: str, redact: RedactorCallable | None) -> str:
     try:
         return redact(text)
     except Exception:  # a foreign callable's fault must not reach the test's outcome
-        _LOGGER.debug("supplied redactor raised; falling back to the deny-list engine")
+        from foundry.obs.events import LEVEL_DEBUG, LifecycleEvent, log_event
+
+        log_event(
+            LifecycleEvent(
+                name="redaction_fallback",
+                level=LEVEL_DEBUG,
+                fields=(("component", "contract.violations"),),
+            )
+        )
         return _resolve_redactor()(text)
 
 

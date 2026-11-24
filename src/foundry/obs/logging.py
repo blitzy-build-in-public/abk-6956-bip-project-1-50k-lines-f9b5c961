@@ -65,6 +65,14 @@ __all__ = [
 LOGGER_NAME: Final[str] = "foundry"
 """Name of the one logger every Foundry module logs on."""
 
+_CHILD_PREFIX: Final[str] = LOGGER_NAME + "."
+"""What a name must begin with to count as a child of :data:`LOGGER_NAME`.
+
+The separator is the whole point: a bare ``startswith(LOGGER_NAME)`` would accept
+``"foundrydb"``, which is a logger outside the tree and therefore inherits neither the level
+:func:`configure` sets nor the import-time :data:`NULL_HANDLER`.
+"""
+
 LOG_FORMAT: Final[str] = "%(levelname)s %(name)s: %(message)s"
 """Format string for a Foundry record, for ``capture`` and for a host-attached handler.
 
@@ -85,9 +93,13 @@ def get_logger(name: str | None = None) -> logging.Logger:
             the ``foundry`` logger itself.
 
     Returns:
-        The logger for ``name``. A name that already begins with :data:`LOGGER_NAME` is used
-        unchanged, so calling this with ``__name__`` from a Foundry module is idempotent;
-        any other name is prefixed with ``"foundry."``.
+        The logger for ``name``. The name is used unchanged only when it is
+        :data:`LOGGER_NAME` itself or one of its dotted children, such as
+        ``"foundry.obs.artifacts"``, so calling this with ``__name__`` from a Foundry module
+        is idempotent. Any other name is prefixed with ``"foundry."`` -- including a name
+        that merely begins with the same letters, such as ``"foundrydb"``, which would
+        otherwise land outside the tree and inherit neither the configured level nor the
+        null handler.
 
     Nothing is configured here: no level is set and no handler is attached, so obtaining a
     logger is always free of side effects.
@@ -97,7 +109,7 @@ def get_logger(name: str | None = None) -> logging.Logger:
     candidate = name.strip()
     if not candidate:
         return logging.getLogger(LOGGER_NAME)
-    if candidate.startswith(LOGGER_NAME):
+    if candidate == LOGGER_NAME or candidate.startswith(_CHILD_PREFIX):
         return logging.getLogger(candidate)
     return logging.getLogger(f"{LOGGER_NAME}.{candidate}")
 
