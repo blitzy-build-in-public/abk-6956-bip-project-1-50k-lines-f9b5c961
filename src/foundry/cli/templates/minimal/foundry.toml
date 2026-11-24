@@ -10,7 +10,7 @@
 
 # [http]
 # timeout = 10.0                       # request timeout in seconds, 0 < t <= 300
-# base_url = <absolute URL required by the foundry_api fixture>
+# base_url = "http://127.0.0.1:8000"   # absolute URL required by foundry_api
 
 # [http.retries]
 # max_attempts = 3                     # 1..10, the first attempt included

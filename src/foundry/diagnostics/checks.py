@@ -35,10 +35,13 @@ counts, never a timestamp, a duration or an object ``repr``, so two runs on an u
 report identical text.
 
 **Import-time discipline** (AAP 0.4.8). Importing this module runs no probe, reads no environment
-variable, configures no logger and imports nothing heavy:
-:class:`~foundry.config.models.FoundryConfig` enters only under :data:`typing.TYPE_CHECKING`, and
-:func:`foundry.config.resolve` only inside :func:`_resolve_configuration`, because the
-configuration package pulls pydantic onto the ``foundry doctor`` path.
+variable, configures no logger and imports nothing heavy. :mod:`foundry.config.errors` is the one
+exception: the stdlib-only module holding the pinned message templates, imported at module scope so
+the configuration row and ``foundry config validate`` share one definition site rather than two
+copies of the text. :class:`~foundry.config.models.FoundryConfig` enters only under
+:data:`typing.TYPE_CHECKING`, and :func:`foundry.config.resolve` only inside
+:func:`_resolve_configuration`, because the configuration package's models pull pydantic onto the
+``foundry doctor`` path.
 
 Every probe accepts its observation through a keyword, so a test drives it without touching the
 real environment: an :class:`~foundry.diagnostics.report.InterpreterInfo`, the discovered
@@ -54,6 +57,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from foundry.config.errors import success_message
 from foundry.core.exceptions import ConfigError
 from foundry.diagnostics.report import DoctorReport, InterpreterInfo, ProbeResult, ProbeStatus
 from foundry.diagnostics.socket_guard import PROBE_NAME, SocketGuardState, check_socket_guard
@@ -294,14 +298,21 @@ def check_plugin_registered(
 def _configuration_row(profile: str) -> ProbeResult:
     """Return the ``PASS`` row a resolved configuration earns.
 
-    The detail is the message AAP 0.1.2 publishes for ``foundry config validate``, exactly
-    ``configuration valid (profile=<name>)``, so ``foundry doctor`` and that command agree word
-    for word.
+    The detail is :func:`foundry.config.errors.success_message`'s output: the
+    ``configuration valid (profile=<name>)`` message of AAP 0.4.4 and AAP 0.4.5, rendered from its
+    one definition site rather than re-stated here, so ``foundry doctor`` and
+    ``foundry config validate`` agree word for word and change together.
+
+    Args:
+        profile: the active profile name as text, which :func:`success_message` interpolates.
+
+    Returns:
+        The row named :data:`PROBE_CONFIGURATION`, with ``required=True``.
     """
     return ProbeResult(
         name=PROBE_CONFIGURATION,
         status=ProbeStatus.PASS,
-        detail=f"configuration valid (profile={profile})",
+        detail=success_message(profile),
         required=True,
     )
 
@@ -316,7 +327,10 @@ def _resolve_configuration(
     AAP 0.4.5 exactly once per invocation is what keeps the report internally consistent.
 
     A supplied ``config`` is taken as given and nothing is verified: the caller already holds a
-    validated model. An absent one is resolved through :func:`foundry.config.resolve`, whose
+    validated model. Its profile is rendered with ``str`` rather than read as an enum member, so a
+    configuration whose ``model_copy`` installs the name as a plain string -- the override
+    :func:`foundry.fixtures.config.foundry_config` documents -- is reported rather than faulting.
+    An absent one is resolved through :func:`foundry.config.resolve`, whose
     :class:`~foundry.core.exceptions.ConfigError` becomes the row's detail -- its message names
     the key, the variable or the file and never a secret value (implicit requirement I9). Any
     other exception propagates to the caller's isolation boundary.
@@ -329,8 +343,8 @@ def _resolve_configuration(
         :data:`PROBE_CONFIGURATION`.
     """
     if config is not None:
-        return config, _configuration_row(config.profile.value)
-    # Imported here rather than at module scope: ``foundry.config`` pulls pydantic and
+        return config, _configuration_row(str(config.profile))
+    # Imported here rather than at module scope: ``foundry.config.resolve`` pulls pydantic and
     # pydantic-settings, which must not load on every ``foundry.diagnostics`` import (AAP 0.4.8).
     from foundry.config import resolve
 
@@ -343,7 +357,7 @@ def _resolve_configuration(
             detail=str(error),
             required=True,
         )
-    return resolved, _configuration_row(resolved.profile.value)
+    return resolved, _configuration_row(str(resolved.profile))
 
 
 def check_configuration(config: FoundryConfig | None = None) -> ProbeResult:

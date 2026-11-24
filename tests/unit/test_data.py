@@ -20,9 +20,10 @@ Four expectations follow the modules on disk rather than the brief this file was
 against, because the module is authoritative (AAP 0.7.2, AAP 0.4.7):
 
 * A *ragged* row -- one carrying fewer values than the header declares -- is reported with its line
-  and no column, because a width fault is about the row rather than about a named column. The
-  ``required``-column case is proven against a ``tmp_path`` copy of the row schema, which does name
-  the column.
+  and the first header column it never filled, so a width fault names a column too (AAP 0.4.7); a
+  row longer than the header has no absent column and keeps ``column=None``. The schema-driven
+  ``required``-column case is proven separately against a ``tmp_path`` copy of the row schema, where
+  the *header* is the part that omits the required column.
 * The JSON and YAML readers document ``line=None`` on every row, since a parsed document has no
   per-element line notion; the case id then comes from ``row_index``. Only CSV and JSON Lines
   report a physical line, and both are asserted against the line that really holds the record.
@@ -46,7 +47,7 @@ from typing import Final
 
 import pytest
 
-from foundry.core.exceptions import DataError, FoundryError
+from foundry.core.exceptions import ContractError, DataError, FoundryError
 from foundry.core.ids import case_id_for_row
 from foundry.data import (
     SUPPORTED_EXTENSIONS,
@@ -417,6 +418,24 @@ def test_a_row_missing_a_required_column_names_the_column(
     assert "tier" in str(excinfo.value)
 
 
+def test_a_malformed_sidecar_schema_names_the_schema_file_and_the_reason(
+    tmp_path: Path,
+) -> None:
+    """A schema fault reached through a data file names the sidecar, not just the data file."""
+    data_path = tmp_path / "malf.csv"
+    data_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    sidecar = tmp_path / "malf.schema.json"
+    sidecar.write_text('{"type": 42}', encoding="utf-8")
+
+    with pytest.raises(ContractError) as excinfo:
+        load_cases(data_path)
+
+    message = str(excinfo.value)
+    assert str(sidecar) in message
+    assert "42 is not valid under any of the given schemas" in message
+    assert str(sidecar) not in excinfo.value.detail
+
+
 def test_strict_mode_rejects_an_undeclared_column(tmp_path: Path, fixtures_dir: Path) -> None:
     """``data.schema_strict=True`` makes a column the schema does not declare a fault."""
     data_path = _write_table_with_schema(
@@ -455,16 +474,24 @@ def test_tolerant_mode_loads_the_same_file_and_drops_the_extra_column(
     }
 
 
-def test_a_ragged_row_reports_its_line_and_no_column(fixtures_dir: Path) -> None:
-    """A width fault is about the row, so it names the line and leaves ``column`` unset."""
+def test_a_ragged_row_reports_its_line_and_its_missing_column(fixtures_dir: Path) -> None:
+    """AAP 0.4.7's missing-required-column state, demonstrated by a committed fixture.
+
+    ``missing_column.csv``'s third line stops after ``unit_price``, so the header's trailing
+    ``expected_total`` is the column the row never filled: the collection error names the file, the
+    line number and that column, which is AAP 0.4.7's "data row missing a required column" ->
+    "collection error naming file, line number and column".
+    """
     path = fixtures_dir / "missing_column.csv"
     with pytest.raises(DataError) as excinfo:
         load_cases(path)
     error = excinfo.value
     assert error.file == path
     assert error.line == 3
-    assert error.column is None
-    assert f"{path}:3:" in str(error)
+    assert error.column == "expected_total"
+    message = str(error)
+    assert f"{path}:3:" in message
+    assert "(column 'expected_total')" in message
 
 
 # --- The extension registry ------------------------------------------------

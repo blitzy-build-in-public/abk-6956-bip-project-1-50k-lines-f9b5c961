@@ -26,7 +26,7 @@ from types import TracebackType
 from typing import Final
 
 from foundry.core.limits import CAPTURE_LINES_DEFAULT, CAPTURE_LINES_MAX, CAPTURE_LINES_MIN
-from foundry.obs.logging import attach_handler, detach_handler, get_logger
+from foundry.obs.logging import LOGGER_NAME, attach_handler, detach_handler, get_logger
 
 __all__ = [
     "DEFAULT_CAPTURE_LINES",
@@ -64,6 +64,14 @@ _MESSAGE_SEPARATOR: Final[str] = " | "
 _UNFORMATTABLE_MESSAGE: Final[str] = "<unformattable log record>"
 """Message substituted when a record's ``%``-arguments cannot be interpolated."""
 
+_EVENT_PREFIX: Final[str] = LOGGER_NAME + ": "
+"""What a lifecycle line from :func:`foundry.obs.events.event_line` already begins with.
+
+The prefix is the logger name plus its separator, built here from
+:data:`foundry.obs.logging.LOGGER_NAME` so the two cannot drift apart, and no import outside
+``foundry.obs`` and ``foundry.core`` is added to recognise it (AAP 0.4.8).
+"""
+
 
 def _clamp_capacity(capacity: int) -> int:
     """Clamp a requested ring size into the range ``logging.capture_lines`` accepts.
@@ -75,15 +83,36 @@ def _clamp_capacity(capacity: int) -> int:
     return max(MIN_CAPTURE_LINES, min(MAX_CAPTURE_LINES, capacity))
 
 
+def _join_parts(levelname: str, logger_name: str, message: str) -> str:
+    """Join a record's three parts into one line, and never render the event prefix twice.
+
+    A message that already begins with :data:`_EVENT_PREFIX` carries the logger name it was
+    emitted under -- every lifecycle line does, because :func:`foundry.obs.events.event_line`
+    renders that prefix itself -- so it is joined as ``"<LEVELNAME> <message>"``. Any other
+    message keeps ``"<LEVELNAME> <logger name>: <message>"``, which names the logger that produced
+    it.
+
+    Returns:
+        The single, unnormalised line, which :func:`_normalise_line` then bounds.
+    """
+    if message.startswith(_EVENT_PREFIX):
+        return f"{levelname} {message}"
+    return f"{levelname} {logger_name}: {message}"
+
+
 def format_record(record: logging.LogRecord, *, limit: int = MAX_TAIL_LINE_LENGTH) -> str:
     """Format one log record as a single deterministic line.
 
-    ``"<LEVELNAME> <logger name>: <message>"``, newlines replaced by ``" | "`` and, past ``limit``
-    characters, :data:`TRUNCATION_MARKER` appended; an uninterpolatable record yields a
-    placeholder, so a capture fault never changes a test's outcome.
+    Two shapes, and never both prefixes at once: a message that already begins with the event
+    prefix ``"foundry: "`` -- every line :func:`foundry.obs.events.event_line` renders, that prefix
+    being the logger name -- is joined as ``"<LEVELNAME> <message>"``, so a reader sees the prefix
+    once; any other message keeps ``"<LEVELNAME> <logger name>: <message>"``, which names the
+    logger that emitted it. Newlines are replaced by ``" | "`` and, past ``limit`` characters,
+    :data:`TRUNCATION_MARKER` is appended; an uninterpolatable record yields a placeholder, so a
+    capture fault never changes a test's outcome.
     """
     levelname, logger_name, message = _record_parts(record)
-    return _normalise_line(f"{levelname} {logger_name}: {message}", limit)
+    return _normalise_line(_join_parts(levelname, logger_name, message), limit)
 
 
 def _record_parts(record: logging.LogRecord) -> tuple[str, str, str]:

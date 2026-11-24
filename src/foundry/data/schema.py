@@ -32,6 +32,12 @@ site, so every fault names the file and, where they are known, the line and the 
    ordering and the redaction, and this module reads only the resulting violation (implicit
    requirement I5).
 
+A schema document that loads but is unusable -- a ``type`` holding a number, say -- is refused by
+the contract layer inside that same walk, as a :class:`~foundry.core.exceptions.ContractError`
+naming the sidecar it came from: :func:`enforce_table` labels the document with
+:func:`schema_path_for` of the data file, the decision :func:`load_row_schema` already made for it,
+so an author working in a tree of data files learns which schema to correct.
+
 ``strict=False`` tolerates extra columns: they stay in the row the caller carries forward but are
 left out of the projection the schema validates, so a schema that says nothing about
 ``additionalProperties`` does not fail on a column an author added for another consumer.
@@ -194,6 +200,7 @@ def enforce_row(
     schema: Mapping[str, object],
     strict: bool = True,
     redact: RedactorCallable | None = None,
+    schema_source: str | Path | None = None,
 ) -> Mapping[str, object]:
     """Check one row against a schema, reporting the first fault with its column.
 
@@ -225,6 +232,9 @@ def enforce_row(
             ``foundry.obs.redaction.Redactor.text`` of the run's engine, so a configured key is
             redacted as well as the built-in deny-lists. ``None`` applies those deny-lists, which
             is what a caller holding no configured keys relies on.
+        schema_source: The name a fault in ``schema`` itself reports the document by, normally the
+            sidecar path :func:`enforce_table` derived, so the error says which schema file to
+            correct and not only why it is unusable. ``None`` reports the reason alone.
 
     Returns:
         The mapping the caller carries forward: ``values`` itself under ``strict``, and the
@@ -233,6 +243,8 @@ def enforce_row(
     Raises:
         DataError: When a required column is absent, when an undeclared column is present and
             ``strict`` is on, or when a value violates the schema.
+        ContractError: When the schema document itself is unusable, naming ``schema_source`` when
+            one was given.
     """
     for name in _declared_names(schema.get("required")):
         if name not in values:
@@ -247,7 +259,9 @@ def enforce_row(
         if not strict:
             projected = {key: value for key, value in values.items() if key in properties}
 
-    violation = find_violation(dict(projected), schema)
+    violation = find_violation(
+        dict(projected), schema, source=None if schema_source is None else str(schema_source)
+    )
     if violation is not None:
         # The property a violation is inside is the column it is about; a complaint at the
         # document root, such as `additionalProperties`, names no column of its own.
@@ -265,6 +279,7 @@ def enforce_table(
     strict: bool = True,
     schema: Mapping[str, object] | None = None,
     redact: RedactorCallable | None = None,
+    schema_source: str | Path | None = None,
 ) -> LoadedTable:
     """Enforce a table's rows against its schema, when the data file declares one.
 
@@ -285,6 +300,12 @@ def enforce_table(
         schema: The sidecar schema document, or ``None`` for a data file that declares none.
         redact: The callable that scrubs secrets out of a rendered violation, passed to every
             :func:`enforce_row` call. ``None`` applies the built-in deny-lists.
+        schema_source: The name a fault in ``schema`` itself reports the document by. ``None``
+            derives it from :func:`schema_path_for` of ``table.path`` when that sidecar exists,
+            which is the same single decision :func:`load_row_schema` made for that data file when
+            it loaded the document, so the error names the sidecar that was actually enforced
+            rather than the data file beside it. A data file with no sidecar has no document to
+            name, so the fault reports the reason alone.
 
     Returns:
         ``table`` itself when no schema was given, otherwise a table with the same path and
@@ -295,10 +316,17 @@ def enforce_table(
         DataError: For any fault :func:`enforce_row` reports -- a required column the row lacks, an
             undeclared column present under ``strict``, or a value the schema rejects -- naming the
             file, the row's line and the column.
+        ContractError: When the schema document is unusable, naming the sidecar it was loaded from.
     """
     if schema is None:
         return table
 
+    source: str | Path | None = schema_source
+    if source is None:
+        # A caller may hand over an in-memory document for a data file with no sidecar; naming a
+        # path that holds no file would send the reader looking for a document that is not there.
+        candidate = schema_path_for(table.path)
+        source = candidate if candidate.exists() else None
     validated_rows: list[RawRow] = []
     for row in table.rows:
         validated = enforce_row(
@@ -308,6 +336,7 @@ def enforce_table(
             schema=schema,
             strict=strict,
             redact=redact,
+            schema_source=source,
         )
         validated_rows.append(
             RawRow(

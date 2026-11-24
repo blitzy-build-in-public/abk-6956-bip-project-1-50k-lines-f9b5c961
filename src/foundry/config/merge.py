@@ -65,20 +65,12 @@ from foundry.config.layers import ConfigLayer, LayerPayload
 from foundry.config.models import FoundryConfig, HttpAuthConfig
 from foundry.config.sources import ConfigSource, ConfigSources
 from foundry.core.exceptions import ConfigError
-from foundry.obs import events, logging
+from foundry.obs import events
 
 __all__: Final[tuple[str, ...]] = (
     "check_secret_variables",
     "resolve",
 )
-
-NO_CONFIG_FILE_MESSAGE: Final[str] = "foundry: no config file found"
-"""The one line a configuration-free run logs, at ``DEBUG``, on the ``foundry`` logger.
-
-AAP 0.4.7 quotes this text as a state of its own -- defaults apply, the profile is ``default``, exit
-code 0 -- so it is written once here and reached from one place, :func:`_log_no_config_file`, rather
-than spelled again at each call site.
-"""
 
 _COMMAND_LINE_DETAIL: Final[str] = "command line"
 """What a rejection of the whole command-line payload names as its detail.
@@ -586,7 +578,9 @@ def _log_no_config_file() -> None:
 
     AAP 0.4.7 makes this the whole trace of the zero-configuration state: the run proceeds from the
     field defaults with the profile ``default`` and exit code 0, so the line is informational and
-    belongs at ``DEBUG`` on the package's own logger, which is obtained at the call rather than held
-    at import (AAP 0.4.8).
+    belongs at ``DEBUG`` on the package's own logger. It is emitted through
+    :func:`foundry.obs.events.emit_no_config_file`, the one place a Foundry lifecycle record is
+    written, so the level clamp and the single-line format every other lifecycle line gets apply
+    here too rather than a logger being called from this module.
     """
-    logging.get_logger(__name__).debug("%s", NO_CONFIG_FILE_MESSAGE)
+    events.emit_no_config_file()

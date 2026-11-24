@@ -8,7 +8,9 @@ Two callers reach the contract layer with opposite needs:
 An *instance invalid* -- a document that breaks the schema -- is one or the other of those, built
 from the first :class:`~foundry.contract.violations.Violation`. A *schema unusable* -- unloadable,
 not a schema object, invalid under its metaschema, declaring an unavailable draft, or referencing
-a missing subschema -- leaves no verdict about the instance, so every entry point raises.
+a missing subschema -- leaves no verdict about the instance, so every entry point raises, and the
+summary it raises with names the document the caller validated against whenever that name is
+known: the path a schema source carries, or the label the data engine passes down.
 
 The reported violation is Foundry's choice, never the library's: ``iter_errors`` documents no
 ordering and the library's relevance ranking is an explicit heuristic whose answer can change with
@@ -40,6 +42,7 @@ imports stay inside the set AAP 0.4.8 lists for ``foundry.contract``.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
@@ -98,22 +101,55 @@ def _schema_fault(
     return ContractError(message, json_path=json_path, detail=detail, hint=hint)
 
 
-def _invalid_schema_fault(error: SchemaError) -> ContractError:
+def _invalid_schema_fault(error: SchemaError, *, source: str | None = None) -> ContractError:
     """Build the contract error for a document that is not a valid schema.
 
     Both paths are rendered by :mod:`foundry.contract.violations`, so a schema fault's JSON path is
-    spelled exactly like the path of a violation, and the message is collapsed to one line and
+    spelled exactly like the path of a violation, and the reason is collapsed to one line and
     redacted so a schema cannot inject a newline -- or a quoted secret -- into a failure report.
+    ``source`` prefixes the summary with the name the caller knows the document by, which is what
+    lets an author in a tree of data files find the broken sidecar; ``detail`` keeps the unlabelled
+    text, so the reason and the schema-internal path are spelled the same whether or not a name
+    was available.
+
+    Args:
+        error: The library's metaschema fault, whose message is the reason and whose
+            ``absolute_schema_path`` locates the offending keyword inside the schema.
+        source: The label naming the document, normally the path it was loaded from, or ``None``
+            when the caller holds the document without a name for it.
+
+    Returns:
+        The contract error to raise, which the caller chains onto ``error``.
     """
     json_path = json_path_from_parts(tuple(error.absolute_path))
     schema_path = format_schema_path(tuple(error.absolute_schema_path))
-    message = excerpt(error.message, limit=_DETAIL_LIMIT)
+    reason = excerpt(error.message, limit=_DETAIL_LIMIT)
+    located = f"schema is invalid: {reason} (schema path: {schema_path})"
     return _schema_fault(
-        message="schema is invalid",
+        message=located if source is None else f"{source}: {located}",
         json_path=json_path,
-        detail=f"schema is invalid: {message} (schema path: {schema_path})",
+        detail=located,
         hint="correct the schema document; a schema fault is not an instance verdict",
     )
+
+
+def _source_label(schema: SchemaSource) -> str | None:
+    """Return the name a schema fault reports a document by, when the source carries one.
+
+    A schema handed over as a mapping in memory has no name, so its fault reports the reason
+    alone; a ``str`` or a :class:`~pathlib.Path` names the file, so a caller that passed a path --
+    as :func:`validate_instance` and :func:`find_violation` both accept -- gets a fault naming
+    that file without passing anything extra.
+
+    Args:
+        schema: The schema source the caller validated against.
+
+    Returns:
+        ``str(schema)`` for a path source, and ``None`` for a document in memory.
+    """
+    if isinstance(schema, (str, Path)):
+        return str(schema)
+    return None
 
 
 def _reference_fault(error: Unresolvable) -> ContractError:
@@ -247,12 +283,20 @@ def select_validator(document: Mapping[str, object]) -> type[Validator]:
     )
 
 
-def check_schema(document: Mapping[str, object]) -> None:
+def check_schema(document: Mapping[str, object], *, source: str | None = None) -> None:
     """Raise unless the document is a valid schema for the draft it declares or defaults to.
 
     A schema fault is **not** an instance verdict: this reports a document that cannot be used at
     all, and never reports that an instance failed. It runs on every walk, because an unusable
     keyword would otherwise fail mid-validation, where the fault reads like a violation.
+
+    Args:
+        document: The schema document to inspect, as
+            :func:`foundry.contract.schema.load_schema` returns it.
+        source: The name the document is known by, normally the path it was loaded from, which the
+            error for an invalid document prefixes to its message so the broken schema is
+            identifiable among several; ``None`` reports the fault without a name. The
+            unsupported-draft and recursion faults name their own cause instead and are unaffected.
 
     Raises:
         ContractError: When the document is not a valid schema, when it declares a draft this
@@ -266,12 +310,14 @@ def check_schema(document: Mapping[str, object]) -> None:
         # caller's mapping out of the library's hands: this module never mutates a schema.
         validator_class.check_schema(dict(document))
     except SchemaError as exc:
-        raise _invalid_schema_fault(exc) from exc
+        raise _invalid_schema_fault(exc, source=source) from exc
     except RecursionError as exc:
         raise _recursion_fault() from exc
 
 
-def iter_violations(instance: object, schema: SchemaSource) -> tuple[Violation, ...]:
+def iter_violations(
+    instance: object, schema: SchemaSource, *, source: str | None = None
+) -> tuple[Violation, ...]:
     """Return every violation of the schema by the instance, in Foundry's reporting order.
 
     Args:
@@ -279,6 +325,10 @@ def iter_violations(instance: object, schema: SchemaSource) -> tuple[Violation, 
             keyword that rejects it.
         schema: The schema document, or the path to the ``.json``, ``.yaml`` or ``.yml`` file that
             holds it.
+        source: The name a schema fault reports the document by. The default, ``None``, derives it
+            from ``schema`` itself -- the path when the caller passed one, and nothing when the
+            document is in memory -- so a caller validating against a file names that file without
+            saying so twice.
 
     Returns:
         The violations, shallowest JSON path first, or an empty tuple when the instance is valid.
@@ -294,7 +344,8 @@ def iter_violations(instance: object, schema: SchemaSource) -> tuple[Violation, 
     from referencing.exceptions import Unresolvable
 
     document = load_schema(schema)
-    check_schema(document)
+    label = source if source is not None else _source_label(schema)
+    check_schema(document, source=label)
     validator_class = select_validator(document)
     validator = validator_class(document)
     try:
@@ -330,19 +381,30 @@ def iter_violations(instance: object, schema: SchemaSource) -> tuple[Violation, 
     return violations
 
 
-def find_violation(instance: object, schema: SchemaSource) -> Violation | None:
+def find_violation(
+    instance: object, schema: SchemaSource, *, source: str | None = None
+) -> Violation | None:
     """Return the first violation of the schema by the instance, or ``None`` when it is valid.
 
     This is the non-raising half of the split: an *invalid instance* is a value the caller decides
     what to do with -- :mod:`foundry.data.schema` turns it into a
     :class:`~foundry.core.exceptions.DataError` naming the file, line and column -- while an
-    *unusable schema* raises, because no verdict about the instance exists.    Returns:
+    *unusable schema* raises, because no verdict about the instance exists.
+
+    Args:
+        instance: The value to validate.
+        schema: The schema document, or the path to the file that holds it.
+        source: The name a schema fault reports the document by, forwarded to
+            :func:`iter_violations`; ``None`` derives it from ``schema``, so a path source names
+            its own file.
+
+    Returns:
         The first violation in Foundry's order, or ``None`` when the instance is valid.
 
     Raises:
         ContractError: When the schema is unusable, for the reasons :func:`iter_violations` lists.
     """
-    violations = iter_violations(instance, schema)
+    violations = iter_violations(instance, schema, source=source)
     return violations[0] if violations else None
 
 

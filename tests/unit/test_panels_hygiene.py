@@ -1,4 +1,4 @@
-"""The two ``foundry.reporting.panels`` behaviours AAP 0.13.1 and AAP 0.4.8 fix.
+"""The ``foundry.reporting.panels`` behaviours the findings on this surface fix.
 
 Finding F02 (``panels-zero-capture-warning``): ``logging.capture_lines = 0`` is a supported
 configuration -- :data:`foundry.obs.capture.MIN_CAPTURE_LINES` documents it as a clean no-capture
@@ -12,8 +12,15 @@ module scope, and a ``Final`` annotation stops a rebinding but not a write into 
 AAP 0.4.8's module-level-state rule forbids. It is now a read-only mapping that still orders every
 phase.
 
-No other test module covers ``foundry.reporting``, so these cases are the guard against either
-behaviour returning silently.
+Finding cr05-capture-prefix-duplication (``format_record`` prefix): every Foundry lifecycle line is
+rendered by ``foundry.obs.events.event_line``, which already begins with ``foundry: ``, and
+``foundry.obs.capture.format_record`` prefixed the logger name a second time, so the duplication was
+persisted into ``log_tail.log`` and shown in this panel. The last case drives the ``foundry``
+logger, the artifact writer and :func:`panels.read_log_tail` over one line and requires the prefix
+to appear once.
+
+No other test module covers ``foundry.reporting``, so these cases are the guard against any of
+these behaviours returning silently.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from foundry.core.types import Phase
+from foundry.obs import artifacts, capture, events
 from foundry.obs.redaction import REDACTED, default_redactor
 from foundry.reporting import panels
 
@@ -114,3 +122,33 @@ def test_positive_limit_still_returns_the_newest_redacted_lines(tmp_path: Path) 
     lines, available = panels.read_log_tail(tail, limit=1, redactor=default_redactor())
     assert available is True
     assert lines == (_REDACTED_DENIED_LINE,)
+
+
+def test_a_captured_event_line_carries_its_prefix_once_end_to_end(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One lifecycle line reaches ``log_tail.log`` and this reader with one ``foundry: `` prefix.
+
+    ``foundry.obs.events.event_line`` renders the logger name as the prefix, and
+    :func:`foundry.obs.capture.format_record` adds the logger name only to a message that does not
+    already carry it, so the ring, the artifact and the panel agree on one line.
+    """
+    expected = "WARNING foundry: plumbing_failure component=probe message='message 3'"
+    ring = capture.LogRing(capacity=1)
+    with caplog.at_level(logging.DEBUG, logger="foundry"), ring:
+        events.emit_plumbing_failure("probe", "message 3")
+    writer = artifacts.ArtifactWriter(
+        tmp_path / "artifacts",
+        run_id="20250102T030405-abc123",
+        profile="default",
+        redactor=default_redactor(),
+        nodeid="tests/test_probe.py::test_capture",
+    )
+
+    reference = writer.write_log_tail(list(ring.tail(1)))
+
+    assert ring.tail(1) == (expected,)
+    assert reference is not None
+    path = writer.run_dir / reference.path
+    assert path.read_text(encoding="utf-8").splitlines() == [expected]
+    assert panels.read_log_tail(path, limit=5, redactor=default_redactor()) == ((expected,), True)

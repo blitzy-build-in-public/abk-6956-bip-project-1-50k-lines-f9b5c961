@@ -29,13 +29,15 @@ base_url = "http://127.0.0.1:8000"
 # The credential entries below are commented examples rather than defaults: each
 # is unset by default, and each names the environment variable that holds the
 # secret, or the header to send it in. The secret itself is never written here.
+# A credential variable must not start with FOUNDRY_: that prefix is reserved for
+# configuration keys, so Foundry reads such a variable as a key it does not define.
 # [http.auth]
 # strategy = "none"
-# token_env = "FOUNDRY_API_TOKEN"
-# user_env = "FOUNDRY_API_USER"
-# password_env = "FOUNDRY_API_PASSWORD"
+# token_env = "CHECKOUT_API_TOKEN"
+# user_env = "CHECKOUT_API_USER"
+# password_env = "CHECKOUT_API_PASSWORD"
 # header_name = "X-Api-Key"
-# header_value_env = "FOUNDRY_API_KEY"
+# header_value_env = "CHECKOUT_API_KEY"
 
 # [artifacts]
 # dir = "artifacts"
@@ -49,7 +51,10 @@ base_url = "http://127.0.0.1:8000"
 # dir = "testdata"
 # schema_strict = true
 
-# Replay serves the recorded interaction and opens no socket.
+# Replay serves the recorded interaction and opens no socket. A request that was
+# never recorded fails with a cassette miss; record it by running the suite with
+# `foundry run --foundry-record`, which selects mode "record" for that run and
+# needs no edit here. Setting `mode = "record"` below records on every run.
 [cassette]
 mode = "replay"
 # dir = "cassettes"

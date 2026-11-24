@@ -380,10 +380,20 @@ def check_row_width(
     0-based index, because a reader that skips blank or comment lines cannot point
     at the offending row with a line number alone.
 
+    The error names the column it can, so a width fault is located as precisely as
+    the header allows. A row short of the header names the first header column it
+    never filled -- the column the author left out -- which is the "data row missing
+    a required column" state AAP 0.4.7 reports as a collection error naming the
+    file, the line number and the column. A row longer than the header has no
+    absent column to name, so its error carries the line and leaves
+    ``DataError.column`` unset.
+
     Args:
         path: The data file; named by the error.
-        columns: The header's column names, whose length is the expected width.
-        values: The parsed values of the current row.
+        columns: The header's column names, whose length is the expected width and
+            whose entry at the row's own length is the column a short row omitted.
+        values: The parsed values of the current row; fewer of them than the header
+            declares means the header's trailing names are the missing ones.
         line: The 1-based line the row starts on; the error carries it.
         row_index: The 0-based index of the row among the data rows; the message
             carries it.
@@ -393,14 +403,19 @@ def check_row_width(
 
     Raises:
         DataError: When the row holds a different number of values than the header
-            declares.
+            declares, carrying the line in every case and naming the first column
+            it did not fill when the row is short.
     """
     if len(values) != len(columns):
+        # A short row has one identifiable fault location: the first header column it
+        # never filled. An over-long row has no single absent column, so it names none.
+        column = columns[len(values)] if len(values) < len(columns) else None
         data_error(
             path,
             f"row {row_index} has {len(values)} values but the header declares "
             f"{len(columns)} columns",
             line=line,
+            column=column,
         )
 
 

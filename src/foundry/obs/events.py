@@ -31,6 +31,7 @@ __all__ = [
     "emit_attempt",
     "emit_cassette_mode",
     "emit_html_fallback",
+    "emit_no_config_file",
     "emit_plumbing_failure",
     "emit_report_written",
     "emit_resolution",
@@ -69,6 +70,14 @@ _ISOLATION_ERRORS: Final[tuple[type[BaseException], ...]] = (
     RecursionError,
     RuntimeError,
 )
+
+_NO_CONFIG_FILE_EVENT: Final[str] = "no config file found"
+"""Event name of :func:`emit_no_config_file`, which is the sentence AAP 0.4.7 pins.
+
+:func:`event_line` renders ``foundry: <name>``, so this name and that prefix reproduce the state
+row's line exactly; a snake_case label would put a second word between them and the pinned text
+would be unreachable.
+"""
 
 
 def _as_text(value: object) -> str:
@@ -217,6 +226,18 @@ def emit_run_start(run_id: str, profile: str, artifacts_root: str | Path) -> Non
 def emit_resolution(key: str, layer: str, detail: str) -> None:
     """Record which layer decided a configuration key, at ``DEBUG``, never the value itself."""
     _emit("config_resolution", LEVEL_DEBUG, _pairs(key=key, layer=layer, detail=detail))
+
+
+def emit_no_config_file() -> None:
+    """Record that no configuration file was found, at ``DEBUG``, and emit no field.
+
+    AAP 0.4.7 pins this state's whole line -- ``foundry: no config file found``, on the ``foundry``
+    logger -- so the event *name* carries the sentence: :func:`event_line` renders the prefix and
+    the name alone, whereas a snake_case label such as ``config_file`` would leave that text
+    unreachable. The level is ``DEBUG`` because a run with no configuration file is not a fault:
+    it proceeds from the field defaults with the profile ``default`` and exit code 0.
+    """
+    _emit(_NO_CONFIG_FILE_EVENT, LEVEL_DEBUG, ())
 
 
 def emit_cassette_mode(mode: str, nodeid: str) -> None:

@@ -338,6 +338,23 @@ def test_the_invalid_schema_fixture_is_loaded_but_refused_by_a_validation() -> N
         find_violation({}, _INVALID_SCHEMA)
 
 
+def test_an_invalid_schema_path_names_the_document_and_the_reason(tmp_path: Path) -> None:
+    """A schema fault names the file it came from, while ``detail`` keeps the reason alone."""
+    schema_path = _write(tmp_path / "malformed.schema.json", json.dumps({"type": 42}))
+    reason = "42 is not valid under any of the given schemas"
+
+    with pytest.raises(ContractError) as caught:
+        validate_instance({}, schema_path)
+
+    error = caught.value
+    assert str(schema_path) in error.message
+    assert reason in error.message
+    assert error.json_path == "$.type"
+    assert error.detail.startswith(f"schema is invalid: {reason} (schema path: #")
+    assert str(schema_path) not in error.detail
+    assert error.message == f"{schema_path}: {error.detail}"
+
+
 # --- Validation: the keyword shapes both fixture schemas exercise -----------
 
 # Each body below breaks exactly one keyword of the schema it is validated against; the case ids

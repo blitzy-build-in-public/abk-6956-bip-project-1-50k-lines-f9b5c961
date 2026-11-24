@@ -30,6 +30,7 @@ from .events import emit_artifact_written as emit_artifact_written
 from .events import emit_attempt as emit_attempt
 from .events import emit_cassette_mode as emit_cassette_mode
 from .events import emit_html_fallback as emit_html_fallback
+from .events import emit_no_config_file as emit_no_config_file
 from .events import emit_plumbing_failure as emit_plumbing_failure
 from .events import emit_report_written as emit_report_written
 from .events import emit_resolution as emit_resolution
@@ -86,6 +87,7 @@ __all__ = (
     "emit_attempt",
     "emit_cassette_mode",
     "emit_html_fallback",
+    "emit_no_config_file",
     "emit_plumbing_failure",
     "emit_report_written",
     "emit_resolution",

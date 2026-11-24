@@ -16,7 +16,8 @@
 # Usage: ./scripts/verify.sh, from any directory; the root comes from this
 # script's location, so coverage.json lands at the repository root and every
 # root-relative path below resolves the same way. It takes no argument. The
-# environment must already be synced and on PATH (uv sync --extra dev). It
+# environment must already be synced (uv sync --extra dev), and this script puts
+# ./.venv/bin in front of PATH itself, so no activation step is required. It
 # installs nothing, contacts no network and writes only gitignored paths:
 # coverage.json, .coverage*, the tool caches and the run outputs Foundry writes.
 #
@@ -46,6 +47,32 @@ readonly SUITE_CEILING_SECONDS=360
 readonly COVERAGE_FLOOR=85
 readonly SMOKE_MODULES=(tests/unit/test_core.py tests/unit/test_obs.py)
 
+# The repository root comes from this script's own location, so every relative
+# path below resolves identically from any caller's directory; the synced
+# environment beside it holds the lockfile's ruff, mypy, pytest and python3.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+VENV_BIN="${REPO_ROOT}/.venv/bin"
+cd -- "${REPO_ROOT}"
+
+# use_project_venv - put the project environment in front of PATH, so the tools
+# the gates run are the lockfile's pins rather than whatever the caller's PATH
+# holds. AAP 0.14.4 calls this script "the only command a reviewer needs", so it
+# must not also demand an activation step, and gates 5 and 6 need the pinned
+# pytest together with pytest-cov and pytest-xdist, which only .venv carries. It
+# prepends an existing directory once and does nothing else: it installs
+# nothing, creates nothing and contacts no network (AAP 0.14.4), and a tree with
+# no .venv is left as found for require_tools to report.
+use_project_venv() {
+  case ":${PATH}:" in
+    *":${VENV_BIN}:"*) return 0 ;;
+  esac
+  if [ -d "${VENV_BIN}" ]; then
+    PATH="${VENV_BIN}${PATH:+:${PATH}}"
+    export PATH
+  fi
+}
+
 # require_tools - name the first missing tool and stop before any gate runs, so
 # an unsynced environment is one line rather than a cascade of command-not-found
 # and a gate blamed for the wrong reason. Not a gate: it installs nothing and
@@ -55,7 +82,9 @@ require_tools() {
   for tool in ruff mypy pytest python3; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
       printf 'verify: required tool not found: %s\n' "${tool}" >&2
-      printf 'verify: sync the environment first: uv sync --extra dev\n' >&2
+      printf 'verify: sync the environment: uv sync --extra dev\n' >&2
+      printf 'verify: then re-run this script, or activate it: source %s/activate\n' \
+        "${VENV_BIN}" >&2
       exit 2
     fi
   done
@@ -76,13 +105,8 @@ case "${1:-}" in
     ;;
 esac
 
+use_project_venv
 require_tools
-
-# The repository root comes from this script's own location, so every relative
-# path below resolves identically from any caller's directory.
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-cd -- "${REPO_ROOT}"
 
 # run_step <name> <command> [args...] - print the step, run it with its own
 # stdout and stderr passed through untouched, then print "ok". On failure it

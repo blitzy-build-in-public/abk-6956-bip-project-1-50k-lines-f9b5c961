@@ -210,8 +210,11 @@ def foundry_artifacts(
         foundry_config: The resolved configuration. ``artifacts.dir`` is the root of the artifact
             tree, ``artifacts.keep_passed`` decides whether a passing test keeps its files or only
             ``manifest.json``, ``secrets.redact_keys`` widens the redaction deny-list and
-            ``profile`` is recorded in every manifest. The log tail's capacity is
-            ``logging.capture_lines``, which the log ring owns; the writer is handed the lines.
+            ``profile`` is recorded in every manifest. The profile is rendered with ``str``, so a
+            configuration whose ``model_copy`` installs the name as a plain string -- the override
+            :func:`foundry.fixtures.config.foundry_config` documents -- still builds the writer.
+            The log tail's capacity is ``logging.capture_lines``, which the log ring owns; the
+            writer is handed the lines.
         foundry_run_id: The session's run id, which is the directory name inside ``artifacts.dir``.
 
     Returns:
@@ -232,7 +235,7 @@ def foundry_artifacts(
     return ArtifactWriter(
         foundry_config.artifacts.dir,
         run_id=foundry_run_id,
-        profile=foundry_config.profile.value,
+        profile=str(foundry_config.profile),
         redactor=redactor,
         keep_passed=foundry_config.artifacts.keep_passed,
     )

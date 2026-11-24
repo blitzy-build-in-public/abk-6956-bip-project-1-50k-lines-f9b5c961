@@ -283,6 +283,8 @@ def test_a_record_is_formatted_without_a_timestamp_and_identically_every_time() 
     assert "\n" not in collapsed
     assert "\r" not in collapsed
     assert collapsed == "INFO foundry.obs: one | two | three"
+    # A lifecycle line already begins with the logger name, so the prefix is rendered once.
+    assert capture.format_record(_record(message="foundry: x")) == "WARNING foundry: x"
 
 
 def test_an_attached_ring_captures_what_the_foundry_logger_emits(

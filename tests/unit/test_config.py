@@ -45,6 +45,7 @@ from foundry.config import cli_layer, env, files, keys, layers, merge, render, v
 from foundry.config.enums import ProfileName, RetryPredicate
 from foundry.config.models import FoundryConfig
 from foundry.core.exceptions import ConfigError
+from foundry.obs import capture
 
 # The two file names the third and fourth discovery steps look for (AAP 0.4.5), the constraint
 # ``http.timeout`` quotes, the four variable names the auth cases bind, and a credential-shaped
@@ -418,6 +419,10 @@ def test_no_config_file_resolves_defaults_and_logs_the_debug_line(
     assert config.profile is ProfileName.DEFAULT
     assert config.http.timeout == 10.0
     assert "foundry: no config file found" in [r.getMessage() for r in caplog.records]
+    # AAP 0.4.7 pins the logger, the level and the text: the ``foundry`` logger itself, at DEBUG.
+    line = next(r for r in caplog.records if r.getMessage() == "foundry: no config file found")
+    assert (line.name, line.levelno) == ("foundry", logging.DEBUG)
+    assert capture.format_record(line) == "DEBUG foundry: no config file found"
 
     caplog.clear()
     _write(tmp_path, _FOUNDRY_TOML, "http.timeout = 2.0\n")
