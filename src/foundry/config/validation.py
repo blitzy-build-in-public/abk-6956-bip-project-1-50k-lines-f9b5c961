@@ -22,8 +22,10 @@ is what makes AAP 0.4.5's rejection message possible at every layer.
 chooses the builder and supplies the arguments, so the texts AAP 0.4.5 pins read the same from
 the plugin, the command line and ``foundry doctor``. **No value that could be a credential
 reaches a message**: the configuration stores the *name* of the variable holding a credential,
-never its value (implicit requirement I9), and the one value rendered here is a scalar -- a
-table or a sequence is described rather than printed, and URL userinfo is masked.
+never its value (implicit requirement I9), and the one value rendered here is a scalar passed
+through :mod:`foundry.obs.redaction`, the single redaction engine (AAP 0.3.2): a table or a
+sequence is described rather than printed, and nothing the scalar carries -- URL userinfo, a
+deny-listed query parameter, a credential-shaped or ``name=value`` secret -- is printed.
 
 The module performs no I/O, reads no environment variable (the mapping is always passed in),
 configures no logger and holds no mutable state. It imports :mod:`pydantic` at module scope,
@@ -614,8 +616,8 @@ def _render_value(value: object) -> str:
         value: The input pydantic reported for the rejected key.
 
     Returns:
-        The value as text for a boolean, a number or a string -- a URL's userinfo masked -- and
-        a placeholder describing the shape for anything else.
+        The value as text for a boolean, a number or a string, the string rendered through
+        :func:`_redacted_text`, and a placeholder describing the shape for anything else.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -624,7 +626,7 @@ def _render_value(value: object) -> str:
     if isinstance(value, float):
         return str(int(value)) if value.is_integer() else str(value)
     if isinstance(value, str):
-        return _mask_userinfo(value)
+        return _redacted_text(value)
     if isinstance(value, Mapping):
         return _TABLE_VALUE
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -634,28 +636,31 @@ def _render_value(value: object) -> str:
     return _UNRENDERABLE_VALUE
 
 
-def _mask_userinfo(text: str) -> str:
-    """Return ``text`` with the userinfo of a URL-like value replaced by ``***``.
+def _redacted_text(value: str) -> str:
+    """Return ``value`` as the single redaction engine renders it.
 
-    ``http.base_url`` may be written with credentials in it, and URL userinfo is a documented
-    leak channel of the tooling around HTTP (AAP 0.2.1), so it is masked wherever a value is
-    rendered rather than left to every caller to remember.
+    A rejected value is quoted back to the operator through ``errors.RANGE_TEMPLATE`` -- stderr
+    at exit 2, therefore a CI log -- and a configuration value can carry a credential: URL
+    userinfo and deny-listed query parameters are documented leak channels (AAP 0.2.1). The
+    value therefore goes through :mod:`foundry.obs.redaction`, which holds the only
+    implementation (AAP 0.3.2) and drops userinfo, redacts deny-listed query values, and
+    redacts credential-shaped and ``name=value`` secrets. ``Redactor.text`` is total -- it
+    returns the marker rather than raising when it cannot read the text -- so there is no fault
+    path to handle here.
+
+    The import sits inside the function on purpose, as in
+    :func:`foundry.contract.violations._resolve_redactor`: importing the engine at module scope
+    would put it on the plugin's startup path, which the startup budget measures (AAP 0.14.2).
 
     Args:
-        text: The rejected string.
+        value: The rejected string, a scalar one layer of the configuration supplied.
 
     Returns:
-        The string unchanged when it is not a URL carrying userinfo, otherwise the same URL with
-        ``***`` in place of the username and password.
+        The value with its secrets replaced, or its credential-free form for a URL.
     """
-    scheme, separator, rest = text.partition("://")
-    if not separator:
-        return text
-    authority, slash, remainder = rest.partition("/")
-    if "@" not in authority:
-        return text
-    host = authority.rpartition("@")[2]
-    return f"{scheme}://***@{host}{slash}{remainder}"
+    from foundry.obs.redaction import default_redactor
+
+    return default_redactor().text(value)
 
 
 def _nested_under_mapping_key(dotted: str) -> bool:

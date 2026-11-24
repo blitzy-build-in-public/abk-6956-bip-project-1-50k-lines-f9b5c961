@@ -26,11 +26,12 @@ Both directions fail in the way their caller can act on
     ``load`` fails loudly (AAP 0.14.3): a cassette that is not valid JSON, is not an object, or
     does not match the documented shape raises :class:`~foundry.core.exceptions.FoundryError`
     naming the file and the offending key, because a truncated or hand-edited cassette must not
-    replay as an empty recording. ``save`` fails by the failure-isolation rule (AAP 0.1.2): an
-    unwritable directory is reported as exactly one ``WARNING`` on the ``foundry`` logger and the
-    write is abandoned, because a cassette that could not be recorded must never turn a passing
-    test into an error. :class:`~foundry.core.exceptions.CassetteMissError` belongs to replay and
-    is raised by the transport, never here.
+    replay as an empty recording. ``save`` and ``save_document`` fail by the failure-isolation
+    rule (AAP 0.1.2): a capture that cannot be redacted and an unwritable directory are each
+    reported as exactly one ``WARNING`` on the ``foundry`` logger and the write is abandoned,
+    because a cassette that could not be recorded must never turn a passing test into an error.
+    :class:`~foundry.core.exceptions.CassetteMissError` belongs to replay and is raised by the
+    transport, never here.
 
 Deterministic bytes
     One serialiser writes every document (:func:`foundry.cassette.models.to_json_text`): sorted
@@ -49,6 +50,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -91,7 +93,7 @@ _PLUMBING_ERRORS: Final[tuple[type[BaseException], ...]] = (
     RuntimeError,
     OSError,
 )
-"""Faults :meth:`CassetteStore.save` reports as a warning instead of raising.
+"""Faults the two write methods report as a warning instead of raising.
 
 The same band :mod:`foundry.obs.events` treats as isolation faults: a value that cannot be
 coerced, a structure that cannot be walked, or a filesystem that refuses the write. A redaction
@@ -267,9 +269,9 @@ def redact_interactions(
 ) -> tuple[tuple[Interaction, ...], tuple[str, ...]]:
     """Redact a capture and return it with the sorted, de-duplicated names it scrubbed.
 
-    Both values a cassette needs come out of one pass, which is why ``save`` has a single call to
-    make: the redacted interactions in recording order, and the ``redacted_keys`` that belong with
-    them.
+    Both values a cassette needs come out of one pass, which is why
+    :meth:`CassetteStore.save_document` has a single call to make: the redacted interactions in
+    recording order, and the ``redacted_keys`` that belong with them.
 
     Args:
         interactions: The interactions in the order the test issued them.
@@ -314,11 +316,12 @@ class CassetteStore:
     answers the three questions the record/replay paths ask: where a test's cassette lives
     (:meth:`path_for`), whether it exists (:meth:`exists`) and what it holds (:meth:`load`). The
     two write methods funnel into :meth:`save_document`, so the tree has exactly one place that
-    creates a directory and writes a cassette file (AAP 0.4.8 "Where state may be held").
+    creates a directory, redacts a capture and writes a cassette file (AAP 0.4.8 "Where state may
+    be held"), and no public write path can store an unredacted capture.
 
     Attributes:
         _cassette_dir: The directory the documents live in, as given to the constructor.
-        _redactor: The redaction engine applied by :meth:`save`.
+        _redactor: The redaction engine applied by :meth:`save_document`, the one write path.
     """
 
     _cassette_dir: Path
@@ -438,20 +441,24 @@ class CassetteStore:
         *,
         recorded_at: datetime | None = None,
     ) -> Path | None:
-        """Redact a capture, write it as ``nodeid``'s cassette document and return its path.
+        """Write a capture as ``nodeid``'s cassette document and return its path.
 
-        Redaction happens before serialisation, so no denied header value and no secret-bearing
-        JSON key reaches the file (implicit requirement I4). The document records the sorted names
-        that were scrubbed, which is what AAP 0.4.6 publishes as ``redacted_keys``.
+        The interactions are handed on as captured: :meth:`save_document` redacts them before
+        serialisation, so no denied header value and no secret-bearing JSON key reaches the file
+        (implicit requirement I4). There is one redaction pass and one write, and the document
+        records the sorted names that were scrubbed, which is what AAP 0.4.6 publishes as
+        ``redacted_keys``.
 
-        Failure isolation (AAP 0.1.2, AAP 0.14.3): a redaction fault or an unwritable directory is
-        reported as exactly one ``WARNING`` on the ``foundry`` logger and the method returns
-        ``None``. It never raises, because a cassette that could not be recorded must not change a
-        test's outcome or the run's exit code.
+        Failure isolation (AAP 0.1.2, AAP 0.14.3): a capture that cannot be turned into a document
+        and a write that cannot be redacted or completed each produce exactly one ``WARNING`` on
+        the ``foundry`` logger and a ``None`` return. The method never raises for those, because a
+        cassette that could not be recorded must not change a test's outcome or the run's exit
+        code.
 
         Args:
             nodeid: The pytest node id of the item whose capture this is.
-            interactions: The interactions to record, in the order the test issued them.
+            interactions: The interactions to record, in the order the test issued them, as
+                captured.
             recorded_at: The moment to stamp the document with. Defaults to
                 :func:`~foundry.core.ids.utc_now`, which is the only clock read on this path.
 
@@ -463,38 +470,45 @@ class CassetteStore:
             ArtifactError: The resolved path escapes the cassette directory.
         """
         try:
-            redacted, names = redact_interactions(interactions, self._redactor)
             document = CassetteDocument(
                 recorded_at=utc_now() if recorded_at is None else recorded_at,
-                redacted_keys=names,
-                interactions=redacted,
+                interactions=tuple(interactions),
             )
         except _PLUMBING_ERRORS as exc:
             emit_plumbing_failure(
-                _COMPONENT, f"could not redact the cassette capture for {nodeid}", exc=exc
+                _COMPONENT, f"could not build the cassette document for {nodeid}", exc=exc
             )
             return None
         return self.save_document(nodeid, document)
 
     def save_document(self, nodeid: str, document: CassetteDocument) -> Path | None:
-        """Write an already-redacted document as ``nodeid``'s cassette and return its path.
+        """Redact ``document``, write it as ``nodeid``'s cassette and return its path.
 
-        The document is written exactly as it stands -- nothing is redacted here -- so this is the
-        entry point for a caller holding a document that was redacted elsewhere, such as a
-        recorded capture being re-based. :meth:`save` is the capture path, and it is the one that
-        guarantees redaction before the write.
+        This is the single write funnel and therefore the single redaction point: the document's
+        interactions go through :func:`redact_interactions` here, before serialisation, so no
+        denied header value and no secret-bearing JSON key reaches the file however the document
+        was built (implicit requirement I4, AAP 0.3.2 "Security architecture"). No public write
+        path can store an unredacted capture.
+
+        The written document's ``redacted_keys`` is the sorted, de-duplicated union of the names
+        this pass scrubbed and the names the incoming document already carried, so a document
+        redacted elsewhere keeps its record and the file can never disagree with the
+        ``redacted_keys`` written beside it (AAP 0.4.6, AAP 0.13.1). A capture is redacted once:
+        :meth:`save` builds a document from the raw interactions and delegates here. Re-redacting
+        an already-redacted document changes nothing, because a scrubbed value holds no secret the
+        engine could still find.
 
         The directory is created when it does not exist, and the text comes from the single
         serialiser in :mod:`foundry.cassette.models`, so two runs of one recording produce
         byte-identical files apart from ``recorded_at`` (AAP 0.13.1).
 
-        Failure isolation (AAP 0.1.2, AAP 0.14.3): an ``OSError`` -- an unwritable directory, a
-        full disk, a path that is not a directory -- is reported as exactly one ``WARNING`` naming
-        the path and the method returns ``None`` instead of raising.
+        Failure isolation (AAP 0.1.2, AAP 0.14.3): a redaction fault and an ``OSError`` -- an
+        unwritable directory, a full disk, a path that is not a directory -- each produce exactly
+        one ``WARNING`` and a ``None`` return instead of raising.
 
         Args:
             nodeid: The pytest node id of the item whose capture this is.
-            document: The document to write, already redacted.
+            document: The document to redact and write, as captured or as already redacted.
 
         Returns:
             The path the document was written to, or ``None`` when it could not be written.
@@ -504,6 +518,18 @@ class CassetteStore:
             ArtifactError: The resolved path escapes the cassette directory.
         """
         path = self.path_for(nodeid)
+        try:
+            redacted, names = redact_interactions(document.interactions, self._redactor)
+            document = replace(
+                document,
+                redacted_keys=(*document.redacted_keys, *names),
+                interactions=redacted,
+            )
+        except _PLUMBING_ERRORS as exc:
+            emit_plumbing_failure(
+                _COMPONENT, f"could not redact the cassette capture for {nodeid}", exc=exc
+            )
+            return None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(to_json_text(document), encoding=CASSETTE_ENCODING)

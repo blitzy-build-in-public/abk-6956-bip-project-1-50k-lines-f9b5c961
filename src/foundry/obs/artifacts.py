@@ -19,10 +19,11 @@ Redaction first
 Failure isolation
     A directory or file that cannot be created or written is reported once at ``WARNING`` through
     :func:`foundry.obs.events.emit_plumbing_failure` and changes neither a test outcome nor an exit
-    code (AAP 0.4.7); capture is disabled for the run from then on, so every later call returns
-    ``None`` and every record reports ``artifacts_disabled: true``. A contract violation surfaces
-    instead: a path resolving outside the run directory, a kind with no file name, or a write on a
-    writer bound to no test raises :class:`foundry.core.exceptions.ArtifactError`.
+    code (AAP 0.4.7); capture is then disabled for the run, so every later artifact write returns
+    ``None`` and every record reports ``artifacts_disabled: true``. The manifest is still attempted,
+    as the file that records the fault. A contract violation surfaces instead: a path resolving
+    outside the run directory, a kind with no file name, or a write on a writer bound to no test
+    raises :class:`foundry.core.exceptions.ArtifactError`.
 
 Determinism
     Fixed file names, ``sort_keys=True`` JSON, exactly one trailing newline, explicit UTF-8 and
@@ -33,6 +34,7 @@ Determinism
 from __future__ import annotations
 
 import json
+import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -60,21 +62,24 @@ __all__: Final[tuple[str, ...]] = (
     "node_dir",
 )
 
-ARTIFACT_FILENAMES: Final[Mapping[ArtifactKind, str]] = {
-    "request": "request.json",
-    "response": "response.json",
-    "stdout": "stdout.log",
-    "stderr": "stderr.log",
-    "traceback": "traceback.txt",
-    "log_tail": "log_tail.log",
-    "manifest": "manifest.json",
-}
+ARTIFACT_FILENAMES: Final[Mapping[ArtifactKind, str]] = types.MappingProxyType(
+    {
+        "request": "request.json",
+        "response": "response.json",
+        "stdout": "stdout.log",
+        "stderr": "stderr.log",
+        "traceback": "traceback.txt",
+        "log_tail": "log_tail.log",
+        "manifest": "manifest.json",
+    }
+)
 """The file each :data:`foundry.core.types.ArtifactKind` is written as (AAP 0.4.6).
 
 One name per kind, so the layout is a function of the kind rather than of what a caller passed.
 ``log_tail.log`` is the layout's seventh file: the last ``logging.capture_lines`` captured records,
 written as their own artifact and referenced from a record with ``kind: "log_tail"``. Published so
-a report or a reviewer can name a file without repeating the string; nothing may rename one.
+a report or a reviewer can name a file without repeating the string; nothing may rename one, and
+the mapping proxy makes that a runtime guarantee rather than an annotation.
 """
 
 KEPT_WHEN_PASSED: Final[frozenset[str]] = frozenset({MANIFEST_FILENAME})
@@ -160,7 +165,7 @@ class _WriterState:
 
     Attributes:
         disabled: ``True`` once artifact capture failed for the run, after which every write
-            returns ``None``.
+            other than the manifest's returns ``None``.
         warned: ``True`` once a fault that does not disable capture, such as a file that could not
             be removed, has been reported, so a second one stays quiet.
     """
@@ -320,9 +325,8 @@ class ArtifactWriter:
     def write(self, kind: ArtifactKind, name: str | None, data: str | bytes) -> ArtifactRef | None:
         """Redact ``data`` and write it as one artifact of the bound test.
 
-        The return type describes the success path; the disabled path of AAP 0.4.7 returns
-        ``None``, because a run whose artifact directory proved unwritable records no artifact
-        paths at all.
+        The return type describes the success path: while capture is disabled a write returns
+        ``None`` except for ``kind="manifest"``, which is still attempted to record the fault.
 
         Args:
             kind: Which artifact this is.
@@ -333,14 +337,12 @@ class ArtifactWriter:
                 every file of the layout is text; a binary payload is encoded by its caller.
 
         Returns:
-            The reference to the written file, or ``None`` when capture is disabled.
+            The reference to the written file, or ``None`` when the write was refused.
 
         Raises:
             ArtifactError: If the writer is bound to no test, if ``kind`` has no file name, or if
                 ``name`` would resolve outside the test's directory.
         """
-        if self._state.disabled:
-            return None
         source = _decode(data)
         scrubbed = self._redactor.text(source)
         return self._store(kind, name, scrubbed, redacted=scrubbed != source)
@@ -369,9 +371,12 @@ class ArtifactWriter:
         if self._state.disabled:
             return None
         scrubbed = _dump(self._redactor.json_value(payload), self._redactor)
-        return self._store(
-            kind, name, scrubbed, redacted=scrubbed != _dump(payload, self._redactor)
-        )
+        try:
+            unchanged = scrubbed == _dump(payload, self._redactor)
+        except (TypeError, ValueError, RecursionError):
+            # A payload the raw encoder cannot represent has necessarily been rewritten.
+            unchanged = False
+        return self._store(kind, name, scrubbed, redacted=not unchanged)
 
     def write_text(
         self, kind: ArtifactKind, text: str, name: str | None = None
@@ -424,27 +429,26 @@ class ArtifactWriter:
     def write_manifest(self) -> ArtifactRef | None:
         """Build and write this test's ``manifest.json``.
 
-        The document lists every artifact written for the test except the manifest itself: a
-        self-referential digest is impossible, and ``results.json`` already carries an
-        ``artifacts`` entry of kind ``manifest`` for the record, so nothing is lost by leaving it
-        out. The rendered document passes through the same redaction as any other payload, so a node
-        id that embeds a credential is scrubbed here rather than persisted.
+        The document carries the fields AAP 0.4.6 defines: ``schema_version``, ``run_id``, the
+        unsanitised node id, ``profile``, ``created_at``, ``artifacts_disabled`` and every
+        artifact written for the test except the manifest itself, whose self-referential digest is
+        impossible. ``artifacts_disabled`` is the run's capture state, so a failed capture is
+        recorded rather than lost, and the text is redacted like any other payload, so a node id
+        that embeds a credential is scrubbed here rather than persisted.
 
         Returns:
-            The reference to ``manifest.json``, or ``None`` when capture is disabled.
+            The reference to ``manifest.json``, or ``None`` when the file could not be written.
 
         Raises:
             ArtifactError: If the writer is bound to no test, or if the manifest's path would
                 resolve outside the test's directory.
         """
-        if self._state.disabled:
-            return None
         document = build_document(
             run_id=self._run_id,
             nodeid=self._bound_nodeid(),
             profile=self._profile,
             created_at=self._created_at if self._created_at is not None else timestamp(),
-            artifacts_disabled=False,
+            artifacts_disabled=self._state.disabled,
             artifacts=[
                 ref.as_manifest_entry() for ref in self._refs.values() if ref.kind != "manifest"
             ],
@@ -455,7 +459,9 @@ class ArtifactWriter:
         """Finish one test's artifacts: prune a passing test, then write the manifest.
 
         The teardown step the coordinator calls once per test. The order matters: the manifest is
-        written after the prune, so it never lists a file the prune has just removed.
+        written after the prune, so it never lists a file the prune has just removed. While capture
+        is disabled the prune is skipped and the manifest is still attempted, as the record of the
+        fault (AAP 0.4.6), while no reference is returned (AAP 0.4.7).
 
         Args:
             passed: Whether the test passed. With ``artifacts.keep_passed`` unset, a passing test
@@ -468,12 +474,11 @@ class ArtifactWriter:
         Raises:
             ArtifactError: If the writer is bound to no test.
         """
-        if self._state.disabled:
-            return ()
-        nodeid = self._bound_nodeid()
-        if passed and not self._keep_passed:
-            self._prune(nodeid)
-        if self.write_manifest() is None:
+        if not self._state.disabled:
+            nodeid = self._bound_nodeid()
+            if passed and not self._keep_passed:
+                self._prune(nodeid)
+        if self.write_manifest() is None or self._state.disabled:
             return ()
         return self.manifest
 
@@ -484,7 +489,9 @@ class ArtifactWriter:
 
         The module's single write: every public method redacts its payload and hands the result
         here, so one place encodes, one place writes and one place digests -- which is what makes
-        the digest always that of the bytes on disk.
+        the digest always that of the bytes on disk. A capture fault stops every kind but
+        ``"manifest"``, still attempted -- directory and all -- as the record of the fault, and
+        written unregistered and unannounced, so no artifact path reaches a record (AAP 0.4.7).
 
         Args:
             kind: Which artifact this is.
@@ -493,22 +500,23 @@ class ArtifactWriter:
             redacted: Whether redaction changed the payload.
 
         Returns:
-            The reference to the written file, or ``None`` when capture is disabled.
+            The reference to the written file, or ``None`` when capture refuses it.
 
         Raises:
             ArtifactError: If the writer is bound to no test, if ``kind`` has no file name, or if
                 ``name`` would resolve outside the test's directory.
         """
-        if self._state.disabled:
+        if self._state.disabled and kind != "manifest":
             return None
         nodeid = self._bound_nodeid()
         directory = self.dir_for(nodeid)
-        if self._state.disabled:
+        if self._state.disabled and kind != "manifest":
             return None
         target = self._target(directory, kind, name)
-        payload = text.encode(_ENCODING)
+        # Replacement rather than failure: a lone surrogate reaches here from a non-UTF-8 file name.
+        payload = text.encode(_ENCODING, errors="replace")
         try:
-            if target.parent != directory:
+            if target.parent != directory or not directory.is_dir():
                 target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload)
         except OSError as exc:
@@ -522,8 +530,9 @@ class ArtifactWriter:
             sha256=sha256_hex(payload),
             redacted=redacted,
         )
-        self._refs[path] = reference
-        emit_artifact_written(nodeid, kind, path, reference.bytes, reference.sha256)
+        if not self._state.disabled:
+            self._refs[path] = reference
+            emit_artifact_written(nodeid, kind, path, reference.bytes, reference.sha256)
         return reference
 
     def _target(self, directory: Path, kind: ArtifactKind, name: str | None) -> Path:

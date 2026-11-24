@@ -55,7 +55,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
-from foundry.core.exceptions import DataError
+from foundry.core.exceptions import DataError, ElementTypeError
 from foundry.obs.events import emit_plumbing_failure, emit_report_written
 from foundry.obs.redaction import Redactor, default_redactor
 from foundry.reporting.record import (
@@ -109,10 +109,15 @@ def dumps(elements: Sequence[ResultElement], *, redactor: Redactor | None = None
         plus that newline.
 
     Raises:
-        TypeError: An element is neither a :class:`~foundry.reporting.record.ResultRecord` nor a
-            :class:`~foundry.reporting.record.RunError`, or an element serialises to a value that
-            is not JSON-native. Both are defects in the caller or in the record models rather than
-            a filesystem fault, so neither is absorbed.
+        ElementTypeError: An element is neither a
+            :class:`~foundry.reporting.record.ResultRecord` nor a
+            :class:`~foundry.reporting.record.RunError`. It is a
+            :class:`~foundry.core.exceptions.FoundryError` that subclasses ``TypeError``, so a
+            caller catching the documented caller defect still catches it, and it is not
+            absorbed: a caller defect is not a filesystem fault.
+        TypeError: An element serialises to a value that is not JSON-native, which ``json.dumps``
+            rejects. That is a defect in the record models rather than a filesystem fault, so it
+            is not absorbed either.
     """
     scrub = default_redactor() if redactor is None else redactor
     records: list[ResultRecord] = []
@@ -123,9 +128,10 @@ def dumps(elements: Sequence[ResultElement], *, redactor: Redactor | None = None
         elif isinstance(element, RunError):
             errors.append(element)
         else:
-            raise TypeError(
+            raise ElementTypeError(
                 "results.json holds only ResultRecord and RunError elements, "
-                f"got {type(element).__name__}"
+                f"got {type(element).__name__}",
+                hint="pass ResultRecord and RunError elements, as the run's recorder produces them",
             )
     document: list[dict[str, object]] = [
         _redact_record(record, scrub) for record in sorted(records, key=_record_sort_key)

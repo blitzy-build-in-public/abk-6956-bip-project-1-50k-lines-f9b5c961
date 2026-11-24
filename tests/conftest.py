@@ -7,14 +7,18 @@ This is the only module the plan places directly under ``tests/`` (AAP 0.8.1 tre
 tree, so the declaration lives here and nowhere below ``tests/``.
 
 **Session environment pinning.** ``TZ``, ``LC_ALL``, ``LANG`` and the ``PYTEST_ADDOPTS`` deletion
-run at import, before any test module is imported: no assertion in this suite may depend on the
-host's clock, its locale, or the options the outer invocation happened to be given.
+run at import, before any test module is imported, and ``locale.setlocale`` puts this interpreter's
+own locale categories in ``C`` as well, the same pins ``subprocess_env`` gives every child: no
+assertion in this suite may depend on the host's clock, its locale, or the options the outer
+invocation happened to be given.
 
 **Shared fixtures and the loopback-only socket guard.** The guard installed at import is the
-suite-wide half of the offline control in AAP 0.14.3: it allows ``127.0.0.0/8`` and ``::1``, counts
-every other target and refuses the connection. Its counters are published in the protocol
-``foundry.diagnostics.socket_guard`` reads, and to the ``socket_guard`` fixture whose count
-``tests/e2e/test_offline.py`` asserts is zero.
+suite-wide half of the offline control in AAP 0.14.3: ``connect``, ``connect_ex``,
+``getaddrinfo`` and the datagram sends ``sendto`` and ``sendmsg`` all pass through it, which allows
+``127.0.0.0/8`` and ``::1``, counts every other target and refuses it before the syscall runs. Its
+counters are published in the protocol ``foundry.diagnostics.socket_guard`` reads, and to the
+``socket_guard`` fixture, which ``tests/e2e/test_offline.py`` uses to prove a run of its own adds
+no refusal.
 
 The guard patches this interpreter only. A socket opened by a child process is invisible to it, so
 the end-to-end tests isolate their children with the flags those children are given (``--no-index``,
@@ -25,6 +29,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import ipaddress
+import locale
 import os
 import pathlib
 import shutil
@@ -44,7 +49,9 @@ pytest_plugins = ["pytester"]
 
 # The outer invocation has already parsed its own PYTEST_ADDOPTS, while every in-process pytester
 # run and every child process would apply those options again to a suite that does not expect them.
-_OUTER_PYTEST_ADDOPTS: Final[str | None] = os.environ.pop("PYTEST_ADDOPTS", None)
+# Popping it at import is the whole fix: the value is deliberately dropped, never restored or
+# asserted on, which is why nothing binds it.
+os.environ.pop("PYTEST_ADDOPTS", None)
 
 # Pinned before any test module is imported, so no assertion can depend on a wall-clock date or a
 # locale; time.tzset re-reads TZ for the C library. The project is POSIX-only, and the hasattr guard
@@ -54,6 +61,17 @@ os.environ["LC_ALL"] = "C"
 os.environ["LANG"] = "C"
 if hasattr(time, "tzset"):
     time.tzset()
+
+# os.environ re-runs nothing in this process: it only shapes what a child inherits, so the
+# interpreter would keep the locale categories it started with and an in-process assertion would
+# still see the host's. The AAP 0.14.3 pin is completed here, and failing to apply it is fatal
+# rather than skipped, because a silently unpinned locale is exactly the dependence it rules out.
+try:
+    locale.setlocale(locale.LC_ALL, "C")
+except locale.Error as exc:
+    raise RuntimeError(
+        f"foundry test suite: could not pin the process locale to 'C': {exc}"
+    ) from exc
 
 _INET_FAMILIES: Final[frozenset[int]] = frozenset({socket.AF_INET, socket.AF_INET6})
 """The families the guard polices; every other family is local by construction."""
@@ -69,14 +87,38 @@ _GUARD_MARK: Final[str] = "_foundry_suite_socket_guard"
 _OFFLINE_RULE: Final[str] = "AAP 0.14.3"
 
 
+@dataclass(frozen=True)
+class SocketGuardSnapshot:
+    """An immutable reading of the guard's counters and violations.
+
+    A test that provokes a refusal on purpose takes one of these first and hands it back to
+    :meth:`SocketGuardState.restore` in its teardown, so the count the offline proof reads is the
+    one the session had before that test ran. The default instance is the zero reading
+    :meth:`SocketGuardState.reset` restores.
+
+    Attributes:
+        loopback_attempts: The allowed loopback count at the moment of the reading.
+        non_loopback_attempts: The refused-target count at the moment of the reading.
+        violations: The ``"host:port"`` entries recorded by that moment, oldest first.
+    """
+
+    loopback_attempts: int = 0
+    non_loopback_attempts: int = 0
+    violations: tuple[str, ...] = ()
+
+
 @dataclass
 class SocketGuardState:
     """Live counters of this suite's loopback-only socket guard.
 
     ``installed`` is true once the guard has patched :mod:`socket`; ``loopback_attempts`` counts the
-    loopback connections it allowed; ``non_loopback_attempts`` counts the targets it refused and
-    ``violations`` lists each one as ``"host:port"``. ``tests/e2e/test_offline.py`` asserts
-    ``installed is True`` and ``non_loopback_attempts == 0``.
+    loopback connections and datagram sends it allowed; ``non_loopback_attempts`` counts the
+    targets it refused and ``violations`` lists each one as ``"host:port"``. The counters are
+    process-global and, under ``-n auto``, belong to one worker, so the offline proof in
+    ``tests/e2e/test_offline.py`` asserts ``installed is True`` and measures a delta with
+    :meth:`refusals_since` around its own run instead of trusting the absolute count: a test that
+    provokes a refusal takes ``before = guard.snapshot()`` and calls ``guard.restore(before)`` in
+    its teardown, so neither collection order nor another worker's refusals can reach the proof.
 
     ``foundry.diagnostics.socket_guard`` recognises a guard by two names -- ``FOUNDRY_SOCKET_GUARD``
     published by the announcing module and ``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` carrying the count --
@@ -97,13 +139,45 @@ class SocketGuardState:
             return object.__getattribute__(self, "non_loopback_attempts")
         raise AttributeError(name)
 
+    def snapshot(self) -> SocketGuardSnapshot:
+        """Return an immutable reading of the counters and violations as they stand now."""
+        return SocketGuardSnapshot(
+            loopback_attempts=self.loopback_attempts,
+            non_loopback_attempts=self.non_loopback_attempts,
+            violations=tuple(self.violations),
+        )
 
-# Saved before any patching, so the wrappers can connect and resolve without recursing into
+    def restore(self, snapshot: SocketGuardSnapshot) -> None:
+        """Put the counters and violations back to ``snapshot``.
+
+        What a test that provoked a refusal calls in its teardown, so the session's counters read
+        exactly as they did before it ran and no later assertion inherits its refusal.
+        """
+        self.loopback_attempts = snapshot.loopback_attempts
+        self.non_loopback_attempts = snapshot.non_loopback_attempts
+        self.violations = list(snapshot.violations)
+
+    def reset(self) -> None:
+        """Clear the counters and violations, restoring the zero :class:`SocketGuardSnapshot`."""
+        self.restore(SocketGuardSnapshot())
+
+    def refusals_since(self, snapshot: SocketGuardSnapshot) -> int:
+        """Return the refusals recorded since ``snapshot`` was taken.
+
+        The delta ``tests/e2e/test_offline.py`` measures around its own run, which is independent of
+        collection order and of the refusals this worker counted before it.
+        """
+        return self.non_loopback_attempts - snapshot.non_loopback_attempts
+
+
+# Saved before any patching, so the wrappers can connect, resolve and send without recursing into
 # themselves. A second import of this file in one process adopts the first import's guard and never
 # re-wraps, so only the importing instance's copies are ever called.
 _ORIGINAL_GETADDRINFO = socket.getaddrinfo
 _ORIGINAL_CONNECT = socket.socket.connect
 _ORIGINAL_CONNECT_EX = socket.socket.connect_ex
+_ORIGINAL_SENDTO = socket.socket.sendto
+_ORIGINAL_SENDMSG = socket.socket.sendmsg
 
 
 def _host_text(host: object) -> str | None:
@@ -137,14 +211,14 @@ def _is_local_host(host: str) -> bool:
 
 
 def _split_target(address: object) -> tuple[str | None, object]:
-    """Split a connect address into host text and port, tolerating a non-tuple address."""
+    """Split a socket address into host text and port, tolerating a non-tuple address."""
     if isinstance(address, tuple) and len(address) >= 2:
         return _host_text(address[0]), address[1]
     return _host_text(address), 0
 
 
 def _refused_target(family: int, address: object) -> tuple[str, object] | None:
-    """Return the ``(host, port)`` to refuse for ``address``, or ``None`` when it may connect.
+    """Return the ``(host, port)`` to refuse for ``address``, or ``None`` when it may proceed.
 
     Only ``AF_INET`` and ``AF_INET6`` are policed: ``AF_UNIX``, any other family and any address
     that is not an INET-style tuple are local by construction. A loopback literal and a well-known
@@ -164,7 +238,7 @@ def _refuse(host: str, port: object) -> Never:
     SOCKET_GUARD.non_loopback_attempts += 1
     SOCKET_GUARD.violations.append(f"{host}:{port}")
     raise RuntimeError(
-        f"foundry test suite: refused a non-loopback connection to {host}:{port}. "
+        f"foundry test suite: refused a non-loopback target {host}:{port}. "
         f"The suite opens no non-loopback socket ({_OFFLINE_RULE}): serve HTTP from an in-process "
         "http.server bound to 127.0.0.1 on an ephemeral port, or replay a cassette, instead."
     )
@@ -206,6 +280,37 @@ def _guarded_connect_ex(self: socket.socket, address: object) -> int:
     return int(_ORIGINAL_CONNECT_EX(self, address))
 
 
+def _guarded_sendto(self: socket.socket, *args: object) -> int:
+    """Send a datagram to a loopback target only, refusing the rest before the syscall.
+
+    ``sendto`` carries its address in the last positional argument, whether it is called as
+    ``(data, address)`` or as ``(data, flags, address)``, so that argument is the one policed.
+    """
+    address = args[-1] if args else None
+    refused = _refused_target(self.family, address)
+    if refused is not None:
+        _refuse(*refused)
+    if self.family in _INET_FAMILIES:
+        SOCKET_GUARD.loopback_attempts += 1
+    return int(_ORIGINAL_SENDTO(self, *args))
+
+
+def _guarded_sendmsg(self: socket.socket, *args: object) -> int:
+    """Send one message to a loopback target only, refusing the rest before the syscall.
+
+    ``sendmsg`` takes its address as an optional last argument -- ``(buffers, ancdata, flags,
+    address)`` -- and leaves it out for a connected socket, where the missing target is local and
+    the send is allowed.
+    """
+    address = args[-1] if args else None
+    refused = _refused_target(self.family, address)
+    if refused is not None:
+        _refuse(*refused)
+    if self.family in _INET_FAMILIES:
+        SOCKET_GUARD.loopback_attempts += 1
+    return int(_ORIGINAL_SENDMSG(self, *args))
+
+
 def _adopt_or_create_guard() -> SocketGuardState:
     """Return the state an earlier import of this file published, or a fresh one."""
     published: SocketGuardState | None = getattr(socket.socket.connect, _GUARD_MARK, None)
@@ -228,11 +333,19 @@ def _install_guard() -> None:
     """
     if getattr(socket.socket.connect, _GUARD_MARK, None) is SOCKET_GUARD:
         return
-    for wrapper in (_guarded_getaddrinfo, _guarded_connect, _guarded_connect_ex):
+    for wrapper in (
+        _guarded_getaddrinfo,
+        _guarded_connect,
+        _guarded_connect_ex,
+        _guarded_sendto,
+        _guarded_sendmsg,
+    ):
         setattr(wrapper, _GUARD_MARK, SOCKET_GUARD)
     socket.getaddrinfo = _guarded_getaddrinfo
     socket.socket.connect = _guarded_connect
     socket.socket.connect_ex = _guarded_connect_ex
+    socket.socket.sendto = _guarded_sendto
+    socket.socket.sendmsg = _guarded_sendmsg
 
 
 _install_guard()
@@ -247,8 +360,11 @@ def current_guard() -> SocketGuardState:
 def socket_guard() -> SocketGuardState:
     """Session scope: the live guard installed at import of this module.
 
-    Consumer: ``tests/e2e/test_offline.py``, which asserts ``installed is True`` and
-    ``non_loopback_attempts == 0``. ``loopback_attempts`` is order-dependent, so nothing asserts it.
+    Consumer: ``tests/e2e/test_offline.py``, which asserts ``installed is True`` and measures
+    :meth:`SocketGuardState.refusals_since` around its own run rather than trusting the absolute
+    session counter. That counter is process-global and belongs to one ``-n auto`` worker, so a test
+    that provokes a refusal takes ``guard.snapshot()`` first and calls ``guard.restore(before)`` in
+    its teardown; :meth:`SocketGuardState.reset` restores the zero reading outright.
     """
     return current_guard()
 
@@ -419,7 +535,7 @@ def example_project(repo_root: pathlib.Path) -> pathlib.Path:
 
 
 @pytest.fixture
-def write_project() -> Callable[..., pathlib.Path]:
+def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
     """Function scope: write a throwaway project into a test-owned directory and return it.
 
     ``files`` maps relative paths to content, ``conftest`` writes ``conftest.py`` and
@@ -428,9 +544,17 @@ def write_project() -> Callable[..., pathlib.Path]:
     ``pyproject.toml`` is written only when a caller passes it, which is what makes a scaffold or a
     zero-configuration directory genuinely configuration-free.
 
+    Containment is enforced, not merely documented: ``directory`` must lie inside the session's
+    temporary base directory (``tmp_path``'s parent, which also holds the siblings
+    ``tmp_path_factory`` creates), and every key must be a relative path with no ``..`` segment, so
+    a mistaken target or a key such as ``"../foundry.toml"`` fails the test before a byte is
+    written and ``examples/checkout`` can never be mutated.
+
     Consumers: the replay-miss and no-configuration scenarios of the end-to-end modules, which must
     never mutate ``examples/checkout``.
     """
+
+    base = tmp_path.parent.resolve()
 
     def write(
         directory: pathlib.Path,
@@ -439,14 +563,37 @@ def write_project() -> Callable[..., pathlib.Path]:
         conftest: str | None = None,
         foundry_toml: str | None = None,
     ) -> pathlib.Path:
-        directory.mkdir(parents=True, exist_ok=True)
+        root = directory.resolve()
+        if root != base and base not in root.parents:
+            pytest.fail(
+                f"write_project refuses to write to {root}: it is not inside the session's "
+                f"temporary base directory {base}. Writes stay there so no test can mutate "
+                "examples/checkout."
+            )
         payload = dict(files or {})
         if conftest is not None:
             payload["conftest.py"] = conftest
         if foundry_toml is not None:
             payload["foundry.toml"] = foundry_toml
+        for key in payload:
+            key_path = pathlib.PurePosixPath(key)
+            if not key_path.parts:
+                pytest.fail(
+                    f"write_project refuses the file key {key!r}: it names no file inside {root}"
+                )
+            if key_path.is_absolute():
+                pytest.fail(
+                    f"write_project refuses the absolute file key {key!r}: writes stay inside "
+                    f"{root}"
+                )
+            if ".." in key_path.parts:
+                pytest.fail(
+                    f"write_project refuses the file key {key!r}: its '..' segment could write "
+                    f"outside {root}"
+                )
+        root.mkdir(parents=True, exist_ok=True)
         for relative in sorted(payload):
-            target = directory / relative
+            target = root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             content = payload[relative]
             target.write_text(

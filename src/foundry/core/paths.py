@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from typing import Final
-from urllib.parse import quote
+from urllib.parse import quote_from_bytes
 
 from foundry.core.exceptions import ArtifactError, FoundryError
 
@@ -45,8 +45,8 @@ MAX_NODEID_NAME_LENGTH: Final[int] = 180
 A POSIX file name is limited to 255 bytes. Keeping the encoded component at 180 leaves
 room for the ``.json`` suffix a cassette adds, for truncation's separator and digest, and
 for the small amount of slack a filesystem or archive tool may reserve. The limit counts
-the encoded characters, and every character :func:`quote` emits for a non-unreserved byte
-is ASCII, so the character count is also the byte count.
+the encoded characters, and every character :func:`quote_from_bytes` emits for a
+non-unreserved byte is ASCII, so the character count is also the byte count.
 """
 
 
@@ -72,6 +72,14 @@ def sanitize_nodeid(nodeid: str) -> str:
     directory or file name only; it is not the node id stored in ``results.json``, which
     carries the unsanitised id.
 
+    A node id pytest derived from a file name that is not valid UTF-8 carries lone surrogate
+    code points, because it decodes the name with ``surrogateescape``. Encoding with
+    ``surrogatepass`` gives each of those code points its own three-byte sequence, which no
+    valid UTF-8 text can produce, so the mapping stays injective and every valid node id
+    encodes to the same bytes as before; it also cannot fail, so the function is total over
+    every node id pytest produces instead of raising ``UnicodeEncodeError`` into artifact
+    capture.
+
     Args:
         nodeid: The pytest node id to encode, for example
             ``tests/test_api.py::test_ok``.
@@ -91,11 +99,11 @@ def sanitize_nodeid(nodeid: str) -> str:
             hint="pass the pytest node id, for example tests/test_api.py::test_ok",
         )
 
-    encoded = quote(nodeid, safe="")
+    encoded = quote_from_bytes(nodeid.encode("utf-8", "surrogatepass"), safe="")
     if len(encoded) <= MAX_NODEID_NAME_LENGTH:
         return encoded
 
-    digest = hashlib.sha256(nodeid.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha256(nodeid.encode("utf-8", "surrogatepass")).hexdigest()[:8]
     return f"{encoded[:MAX_NODEID_NAME_LENGTH]}-{digest}"
 
 

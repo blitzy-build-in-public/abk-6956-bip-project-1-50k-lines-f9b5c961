@@ -64,6 +64,7 @@ from urllib.parse import urlsplit
 
 from foundry.contract.schema import SchemaSource, declared_draft, load_schema
 from foundry.contract.violations import (
+    RedactorCallable,
     Violation,
     choose_first,
     excerpt,
@@ -428,7 +429,9 @@ def find_violation(instance: object, schema: SchemaSource) -> Violation | None:
     return violations[0] if violations else None
 
 
-def validate_instance(instance: object, schema: SchemaSource) -> None:
+def validate_instance(
+    instance: object, schema: SchemaSource, *, redact: RedactorCallable | None = None
+) -> None:
     """Raise unless the instance satisfies the schema.
 
     :func:`foundry.assertions.assert_json_schema` calls this function, so the failure a test
@@ -440,6 +443,10 @@ def validate_instance(instance: object, schema: SchemaSource) -> None:
     Args:
         instance: The value to validate.
         schema: The schema document, or the path to the file that holds it.
+        redact: The callable that scrubs secrets out of the rendered detail, normally the run's
+            engine built from ``secrets.redact_keys``, so a configured key is redacted as well
+            as the built-in deny-lists. ``None`` applies those deny-lists, which is what a
+            caller holding no configured keys relies on.
 
     Returns:
         None when the instance satisfies the schema.
@@ -450,7 +457,7 @@ def validate_instance(instance: object, schema: SchemaSource) -> None:
     """
     violation = find_violation(instance, schema)
     if violation is not None:
-        raise to_contract_error(violation)
+        raise to_contract_error(violation, redact=redact)
 
 
 def first_violation(errors: Iterable[ValidationError]) -> Violation | None:

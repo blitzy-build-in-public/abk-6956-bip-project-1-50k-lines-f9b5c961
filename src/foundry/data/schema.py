@@ -49,7 +49,7 @@ rather than inside a test.
 
 Importing the module defines names and does nothing else (AAP 0.4.8): no schema is loaded at
 import, no file is opened, no environment variable is read and no logger is configured. Its whole
-import list is the standard library, two modules of :mod:`foundry.contract` and
+import list is the standard library, three modules of :mod:`foundry.contract` and
 :mod:`foundry.data.loaders.base`; it never reaches ``http``, ``reporting``, ``cli``, ``plugin``,
 ``execution``, ``config``, ``fixtures``, ``db``, ``assertions`` or ``cassette`` (AAP 0.4.8).
 """
@@ -64,6 +64,7 @@ from typing import Final
 # on a re-export that may or may not exist; the layering is the same either way (AAP 0.4.8).
 from foundry.contract.schema import load_schema
 from foundry.contract.validate import find_violation
+from foundry.contract.violations import RedactorCallable
 from foundry.data.loaders.base import LoadedTable, RawRow, data_error
 
 __all__ = [
@@ -192,6 +193,7 @@ def enforce_row(
     line: int | None,
     schema: Mapping[str, object],
     strict: bool = True,
+    redact: RedactorCallable | None = None,
 ) -> Mapping[str, object]:
     """Check one row against a schema, reporting the first fault with its column.
 
@@ -205,10 +207,11 @@ def enforce_row(
        :func:`foundry.contract.validate.find_violation` establishes, reported with the offending
        property as the column.
 
-    The violation's own rendering is what reaches the message: it is redacted and flattened to
-    one line by :mod:`foundry.contract.violations`, which is the only party that may print a
-    validator message because such a message quotes the instance value. A cell value and a whole
-    row are never interpolated here.
+    The violation's own rendering is what reaches the message: it is redacted through ``redact`` --
+    the run's engine, built from ``secrets.redact_keys`` -- and flattened to one line by
+    :mod:`foundry.contract.violations`, which is the only party that may print a validator message
+    because such a message quotes the instance value. A cell value and a whole row are never
+    interpolated here.
 
     Args:
         values: The row's column names and values, in the table's column order.
@@ -218,6 +221,10 @@ def enforce_row(
         schema: The schema document to enforce, as :func:`load_row_schema` returns it.
         strict: Whether an undeclared column is a fault (``data.schema_strict``) or is tolerated
             and excluded from validation.
+        redact: The callable that scrubs secrets out of the rendered violation, normally
+            ``foundry.obs.redaction.Redactor.text`` of the run's engine, so a configured key is
+            redacted as well as the built-in deny-lists. ``None`` applies those deny-lists, which
+            is what a caller holding no configured keys relies on.
 
     Returns:
         The mapping the caller carries forward: ``values`` itself under ``strict``, and the
@@ -245,7 +252,7 @@ def enforce_row(
         # The property a violation is inside is the column it is about; a complaint at the
         # document root, such as `additionalProperties`, names no column of its own.
         column = next((part for part in violation.path_parts if isinstance(part, str)), None)
-        data_error(path, violation.render(), line=line, column=column)
+        data_error(path, violation.render(redact=redact), line=line, column=column)
     return projected
 
 
@@ -257,6 +264,7 @@ def enforce_table(
     *,
     strict: bool = True,
     schema: Mapping[str, object] | None = None,
+    redact: RedactorCallable | None = None,
 ) -> LoadedTable:
     """Enforce a table's rows against its schema, when the data file declares one.
 
@@ -275,6 +283,8 @@ def enforce_table(
         table: The table a reader produced, with its path, column order and rows.
         strict: Whether an undeclared column is a fault (``data.schema_strict``).
         schema: The sidecar schema document, or ``None`` for a data file that declares none.
+        redact: The callable that scrubs secrets out of a rendered violation, passed to every
+            :func:`enforce_row` call. ``None`` applies the built-in deny-lists.
 
     Returns:
         ``table`` itself when no schema was given, otherwise a table with the same path and
@@ -297,6 +307,7 @@ def enforce_table(
             line=row.line,
             schema=schema,
             strict=strict,
+            redact=redact,
         )
         validated_rows.append(
             RawRow(

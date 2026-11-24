@@ -374,16 +374,22 @@ def choose_first(errors: Iterable[ValidationError]) -> Violation | None:
 
 
 def _resolve_redactor() -> RedactorCallable:
-    """Return the configuration-free text redactor the redaction engine owns.
+    """Return the deny-list-only redactor that serves a caller holding no configured keys.
+
+    This package may not import :mod:`foundry.config` (AAP 0.4.8), so the engine built from
+    ``secrets.redact_keys`` cannot be constructed here: every caller that holds those keys --
+    the data-file loader, the response validator, the schema assertion -- supplies its own
+    redactor through the ``redact`` argument of :func:`render_violation`,
+    :func:`to_contract_error`, :func:`excerpt` and :meth:`Violation.render`. This fallback
+    exists only for a caller that holds no configured keys, and it applies the built-in header
+    and query deny-lists, which configuration can widen but never narrow.
 
     This is the only place in :mod:`foundry.contract` that touches
     :mod:`foundry.obs.redaction`, and the import sits inside the function on purpose: importing
-    the engine at module scope would put it on the plugin's startup path, and a
-    configuration-driven redactor cannot be built here at all because this package may not
-    import :mod:`foundry.config`. The edge is also the package's single sanctioned exception to the
-    permitted-import column of AAP 0.4.8, kept function-scope here and required by the single
-    redaction engine AAP 0.14.3 makes authoritative. A caller that holds the configured keys
-    injects its own redactor instead.
+    the engine at module scope would put it on the plugin's startup path. The edge is also the
+    package's single sanctioned exception to the permitted-import column of AAP 0.4.8, kept
+    function-scope here and required by the single redaction engine AAP 0.14.3 makes
+    authoritative.
 
     Returns:
         A callable that scrubs secret values out of free text using the built-in header and

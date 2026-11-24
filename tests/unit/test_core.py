@@ -228,6 +228,13 @@ def test_parse_iso8601_accepts_a_trailing_z_suffix() -> None:
     assert ids.parse_iso8601("2025-01-02T03:04:05.678Z") == _FIXED_MOMENT
 
 
+def test_parse_iso8601_normalises_an_offset_to_utc() -> None:
+    parsed = ids.parse_iso8601("2025-01-02T05:04:05.678+02:00")
+    assert parsed == _FIXED_MOMENT
+    assert parsed.utcoffset() == timedelta(0)
+    assert parsed.hour == 3
+
+
 def test_parse_iso8601_reads_naive_text_as_utc() -> None:
     parsed = ids.parse_iso8601("2025-01-02T03:04:05.678")
     assert parsed == _FIXED_MOMENT

@@ -11,11 +11,14 @@ else -- never a Foundry error, never another builtin, never a new exception clas
 ``foundry.assertions.assert_status:`` so a misuse is unmistakable against a mismatched status.
 
 The excerpt comes from the single redaction engine, :mod:`foundry.obs.redaction`, so it is
-scrubbed of the configured secrets before it is shown and is bounded by
-:data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` (200). Response headers are never rendered at
-all: a message that cannot hold a header value cannot leak one, which is the structural reason
-a configured secret header cannot reach ``results.json``, ``junit.xml``, ``report.html`` or the
-terminal through this helper.
+scrubbed before it is shown and is bounded by
+:data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` (200). :func:`assert_status` takes an optional
+``redactor``: a caller holding the configured ``secrets.redact_keys`` passes the engine it built
+from them, so a configured key the built-in deny-lists do not recognise is scrubbed as well, and
+a caller that passes ``None`` gets those built-in deny-lists. Response headers are never
+rendered at all: a message that cannot hold a header value cannot leak one, which is the
+structural reason a configured secret header cannot reach ``results.json``, ``junit.xml``,
+``report.html`` or the terminal through this helper.
 
 A non-2xx response is an ordinary value rather than a fault: the HTTP layer of AAP 0.4.3
 returns every status in a ``FoundryResponse`` and raises only on a transport error, so a 500
@@ -43,7 +46,7 @@ from collections.abc import Iterable
 from typing import Final
 
 from foundry.core.types import HttpResponseLike
-from foundry.obs.redaction import MAX_EXCERPT_BYTES, default_redactor
+from foundry.obs.redaction import MAX_EXCERPT_BYTES, Redactor, default_redactor
 
 __all__ = ["assert_status"]
 
@@ -194,7 +197,7 @@ def _source_label(response: HttpResponseLike) -> str:
     return ""
 
 
-def _body_excerpt(response: HttpResponseLike) -> str:
+def _body_excerpt(response: HttpResponseLike, redactor: Redactor | None = None) -> str:
     """Return a redacted, bounded excerpt of the response body for a failure message.
 
     The raw body is cut to :data:`_EXCERPT_INPUT_LIMIT` characters first, so a large body is
@@ -206,21 +209,28 @@ def _body_excerpt(response: HttpResponseLike) -> str:
 
     Args:
         response: The response whose body is quoted.
+        redactor: The run's redaction engine, built from ``secrets.redact_keys``, or ``None`` to
+            build one carrying only the built-in deny-lists.
 
     Returns:
         The redacted excerpt, at most :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES`
         characters plus the redaction engine's truncation marker.
     """
-    redactor = default_redactor()
+    engine = default_redactor() if redactor is None else redactor
     body: object = response.text
     if isinstance(body, str):
-        return redactor.body_excerpt(body[:_EXCERPT_INPUT_LIMIT])
+        return engine.body_excerpt(body[:_EXCERPT_INPUT_LIMIT])
     if isinstance(body, bytes | bytearray | memoryview):
-        return redactor.body_excerpt(bytes(body)[:_EXCERPT_INPUT_LIMIT])
-    return redactor.body_excerpt(str(body)[:_EXCERPT_INPUT_LIMIT])
+        return engine.body_excerpt(bytes(body)[:_EXCERPT_INPUT_LIMIT])
+    return engine.body_excerpt(str(body)[:_EXCERPT_INPUT_LIMIT])
 
 
-def assert_status(response: HttpResponseLike, expected: int | Iterable[int]) -> None:
+def assert_status(
+    response: HttpResponseLike,
+    expected: int | Iterable[int],
+    *,
+    redactor: Redactor | None = None,
+) -> None:
     """Assert that a response's status code is one of the expected codes.
 
     This is Foundry's public status assertion (AAP 0.4.3): it accepts every status the HTTP
@@ -233,11 +243,16 @@ def assert_status(response: HttpResponseLike, expected: int | Iterable[int]) -> 
             ``foundry.http.FoundryResponse``.
         expected: One status code, or a ``set``, ``frozenset``, ``list``, ``tuple``, ``range``
             or one-shot iterable of them.
+        redactor: The run's redaction engine, normally the one the fixture layer built from
+            ``secrets.redact_keys``, so a configured key is scrubbed out of the body excerpt
+            too. ``None`` builds one carrying only the built-in deny-lists. Additive over the
+            signature AAP 0.4.3 publishes and permitted by AAP 0.4.9.
 
     Returns:
         ``None`` when the status is one of the expected codes. Nothing else is read on that
         path: a passing assertion touches neither the body nor the redaction engine, because
-        this helper sits on the hot path of every user test.
+        this helper sits on the hot path of every user test and the engine is resolved only once
+        the status has disagreed.
 
     Raises:
         AssertionError: When the status is not one of the expected codes. The message names the
@@ -257,9 +272,10 @@ def assert_status(response: HttpResponseLike, expected: int | Iterable[int]) -> 
     status = response.status_code
     if status in allowed:
         return
+    excerpt = _body_excerpt(response, redactor)
     message = (
         f"{_PREFIX} expected HTTP status in {_format_expected(allowed)} "
         f"but received {status}{_source_label(response)}; "
-        f"body excerpt (redacted, up to {MAX_EXCERPT_BYTES} bytes): {_body_excerpt(response)!r}"
+        f"body excerpt (redacted, up to {MAX_EXCERPT_BYTES} bytes): {excerpt!r}"
     )
     raise AssertionError(message)

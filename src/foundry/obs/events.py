@@ -18,11 +18,15 @@ Secret safety by construction
     Every emitter takes scalars only -- a ``str``, an ``int``, a ``Path``, ``None`` -- never a
     headers mapping, never a response body, never a raw URL carrying a query string, so a
     configured secret has no route into a log line through this module. The two emitters that do
-    accept free text scrub it through :meth:`foundry.obs.redaction.Redactor.text` first, and
-    :func:`emit_plumbing_failure` records only an exception's class name: a transport error's
-    ``args`` can carry a full URL with a token, and a traceback is an artifact, not a log line.
-    pytest prints these records inside the captured-log block of a failing test, which is a known
-    leak channel.
+    accept free text -- :func:`emit_plumbing_failure` and :func:`emit_html_fallback` -- scrub it
+    through :meth:`foundry.obs.redaction.Redactor.text`, using the redactor the caller supplies:
+    the session passes the engine it built from ``secrets.redact_keys``, so a key that only that
+    configuration adds is scrubbed out of the record, and a caller that supplies ``None`` gets the
+    built-in deny-lists, the documented fallback for a fault logged before configuration has
+    resolved. :func:`emit_plumbing_failure` records only an exception's class name: a transport
+    error's ``args`` can carry a full URL with a token, and a traceback is an artifact, not a log
+    line. pytest prints these records inside the captured-log block of a failing test, which is a
+    known leak channel.
 
 Failure isolation and determinism
     Foundry's own plumbing never changes a test's outcome or an exit code, so every public
@@ -47,7 +51,7 @@ from pathlib import Path
 from typing import Final
 
 from foundry.obs.logging import get_logger, level_for
-from foundry.obs.redaction import REDACTED, default_redactor
+from foundry.obs.redaction import REDACTED, Redactor, default_redactor
 
 __all__ = [
     "LEVEL_DEBUG",
@@ -298,16 +302,24 @@ def _emit(name: str, level: int, fields: Sequence[tuple[str, object]]) -> None:
         return
 
 
-def _scrubbed(value: object) -> str:
+def _scrubbed(value: object, redactor: Redactor | None = None) -> str:
     """Scrub secrets out of free text before it can reach a log record.
 
     Header lines, ``Bearer``/``Basic`` credentials, embedded URLs and secret-named key/value
     pairs are replaced with ``***`` by :class:`foundry.obs.redaction.Redactor`. Text that cannot
     be scrubbed at all is reported as the marker itself, since logging it raw would be the leak
     this avoids.
+
+    Args:
+        value: The free text to scrub, coerced to ``str`` first.
+        redactor: The run's redaction engine, or ``None`` to build one carrying only the built-in
+            deny-lists, which is the fallback for a fault logged before configuration resolved.
+
+    Returns:
+        The scrubbed text, or the redaction marker when it could not be scrubbed at all.
     """
     try:
-        return default_redactor().text(_as_text(value))
+        return (default_redactor() if redactor is None else redactor).text(_as_text(value))
     except _ISOLATION_ERRORS:
         # Failure-isolation rule: replace unscrubbable text with the marker.
         return REDACTED
@@ -375,21 +387,35 @@ def emit_report_written(report: str, path: str) -> None:
 
 
 def emit_plumbing_failure(
-    component: str, message: str, *, exc: BaseException | None = None
+    component: str,
+    message: str,
+    *,
+    exc: BaseException | None = None,
+    redactor: Redactor | None = None,
 ) -> None:
     """Report a fault in Foundry's own plumbing at ``WARNING``; the failure-isolation entry point.
 
     ``message`` is scrubbed through :meth:`foundry.obs.redaction.Redactor.text` before it is
-    logged, and ``exc`` contributes only its class name, never its message, its arguments or its
+    logged, using ``redactor`` -- the engine the session built from ``secrets.redact_keys``, so a
+    configured key that the built-in :data:`~foundry.obs.redaction.SECRET_NAME_PATTERN` does not
+    match is still replaced -- and falling back to the built-in deny-lists when no engine is
+    supplied. ``exc`` contributes only its class name, never its message, its arguments or its
     traceback: a transport error's ``args`` can carry a full URL with a token, and a traceback
     belongs in an artifact, not in a log line.
     """
-    fields: list[tuple[str, object]] = [("component", component), ("message", _scrubbed(message))]
+    fields: list[tuple[str, object]] = [
+        ("component", component),
+        ("message", _scrubbed(message, redactor)),
+    ]
     if exc is not None:
         fields.append(("error", _exception_name(exc)))
     _emit("plumbing_failure", LEVEL_WARNING, fields)
 
 
-def emit_html_fallback(message: str) -> None:
-    """Report that ``report.html`` was skipped, at ``WARNING``, leaving the exit code unchanged."""
-    _emit("html_fallback", LEVEL_WARNING, _pairs(message=_scrubbed(message)))
+def emit_html_fallback(message: str, *, redactor: Redactor | None = None) -> None:
+    """Report that ``report.html`` was skipped, at ``WARNING``, leaving the exit code unchanged.
+
+    ``message`` is scrubbed through ``redactor``, the engine the session built from
+    ``secrets.redact_keys``, and through the built-in deny-lists when no engine is supplied.
+    """
+    _emit("html_fallback", LEVEL_WARNING, _pairs(message=_scrubbed(message, redactor)))

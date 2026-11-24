@@ -6,6 +6,13 @@ handler either raises one of these or lets the original exception propagate. The
 the bases and the attributes below are part of the published compatibility promise, so a
 later release may add to them but may never rename or remove them (AAP 0.4.9).
 
+Two further types are declared here for the modules that must raise a ``ValueError``- or
+``TypeError``-compatible fault: :class:`FieldValueError` and :class:`ElementTypeError`, each
+a Foundry error as well as the builtin, so pydantic still wraps the first into one
+``ValidationError`` and an existing ``except TypeError`` still catches the second. They stay
+out of ``__all__``, which is the published surface of the eight above; a new subclass of an
+existing Foundry error is an additive change the compatibility promise permits.
+
 A capability package composes the message from the context it alone holds and attaches
 that context as keyword arguments, so a caller branches on ``DataError.column`` instead
 of parsing prose while the text a person reads is exactly what the raising module wrote.
@@ -13,7 +20,19 @@ of parsing prose while the text a person reads is exactly what the raising modul
 foundry.core.exceptions.ConfigError: <str(exc)>``, and the texts the behaviour contract
 pins -- ``config file not found: <path>``, ``no cases in <file>``, ``configuration valid
 (profile=<name>)`` -- must reach the terminal and a CI log unchanged. The hint and the
-structured context stay on the attributes and in ``repr()``.
+structured context stay on the attributes and in ``repr()``, which echoes a free-text value
+by its length alone.
+
+``repr()`` echoes the message as well -- it is the text the raising module composed and
+redacted, and the text ``str()`` already puts on the terminal -- and echoes a structured
+attribute only when its value has the bounded token shape the class contract declares: a
+method, a path, a dotted configuration key, a JSON path, a column name, a validator name,
+a retry predicate or a class name. A value that is free text is described by its length
+and never echoed, because a caller may hand over unredacted detail and a ``repr`` is what
+a debugger, a captured stderr log and a report display. That is what keeps a credential
+out of a file, the terminal and a report (AAP 0.1.1 security row, AAP 0.14.3). The guard
+is a shape check, not a credential detector: :mod:`foundry.obs.redaction` holds the only
+redaction implementation and a stdlib-only :mod:`foundry.core` may not import it.
 
 This module raises nothing itself, imports only the standard library and its sibling
 :mod:`foundry.core.types`, and does no work at import time: no I/O, no environment read,
@@ -23,6 +42,7 @@ that discipline is what lets the plugin import it inside the startup budget.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Final
 
@@ -40,6 +60,25 @@ __all__: Final[tuple[str, ...]] = (
 )
 
 
+_ECHOABLE_ATTRIBUTE: Final[re.Pattern[str]] = re.compile(r"[^\s\x00-\x1f\x7f]{1,120}")
+"""The shape a structured attribute value must have before ``repr()`` echoes it.
+
+One visible token of at most 120 characters: no whitespace, no control character. It is
+the shape every subclass contract declares for the attributes it publishes -- ``GET``,
+``/cart``, ``http.timeout``, ``$.items[0].id``, ``price``, ``timeout`` -- so a value that
+matches it names a method, a path, a dotted configuration key, a JSON path, a column or a
+validator name, a retry predicate or a class name rather than a sentence of fault detail.
+"""
+
+_MASKED_ATTRIBUTE: Final[str] = "<redacted: {length} characters>"
+"""What ``repr()`` shows in place of a value that is free text.
+
+The length is filled in for the value it replaced, so a reader can still tell an empty
+value from a long one without the text itself reaching the terminal, a captured stderr log
+or a report.
+"""
+
+
 def _present(**values: object) -> tuple[tuple[str, object], ...]:
     """Return the keyword arguments whose value is not ``None``, in declaration order.
 
@@ -55,6 +94,31 @@ def _present(**values: object) -> tuple[tuple[str, object], ...]:
         One ``(name, value)`` pair per argument whose value is not ``None``.
     """
     return tuple((name, value) for name, value in values.items() if value is not None)
+
+
+def _render_attribute(name: str, value: object) -> str:
+    """Return one ``name=value`` pair for :meth:`FoundryError.__repr__`.
+
+    A value that is not text is rendered by the object's own ``repr`` -- a ``Path``, an
+    ``int``, the list of attempts -- and says nothing its class has not already fixed. A
+    text value is echoed only when it has the single-token shape
+    :data:`_ECHOABLE_ATTRIBUTE` describes, which is the shape the subclass contracts
+    declare for the attributes they publish; any other text is replaced by its length, so
+    a caller that places fault detail or a credential in an attribute does not put it on
+    the terminal. The function is total: it raises nothing, because a ``repr`` that raised
+    would change a failing test's outcome.
+
+    Args:
+        name: The attribute name, spelled as the class declares it.
+        value: The attribute value, of any type.
+
+    Returns:
+        ``name=<repr of the value>``, or ``name='<redacted: N characters>'`` when the
+        value is text of another shape.
+    """
+    if not isinstance(value, str) or _ECHOABLE_ATTRIBUTE.fullmatch(value) is not None:
+        return f"{name}={value!r}"
+    return f"{name}={_MASKED_ATTRIBUTE.format(length=len(value))!r}"
 
 
 class FoundryError(Exception):
@@ -127,17 +191,26 @@ class FoundryError(Exception):
     def __repr__(self) -> str:
         """Return a stable representation of the error and the context it carries.
 
-        A ``repr`` is read in a debugger and in a failing test's summary, so it is
-        deterministic: the class name, the message, then the subclass's attributes in
-        declaration order, with a default that was never passed left out rather than
-        shown as ``None``.
+        A ``repr`` is read in a debugger, in a captured stderr log and in a failing test's
+        summary, so it is deterministic: the class name, the message, then the subclass's
+        attributes in declaration order, with a default that was never passed left out
+        rather than shown as ``None``.
+
+        The message is echoed because the raising module composed it, redacted it where
+        its own contract requires, and because ``str()`` already puts it on the terminal.
+        A structured attribute is echoed only when its value has the bounded token shape
+        its class contract declares -- a method, a path, a dotted configuration key, a
+        JSON path, a column name, a validator name, a retry predicate or a class name --
+        and is otherwise described by its length, so a caller that hands over unredacted
+        detail in an attribute does not publish it here. Nothing raises: a ``repr`` that
+        did would change a failing test's outcome.
 
         Returns:
             A string such as
             ``ConfigError(message='unknown key: htpp', key='htpp', layer='file')``.
         """
         parts = [f"message={self.message!r}"]
-        parts.extend(f"{name}={value!r}" for name, value in self._attribute_items())
+        parts.extend(_render_attribute(name, value) for name, value in self._attribute_items())
         return f"{type(self).__name__}({', '.join(parts)})"
 
     def _attribute_items(self) -> tuple[tuple[str, object], ...]:
@@ -321,11 +394,17 @@ class TransportError(FoundryError):
     transport could not read to completion, so a test can distinguish "the service said
     no" from "the service was never reached".
 
+    ``cause`` is a token by contract -- one of the retry predicates ``timeout``,
+    ``connect``, ``status_5xx``, ``status_429``, or the transport exception's class name
+    such as ``ConnectError`` -- and never free text: ``repr()`` echoes a token verbatim,
+    while fault detail belongs in the message, which the raising module redacts.
+
     Attributes:
         method: The request method, such as ``GET``.
         path: The request path, relative to ``http.base_url``.
         cause: The kind of fault, from the retry predicates -- ``timeout``,
-            ``connect`` -- or the transport exception's class name.
+            ``connect``, ``status_5xx``, ``status_429`` -- or the transport exception's
+            class name, and never free text.
     """
 
     method: str
@@ -515,3 +594,39 @@ class ArtifactError(FoundryError):
             The rejected path and the directory it had to stay inside.
         """
         return _present(attempted_path=self.attempted_path, run_dir=self.run_dir)
+
+
+class FieldValueError(FoundryError, ValueError):
+    """A field of a record holds a value the field's documented form does not allow.
+
+    :mod:`foundry.reporting.record` raises it while a record is validated: a run id that is
+    not ``YYYYmmddTHHMMSS-<6 hex>``, a path that is empty, absolute or carries a ``..``
+    segment, a timestamp that is neither a datetime nor ISO 8601 text, a profile no
+    configuration can produce, a blank node id, a record that finished before it started, or
+    a quarantine state that contradicts the outcome.
+
+    The ``ValueError`` base is deliberate. A record's validators are pydantic validators, and
+    pydantic wraps the ``ValueError`` raised inside one into a single
+    ``pydantic.ValidationError``, so this base is what keeps a record model reporting one
+    typed validation failure instead of letting an unrelated exception escape the model. The
+    class is declared here because this module is the only one that may define an exception
+    type (AAP 0.14.3), and a new subclass of an existing :class:`FoundryError` is an additive
+    change the compatibility promise permits (AAP 0.4.9).
+    """
+
+
+class ElementTypeError(FoundryError, TypeError):
+    """A serialiser was handed an element that is not one of the types it accepts.
+
+    :func:`foundry.reporting.store.dumps` raises it: a ``results.json`` document is rendered
+    from result records and run-error elements only, so an element of any other type is a
+    defect in the caller rather than a filesystem fault, and it surfaces instead of being
+    absorbed.
+
+    The ``TypeError`` base is deliberate. The wrong element type is exactly the caller defect
+    an existing ``except TypeError`` already names, so keeping that base leaves the documented
+    caller-defect semantics intact while the raise stops being a bare builtin. The class is
+    declared here because this module is the only one that may define an exception type
+    (AAP 0.14.3), and a new subclass of an existing :class:`FoundryError` is an additive change
+    the compatibility promise permits (AAP 0.4.9).
+    """

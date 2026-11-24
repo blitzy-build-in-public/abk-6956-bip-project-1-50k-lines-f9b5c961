@@ -51,7 +51,7 @@ from pydantic import (
     model_validator,
 )
 
-from foundry.core.exceptions import DataError, FoundryError
+from foundry.core.exceptions import DataError, FieldValueError, FoundryError
 from foundry.core.ids import is_valid_run_id, parse_iso8601, to_iso8601
 from foundry.core.types import ArtifactKind, Phase, QuarantineState
 
@@ -173,11 +173,12 @@ def _require_run_id(value: str) -> str:
         The value unchanged.
 
     Raises:
-        ValueError: The value is not ``YYYYmmddTHHMMSS-<6 hex>``. Validators raise this rather
-            than a Foundry type so pydantic wraps it into one ``ValidationError``.
+        FieldValueError: The value is not ``YYYYmmddTHHMMSS-<6 hex>``. A validator raises this
+            ``ValueError`` subclass rather than a bare builtin, so pydantic still wraps it into
+            one ``ValidationError`` (AAP 0.14.3).
     """
     if not is_valid_run_id(value):
-        raise ValueError(f"run_id must be YYYYmmddTHHMMSS-<6 hex>, got {value!r}")
+        raise FieldValueError(f"run_id must be YYYYmmddTHHMMSS-<6 hex>, got {value!r}")
     return value
 
 
@@ -197,15 +198,16 @@ def _normalise_relative_path(value: str, *, field: str) -> str:
         The path with every backslash replaced by a forward slash, otherwise unchanged.
 
     Raises:
-        ValueError: The path is empty, absolute, or contains a ``..`` segment.
+        FieldValueError: The path is empty, absolute, or contains a ``..`` segment. The class
+            subclasses ``ValueError``, so pydantic still wraps it into one ``ValidationError``.
     """
     candidate = value.replace("\\", "/")
     if not candidate.strip():
-        raise ValueError(f"{field} must not be empty")
+        raise FieldValueError(f"{field} must not be empty")
     if PurePosixPath(candidate).is_absolute():
-        raise ValueError(f"{field} must be relative to the run directory, got {value!r}")
+        raise FieldValueError(f"{field} must be relative to the run directory, got {value!r}")
     if any(part == ".." for part in PurePosixPath(candidate).parts):
-        raise ValueError(f"{field} must not contain '..', got {value!r}")
+        raise FieldValueError(f"{field} must not contain '..', got {value!r}")
     return candidate
 
 
@@ -227,7 +229,8 @@ def _normalise_timestamp(value: object) -> datetime:
         The instant, timezone-aware and in UTC.
 
     Raises:
-        ValueError: The value is neither a datetime nor parseable ISO 8601 text.
+        FieldValueError: The value is neither a datetime nor parseable ISO 8601 text. The class
+            subclasses ``ValueError``, so pydantic still wraps it into one ``ValidationError``.
     """
     if isinstance(value, datetime):
         moment = value
@@ -235,9 +238,9 @@ def _normalise_timestamp(value: object) -> datetime:
         try:
             moment = parse_iso8601(value)
         except FoundryError as exc:
-            raise ValueError(str(exc)) from exc
+            raise FieldValueError(str(exc)) from exc
     else:
-        raise ValueError("expected a datetime or an ISO 8601 timestamp string")
+        raise FieldValueError("expected a datetime or an ISO 8601 timestamp string")
     if moment.utcoffset() is None:
         return moment.replace(tzinfo=UTC)
     return moment.astimezone(UTC)
@@ -399,7 +402,7 @@ class ResultRecord(_FrozenRecord):
     def _check_profile(cls, value: str) -> str:
         """Reject a profile name no configuration can produce."""
         if value not in PROFILE_NAMES:
-            raise ValueError(
+            raise FieldValueError(
                 f"unknown profile {value!r}; expected one of: {', '.join(PROFILE_NAMES)}"
             )
         return value
@@ -409,7 +412,7 @@ class ResultRecord(_FrozenRecord):
     def _check_nodeid(cls, value: str) -> str:
         """Reject a blank node id, which no renderer could label."""
         if not value.strip():
-            raise ValueError("nodeid must not be empty")
+            raise FieldValueError("nodeid must not be empty")
         return value
 
     @field_validator("markers", mode="after")
@@ -427,7 +430,7 @@ class ResultRecord(_FrozenRecord):
     def _check_temporal_order(self) -> Self:
         """Reject a record that finished before it started, which no run can produce."""
         if self.finished_at < self.started_at:
-            raise ValueError(
+            raise FieldValueError(
                 f"finished_at {to_iso8601(self.finished_at)} precedes "
                 f"started_at {to_iso8601(self.started_at)}"
             )
@@ -446,7 +449,7 @@ class ResultRecord(_FrozenRecord):
         elif self.outcome is Outcome.QUARANTINE_PASSED:
             expected = "passed"
         if self.quarantine.state != expected:
-            raise ValueError(
+            raise FieldValueError(
                 f"quarantine.state must be {expected!r} for outcome "
                 f"{self.outcome.value!r}, got {self.quarantine.state!r}"
             )

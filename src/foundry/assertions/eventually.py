@@ -42,23 +42,26 @@ Poll budget
     the message says that instead.
 
 Rendered outcomes
-    The last outcome is quoted in the failure message, which is why it is scrubbed through
-    :func:`foundry.obs.redaction.default_redactor` and bounded by
-    :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` before interpolation: a polled value is
-    frequently a response body, a header set or a token-bearing payload, and the message
-    reaches the terminal, ``results.json``, ``junit.xml`` and ``report.html``. Every message is
-    a single line and never carries a traceback.
+    The last outcome is quoted in the failure message, which is why it is scrubbed through the
+    redaction engine the caller supplies -- the one built from ``secrets.redact_keys``, with
+    :func:`foundry.obs.redaction.default_redactor` as the fallback for a caller that holds no
+    configured keys -- and bounded by :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` before
+    interpolation: a polled value is frequently a response body, a header set or a
+    token-bearing payload, and the message reaches the terminal, ``results.json``,
+    ``junit.xml`` and ``report.html``. Every message is a single line and never carries a
+    traceback.
 
-The ``clock`` keyword
-    ``clock`` is keyword-only and defaults to ``None``, so the signature published in AAP
-    0.4.3 keeps working unchanged: the stability statement permits additions and forbids
-    renames and removals (AAP 0.4.9). It exists because AAP 0.7.1 requires a deterministic
-    deadline computed from a supplied clock, which is how a test asserts deadline behaviour
-    without waiting for it. Its ``now()`` must return a ``datetime`` on every call, the
-    baseline included: a reader that is callable but returns anything else -- a count of
+The additive keywords
+    ``clock`` and ``redactor`` are keyword-only and default to ``None``, so the signature
+    published in AAP 0.4.3 keeps working unchanged: the stability statement permits additions
+    and forbids renames and removals (AAP 0.4.9). ``clock`` exists because AAP 0.7.1 requires a
+    deterministic deadline computed from a supplied clock, which is how a test asserts deadline
+    behaviour without waiting for it; its ``now()`` must return a ``datetime`` on every call, the
+    baseline included, because a reader that is callable but returns anything else -- a count of
     seconds, a string, ``None`` -- raises this module's own ``AssertionError`` naming the
-    clock's type, instead of leaking an ``AttributeError`` or ``TypeError`` out of the poll
-    loop (AAP 0.13.1).
+    clock's type rather than leaking an ``AttributeError`` or ``TypeError`` out of the poll
+    loop (AAP 0.13.1). ``redactor`` exists so the run's configured ``secrets.redact_keys`` are
+    applied to the quoted outcome instead of only the built-in deny-lists.
 
 Importing this module defines names only: the function, its helpers, the public name listed
 in ``__all__`` and the constants below. It performs no I/O, reads no environment variable,
@@ -74,7 +77,7 @@ from datetime import datetime
 from typing import Final, TypeVar
 
 from foundry.core.types import ClockLike, Sleep
-from foundry.obs.redaction import MAX_EXCERPT_BYTES, default_redactor
+from foundry.obs.redaction import MAX_EXCERPT_BYTES, Redactor, default_redactor
 
 __all__ = ["eventually"]
 
@@ -182,12 +185,14 @@ def _as_finite_seconds(value: object) -> float | None:
     return number
 
 
-def _require_timeout(timeout: object) -> float:
+def _require_timeout(timeout: object, redactor: Redactor | None = None) -> float:
     """Validate the deadline argument.
 
     Args:
         timeout: The caller's ``timeout``, which must be a finite number of seconds of zero
             or more. Zero is accepted and means "call the function once, then fail".
+        redactor: The run's redaction engine, applied to the rejected value this message quotes,
+            or ``None`` to build one carrying only the built-in deny-lists.
 
     Returns:
         The deadline as a ``float``.
@@ -197,19 +202,20 @@ def _require_timeout(timeout: object) -> float:
     """
     number = _as_finite_seconds(timeout)
     if number is None or number < 0.0:
-        raise _misuse(
-            f"timeout must be a finite number of seconds >= 0, got {_excerpt(repr(timeout))}"
-        )
+        quoted = _excerpt(repr(timeout), redactor)
+        raise _misuse(f"timeout must be a finite number of seconds >= 0, got {quoted}")
     return number
 
 
-def _require_interval(interval: object) -> float:
+def _require_interval(interval: object, redactor: Redactor | None = None) -> float:
     """Validate the poll interval argument.
 
     Args:
         interval: The caller's ``interval``, which must be a finite number of seconds greater
             than zero. A zero interval would spin the loop without ever yielding, and a
             negative one would make the sleep clamp meaningless.
+        redactor: The run's redaction engine, applied to the rejected value this message quotes,
+            or ``None`` to build one carrying only the built-in deny-lists.
 
     Returns:
         The interval as a ``float``.
@@ -219,9 +225,8 @@ def _require_interval(interval: object) -> float:
     """
     number = _as_finite_seconds(interval)
     if number is None or number <= 0.0:
-        raise _misuse(
-            f"interval must be a finite number of seconds > 0, got {_excerpt(repr(interval))}"
-        )
+        quoted = _excerpt(repr(interval), redactor)
+        raise _misuse(f"interval must be a finite number of seconds > 0, got {quoted}")
     return number
 
 
@@ -371,7 +376,7 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
-def _excerpt(rendered: str) -> str:
+def _excerpt(rendered: str, redactor: Redactor | None = None) -> str:
     """Redact, bound and flatten a rendered outcome for inclusion in a message.
 
     Redaction runs before truncation, inside :meth:`foundry.obs.redaction.Redactor.text`, so a
@@ -380,12 +385,16 @@ def _excerpt(rendered: str) -> str:
 
     Args:
         rendered: The text to quote, already converted to ``str``.
+        redactor: The run's redaction engine, normally the one built from
+            ``secrets.redact_keys``, or ``None`` to build one carrying only the built-in
+            deny-lists.
 
     Returns:
         The excerpt, bounded by :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` plus its
         truncation marker, containing no newline.
     """
-    excerpt = default_redactor().body_excerpt(rendered, limit=MAX_EXCERPT_BYTES)
+    engine = default_redactor() if redactor is None else redactor
+    excerpt = engine.body_excerpt(rendered, limit=MAX_EXCERPT_BYTES)
     return _one_line(excerpt)
 
 
@@ -406,7 +415,9 @@ def _render_value(value: object) -> str:
         return f"<unrepresentable {type(value).__name__}>"
 
 
-def _outcome_text(last_error: Exception | None, last_value: object) -> str:
+def _outcome_text(
+    last_error: Exception | None, last_value: object, redactor: Redactor | None = None
+) -> str:
     """Render the trailing clause of a failure message, naming the last poll outcome.
 
     Exactly one of the two outcomes is always set once the loop has polled at least once, and
@@ -415,16 +426,18 @@ def _outcome_text(last_error: Exception | None, last_value: object) -> str:
     Args:
         last_error: The exception the last poll raised, or ``None`` when it returned.
         last_value: The value the last poll returned, or the sentinel when it raised.
+        redactor: The run's redaction engine, applied to the quoted outcome, or ``None`` to
+            build one carrying only the built-in deny-lists.
 
     Returns:
         ``last exception <Type>(<message>)`` or ``last value: <repr>``, redacted and bounded.
     """
     if last_error is not None:
         rendered = f"{type(last_error).__name__}({last_error!s})"
-        return f"last exception {_excerpt(rendered)}"
+        return f"last exception {_excerpt(rendered, redactor)}"
     if last_value is _MISSING:
         return "no poll completed"
-    return f"last value: {_excerpt(_render_value(last_value))}"
+    return f"last value: {_excerpt(_render_value(last_value), redactor)}"
 
 
 def eventually(
@@ -434,6 +447,7 @@ def eventually(
     interval: float,
     sleep: Sleep = time.sleep,
     clock: ClockLike | None = None,
+    redactor: Redactor | None = None,
 ) -> T:
     """Poll ``fn`` until it returns a truthy value, or raise once the deadline passes.
 
@@ -461,6 +475,10 @@ def eventually(
             :class:`foundry.core.types.ClockLike`, whose ``now()`` returns the current
             ``datetime``; the deadline is then measured from the instant the call started.
             Additive over AAP 0.4.3 and permitted by AAP 0.4.9.
+        redactor: Optional redaction engine for the quoted outcome, normally the run's own,
+            built from ``secrets.redact_keys``, so a configured key is scrubbed out of the
+            message as well as the built-in deny-lists. ``None`` builds one carrying only those
+            deny-lists. Additive over AAP 0.4.3 and permitted by AAP 0.4.9.
 
     Returns:
         The first truthy value ``fn`` returned, unchanged.
@@ -482,8 +500,8 @@ def eventually(
             order = eventually(order_is_ready, timeout=5.0, interval=0.25, sleep=fake_sleep)
     """
     poll = _require_pollable(fn)
-    limit = _require_timeout(timeout)
-    period = _require_interval(interval)
+    limit = _require_timeout(timeout, redactor)
+    period = _require_interval(interval, redactor)
     wait = _require_sleep(sleep)
     source = _require_clock(clock)
 
@@ -516,7 +534,7 @@ def eventually(
             raise AssertionError(
                 f"{_PREFIX}: timed out after {_format_seconds(limit)}s and {_poll_word(polls)} "
                 f"(interval={_format_seconds(period)}s): "
-                f"{_outcome_text(last_error, last_value)}"
+                f"{_outcome_text(last_error, last_value, redactor)}"
             )
         if elapsed <= last_elapsed:
             # The clock made no progress since the previous poll, which is what a frozen clock
@@ -528,7 +546,7 @@ def eventually(
                     f"{_PREFIX}: poll budget of {poll_budget} exhausted after "
                     f"{_format_seconds(elapsed)}s and {_poll_word(polls)} "
                     f"(interval={_format_seconds(period)}s): "
-                    f"{_outcome_text(last_error, last_value)}"
+                    f"{_outcome_text(last_error, last_value, redactor)}"
                 )
         else:
             stalled_polls = 0

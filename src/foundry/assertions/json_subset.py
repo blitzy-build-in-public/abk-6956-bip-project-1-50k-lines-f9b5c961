@@ -12,19 +12,21 @@ sorted key order and lists in index order, so "first" depends on the two values 
 document and fragment report the same path on every run and on every xdist worker, which is what
 makes a failure reproducible in CI.
 
-Every value quoted in a message is rendered through the redaction engine
-(:func:`foundry.obs.redaction.default_redactor`) and bounded by
+Every value quoted in a message is rendered through the redaction engine the caller supplies --
+the one the fixture layer built from ``secrets.redact_keys`` -- and bounded by
 :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES`, because a response body under test often
-carries a token and a subset failure must not print one. A value sitting under a secret-bearing
-key is reported as ``***`` outright: a bare string carries no name for the engine to match on,
-so rendering it verbatim would print the credential.
+carries a token and a subset failure must not print one. A caller that supplies no engine gets
+:func:`foundry.obs.redaction.default_redactor`, which carries the built-in deny-lists. A value
+sitting under a secret-bearing key is reported as ``***`` outright: a bare string carries no
+name for the engine to match on, so rendering it verbatim would print the credential.
 
 ``actual`` and ``expected`` are annotated ``object`` rather than ``Any``. AAP 0.4.3 writes the
 signature with ``Any``, while AAP 0.4.1 and 0.13.1 forbid ``Any`` in a public signature and
 require a clean ``mypy --strict``; the JSON-shape rule - ``None``, ``bool``, ``int``, ``float``,
 ``str``, ``list`` or a mapping with ``str`` keys - is therefore documented here and enforced at
 runtime instead. The name, the parameter shape including the keyword-only ``path`` and the
-``None`` return are the ones AAP 0.4.3 and 0.4.9 fix for ``0.1.0``.
+``None`` return are the ones AAP 0.4.3 and 0.4.9 fix for ``0.1.0``; the keyword-only
+``redactor`` is additive, which the same stability statement permits.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, cast
 
-from foundry.obs.redaction import MAX_EXCERPT_BYTES, REDACTED, default_redactor
+from foundry.obs.redaction import MAX_EXCERPT_BYTES, REDACTED, Redactor, default_redactor
 
 __all__ = ["assert_json_subset"]
 
@@ -52,7 +54,13 @@ _TRUNCATION_SUFFIX: Final[str] = "..."
 _MISSING: Final[object] = object()
 
 
-def assert_json_subset(actual: object, expected: object, *, path: str = "$") -> None:
+def assert_json_subset(
+    actual: object,
+    expected: object,
+    *,
+    path: str = "$",
+    redactor: Redactor | None = None,
+) -> None:
     """Assert that ``actual`` contains the JSON fragment ``expected``.
 
     ``expected`` is a fragment, not a whole document: keys and list elements it does not mention
@@ -65,6 +73,11 @@ def assert_json_subset(actual: object, expected: object, *, path: str = "$") -> 
         expected: The JSON fragment that must be contained in ``actual``.
         path: Rendering prefix for every reported path. It must be a ``str`` beginning with
             ``"$"``, so ``path="$.data"`` makes a nested check report ``$.data.items[0].price``.
+        redactor: The run's redaction engine, normally the one the fixture layer built from
+            ``secrets.redact_keys``, applied to every value and key quoted in a message.
+            ``None`` builds one carrying only the built-in deny-lists. It is resolved once here
+            and handed down, so every value in one message is scrubbed by the same engine.
+            Additive over the signature AAP 0.4.3 publishes and permitted by AAP 0.4.9.
 
     Returns:
         None. The call reports its result through the exception it raises, which is what lets a
@@ -87,9 +100,10 @@ def assert_json_subset(actual: object, expected: object, *, path: str = "$") -> 
             assert_json_subset(response, {"items": [{"price": 1.0}]})
             # raises AssertionError naming $.items[0].price: expected 1.0, actual 9.99
     """
+    scrub = default_redactor() if redactor is None else redactor
     if not isinstance(path, str) or not path.startswith("$"):
-        raise _misuse(f"path must be a str beginning with '$', got {_render(path)}")
-    mismatch = _compare(expected, actual, path)
+        raise _misuse(f"path must be a str beginning with '$', got {_render(path, scrub)}")
+    mismatch = _compare(expected, actual, path, redactor=scrub)
     if mismatch is not None:
         raise AssertionError(mismatch.message())
 
@@ -120,6 +134,7 @@ def _compare(
     actual: object,
     path: str,
     *,
+    redactor: Redactor,
     secret: bool = False,
 ) -> _Mismatch | None:
     """Compare one expected fragment with the actual value, returning the first mismatch.
@@ -131,6 +146,8 @@ def _compare(
         expected: The fragment that must be contained in ``actual``.
         actual: The decoded JSON value found at ``path``.
         path: JSON path of this pair, used verbatim in the mismatch it may produce.
+        redactor: The engine every quoted value in a message is scrubbed through, resolved once
+            by :func:`assert_json_subset` and handed down unchanged.
         secret: True when this subtree sits under a secret-bearing key, in which case quoted
             values are withheld.
 
@@ -143,13 +160,16 @@ def _compare(
             non-``str`` key.
     """
     if isinstance(expected, Mapping):
-        return _compare_object(_string_keyed(expected, path), actual, path, secret=secret)
+        return _compare_object(
+            _string_keyed(expected, path, redactor), actual, path, redactor=redactor, secret=secret
+        )
     if isinstance(expected, list | tuple):
-        return _compare_list(expected, actual, path, secret=secret)
+        return _compare_list(expected, actual, path, redactor=redactor, secret=secret)
     if expected is None or isinstance(expected, bool | int | float | str):
-        return _compare_scalar(expected, actual, path, secret=secret)
+        return _compare_scalar(expected, actual, path, redactor=redactor, secret=secret)
     raise _misuse(
-        f"expected value at {path} is not a JSON value: {_type_name(expected)} {_render(expected)}"
+        f"expected value at {path} is not a JSON value: "
+        f"{_type_name(expected)} {_render(expected, redactor)}"
     )
 
 
@@ -158,6 +178,7 @@ def _compare_object(
     actual: object,
     path: str,
     *,
+    redactor: Redactor,
     secret: bool,
 ) -> _Mismatch | None:
     """Compare an expected object with the actual value, key by key in sorted order.
@@ -169,6 +190,8 @@ def _compare_object(
         expected: The expected object, already proven to be string-keyed.
         actual: The decoded JSON value found at ``path``.
         path: JSON path of this pair.
+        redactor: The engine every quoted value in a message is scrubbed through, and the one
+            asked whether a key is secret-bearing.
         secret: True when this subtree sits under a secret-bearing key.
 
     Returns:
@@ -186,7 +209,13 @@ def _compare_object(
         found = mapping.get(key, _MISSING)
         if found is _MISSING:
             return _Mismatch(child, f"expected key {key!r} is absent from the actual object")
-        mismatch = _compare(expected[key], found, child, secret=secret or _redacts(key))
+        mismatch = _compare(
+            expected[key],
+            found,
+            child,
+            redactor=redactor,
+            secret=secret or _redacts(key, redactor),
+        )
         if mismatch is not None:
             return mismatch
     return None
@@ -197,6 +226,7 @@ def _compare_list(
     actual: object,
     path: str,
     *,
+    redactor: Redactor,
     secret: bool,
 ) -> _Mismatch | None:
     """Compare an expected list with the actual value, index by index.
@@ -206,6 +236,8 @@ def _compare_list(
             ``expected`` is a scalar.
         actual: The decoded JSON value found at ``path``.
         path: JSON path of this pair.
+        redactor: The engine every quoted value in a message is scrubbed through, resolved once
+            by :func:`assert_json_subset` and handed down unchanged.
         secret: True when this subtree sits under a secret-bearing key.
 
     Returns:
@@ -220,7 +252,9 @@ def _compare_list(
             f"expected list of {len(expected)} elements, actual list of {len(actual)} elements",
         )
     for index, item in enumerate(expected):
-        mismatch = _compare(item, actual[index], _index(path, index), secret=secret)
+        mismatch = _compare(
+            item, actual[index], _index(path, index), redactor=redactor, secret=secret
+        )
         if mismatch is not None:
             return mismatch
     return None
@@ -231,6 +265,7 @@ def _compare_scalar(
     actual: object,
     path: str,
     *,
+    redactor: Redactor,
     secret: bool,
 ) -> _Mismatch | None:
     """Compare an expected scalar with the actual value using type-aware equality.
@@ -243,6 +278,8 @@ def _compare_scalar(
         expected: The expected scalar: ``None``, a ``bool``, a number or a ``str``.
         actual: The decoded JSON value found at ``path``.
         path: JSON path of this pair.
+        redactor: The engine every quoted value in a message is scrubbed through, resolved once
+            by :func:`assert_json_subset` and handed down unchanged.
         secret: True when this subtree sits under a secret-bearing key.
 
     Returns:
@@ -256,8 +293,8 @@ def _compare_scalar(
         return _Mismatch(path, f"expected {expected_kind}, actual {actual_kind}")
     return _Mismatch(
         path,
-        f"expected {_render_leaf(expected, secret=secret)}, "
-        f"actual {_render_leaf(actual, secret=secret)}",
+        f"expected {_render_leaf(expected, redactor=redactor, secret=secret)}, "
+        f"actual {_render_leaf(actual, redactor=redactor, secret=secret)}",
     )
 
 
@@ -278,12 +315,15 @@ def _equal(expected: object, actual: object) -> bool:
     return expected == actual
 
 
-def _string_keyed(source: Mapping[object, object], path: str) -> Mapping[str, object]:
+def _string_keyed(
+    source: Mapping[object, object], path: str, redactor: Redactor
+) -> Mapping[str, object]:
     """Return ``source`` once its keys are proven to be strings.
 
     Args:
         source: The expected object, whose keys must be JSON object keys.
         path: JSON path of ``source``, named in the misuse message.
+        redactor: The engine the rejected key is scrubbed through before it is quoted.
 
     Returns:
         The same mapping, typed as string-keyed. It is not copied, so nothing this module does
@@ -296,7 +336,7 @@ def _string_keyed(source: Mapping[object, object], path: str) -> Mapping[str, ob
         if not isinstance(key, str):
             raise _misuse(
                 f"expected object at {path} must use string keys, found a "
-                f"{_type_name(key)} key {_render(key)}"
+                f"{_type_name(key)} key {_render(key, redactor)}"
             )
     return cast("Mapping[str, object]", source)
 
@@ -333,7 +373,7 @@ def _index(path: str, index: int) -> str:
     return f"{path}[{index}]"
 
 
-def _render(value: object) -> str:
+def _render(value: object, redactor: Redactor) -> str:
     """Render a value for a message: redacted, JSON-encoded, single-line and bounded.
 
     Redaction runs before truncation, because cutting first can leave the prefix of a credential
@@ -341,6 +381,8 @@ def _render(value: object) -> str:
 
     Args:
         value: Any value, whether JSON-shaped or not.
+        redactor: The engine that scrubs the value before it is encoded, so a configured key is
+            redacted as well as the built-in deny-lists.
 
     Returns:
         The redacted rendering, at most :data:`MAX_EXCERPT_BYTES` characters including the
@@ -348,7 +390,7 @@ def _render(value: object) -> str:
     """
     try:
         encoded = json.dumps(
-            default_redactor().json_value(value),
+            redactor.json_value(value),
             sort_keys=True,
             ensure_ascii=False,
             default=repr,
@@ -362,11 +404,12 @@ def _render(value: object) -> str:
     return rendered[: MAX_EXCERPT_BYTES - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
 
 
-def _render_leaf(value: object, *, secret: bool) -> str:
+def _render_leaf(value: object, *, redactor: Redactor, secret: bool) -> str:
     """Render a scalar for a message, withholding it when its key is secret-bearing.
 
     Args:
         value: The scalar to render.
+        redactor: The engine every rendered value is scrubbed through.
         secret: True when the value sits under a key that
             :meth:`foundry.obs.redaction.Redactor.redacts` recognises. A bare string carries no
             name for the redaction engine to match on, so rendering it would print the
@@ -377,20 +420,22 @@ def _render_leaf(value: object, *, secret: bool) -> str:
     """
     if secret:
         return REDACTED
-    return _render(value)
+    return _render(value, redactor)
 
 
-def _redacts(name: str) -> bool:
+def _redacts(name: str, redactor: Redactor) -> bool:
     """Report whether the redaction engine treats ``name`` as secret-bearing.
 
     Args:
         name: A JSON object key.
+        redactor: The engine to ask, normally the run's own, so a key that only the configured
+            ``secrets.redact_keys`` names is recognised too.
 
     Returns:
-        True when the built-in deny-lists or the credential name pattern recognise the key, so
+        True when the engine's deny-lists or the credential name pattern recognise the key, so
         the values under it are withheld from every message.
     """
-    return default_redactor().redacts(name)
+    return redactor.redacts(name)
 
 
 def _type_name(value: object) -> str:
