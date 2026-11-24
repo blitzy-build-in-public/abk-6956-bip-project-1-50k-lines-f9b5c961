@@ -1,0 +1,2 @@
+This file is not a Foundry results document.
+foundry report compare must exit 2 when it is passed this path.
