@@ -40,6 +40,7 @@ from foundry.core.exceptions import ConfigError
 
 __all__: Final[tuple[str, ...]] = (
     "BAD_ENV_TEMPLATE",
+    "BAD_OPTION_TEMPLATE",
     "ENV_NOT_SUPPORTED_TEMPLATE",
     "INVALID_SHAPE_TEMPLATE",
     "LAYER_CLI",
@@ -60,6 +61,7 @@ __all__: Final[tuple[str, ...]] = (
     "UNREADABLE_FILE_TEMPLATE",
     "VALIDATION_OK_TEMPLATE",
     "bad_env_value",
+    "bad_option_value",
     "both_record_and_replay",
     "cli_detail",
     "env_detail",
@@ -178,6 +180,14 @@ BAD_ENV_TEMPLATE: Final[str] = (
     "invalid value for environment variable {variable}: expected {expected}"
 )
 """AAP 0.4.5: an unparseable variable names the variable and the expected type."""
+
+BAD_OPTION_TEMPLATE: Final[str] = "invalid value for option {option}: expected {expected}"
+"""AAP 0.4.4: an unreadable ``--foundry-*`` value names the option spelling it was given with.
+
+The environment wording above cannot serve here: an operator who mistyped
+``--foundry-data.schema_strict`` has a command line to correct, not a variable, and a message
+calling an option an environment variable sends them to the wrong place.
+"""
 
 ENV_NOT_SUPPORTED_TEMPLATE: Final[str] = (
     "environment variable {variable} cannot set {key}: a table has no single-variable form"
@@ -403,6 +413,34 @@ def bad_env_value(variable: str, expected: str, *, key: str) -> ConfigError:
         layer=LAYER_ENV,
         hint=f"Set {variable} to a value of the expected type, or unset it to keep the "
         "value the lower layers supply",
+    )
+
+
+def bad_option_value(option: str, expected: str, *, key: str) -> ConfigError:
+    """Build the error for a ``--foundry-*`` override whose value cannot be read.
+
+    AAP 0.4.4 gives every scalar key a generic ``--foundry-<dotted.key>`` option, so a value
+    arrives as text the command-line layer has to coerce, and AAP 0.4.5 requires the rejected
+    value to be reported against the spelling the operator can fix. That spelling is the
+    option -- ``--foundry-http.timeout``, or the named alias ``--foundry-retries`` -- and
+    never an environment variable, which is why the wording is its own template.
+
+    Args:
+        option: The option's spelling, already carrying its leading ``--`` as
+            :func:`cli_detail` renders it.
+        expected: The type or accepted values the option had to carry, such as ``an
+            integer`` or ``0 < t <= 300``.
+        key: The dotted key the option sets.
+
+    Returns:
+        A :class:`ConfigError` carrying the key and the ``cli`` layer.
+    """
+    return ConfigError(
+        BAD_OPTION_TEMPLATE.format(option=option, expected=expected),
+        key=key,
+        layer=LAYER_CLI,
+        hint=f"Pass {option} a value of the expected type, or omit it to keep the value the "
+        "lower layers supply",
     )
 
 
