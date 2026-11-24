@@ -1,3 +1,10 @@
+# Ignore rules for the Foundry repository.
+#
+# Foundry writes its report files and artifacts into the directory pytest was
+# invoked from, so the run-output rules below are anchored to the repository
+# root with a leading slash: a same-named path deeper in the tree, such as a
+# report comparison pair under tests/fixtures/, stays committable.
+
 # Python
 __pycache__/
 *.py[cod]
@@ -12,14 +19,13 @@ build/
 *.whl
 *.tar.gz
 
-# Foundry run output (written into the invocation directory by test runs)
-artifacts/
-results.json
-junit.xml
-report.html
-cassettes/
-!examples/checkout/cassettes/
-!examples/checkout/cassettes/**
+# Foundry run output: the artifacts tree, the three report files written by
+# every run and the record/replay cassette directory.
+/artifacts/
+/results.json
+/junit.xml
+/report.html
+/cassettes/
 
 # Tool caches and reports
 .pytest_cache/
@@ -29,6 +35,7 @@ cassettes/
 .coverage
 .coverage.*
 coverage.json
+coverage.xml
 .coverage-*
 htmlcov/
 *.junit.xml
@@ -37,3 +44,14 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Committed sources. These must stay in version control, so they are
+# re-included explicitly: the run-output rules are anchored today and these
+# lines keep that intent true if one is ever unanchored. A directory is
+# re-included before its contents, because git cannot re-include a file whose
+# parent directory is excluded.
+!examples/checkout/cassettes/
+!examples/checkout/cassettes/**
+!tests/fixtures/cassettes/
+!tests/fixtures/cassettes/**
+!uv.lock
