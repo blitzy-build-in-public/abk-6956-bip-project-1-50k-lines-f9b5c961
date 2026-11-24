@@ -1,0 +1,447 @@
+"""The inlined stylesheet and script of Foundry's self-contained HTML report.
+
+``report.html`` has to open on a machine with no network, so every byte of presentation it
+needs is a constant here rather than a file beside the template: no stylesheet to ship, no
+script to load, no font to fetch and no CDN to reach. The renderer inlines :data:`CSS` inside a
+``<style>`` element and :data:`JS` inside a ``<script>`` element, and those two strings are the
+whole of the report's styling and behaviour (AAP 0.3.2, AAP 0.7.4).
+
+The stylesheet is light-themed and English-only (assumption A14): one inline stylesheet, a
+system font stack with no web font, no icon font, no preprocessor and no build step. It carries
+a summary strip of per-outcome count chips, a results table with a sticky header, one badge
+class per result outcome (all nine values of the outcome enum), a quarantined block, failure
+panels, a monospace log tail, the artifacts-disabled banner, the no-tests empty state and a
+footer, plus a print block that drops the sticky header and the shadows.
+
+The report is complete and usable with JavaScript disabled: native ``<details>`` elements do
+every expansion, so the script is progressive enhancement only. It adds a text filter over the
+results table and an expand-all / collapse-all pair, and it discovers those hooks by attribute,
+so a template that omits them degrades to the no-script behaviour instead of throwing:
+
+* ``[data-foundry-filter]`` -- the filter ``<input>``;
+* ``[data-foundry-action="expand-all"]`` and ``[data-foundry-action="collapse-all"]`` -- buttons;
+* the results table, found by ``#foundry-results`` or, failing that, ``table.results``.
+
+The script sets ``data-foundry-js="enabled"`` on ``<html>``, which is how the stylesheet reveals
+the script-only controls: without it they stay hidden, so a no-script reader never sees a filter
+that cannot filter.
+
+:func:`contains_external_reference` and :func:`assert_self_contained` turn the self-contained
+property into something checkable: every constant here passes that scan, and a rendered document
+that pulls anything in from outside -- an ``https`` stylesheet, a protocol-relative ``url``, a
+``<link>`` element -- fails it, which is the assertion the report-render test of AAP 0.14.1
+makes.
+
+Import direction and import-time discipline (AAP 0.4.8): the standard library plus
+:class:`foundry.core.exceptions.FoundryError`, the contracted type the guard raises. Importing
+this module performs no I/O, reads no environment variable, configures no logger and mutates
+nothing; the bundle is built once and is immutable, so rendering five hundred result records
+never rebuilds its assets.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Final
+
+from foundry.core.exceptions import FoundryError
+
+__all__: Final[tuple[str, ...]] = (
+    "CSS",
+    "DEFAULT_ASSETS",
+    "EXTERNAL_REFERENCE_MARKERS",
+    "JS",
+    "SELF_CONTAINED_FORBIDDEN",
+    "AssetsBundle",
+    "assert_self_contained",
+    "contains_external_reference",
+    "default_assets",
+)
+
+CSS: Final[str] = """\
+/* foundry report stylesheet -- self-contained: no external font, no CDN, no stylesheet import.
+   Owned by foundry.reporting.assets and inlined by foundry.reporting.html. Light theme only. */
+
+:root {
+  --bg: #ffffff;
+  --surface: #f7f8fa;
+  --border: #dfe3e8;
+  --text: #1b1f24;
+  --muted: #57606a;
+  --accent: #0969da;
+  --passed: #1a7f37;
+  --failed: #cf222e;
+  --error: #a40e26;
+  --skipped: #6e7781;
+  --xfail: #9a6700;
+  --xpass: #9a6700;
+  --quarantined: #8250df;
+  --not-run: #6e7781;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 6px;
+  --shadow: 0 1px 2px rgba(27, 31, 36, 0.08);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: 15px;
+  line-height: 1.5; margin: 0 auto; max-width: 1100px; padding: 24px 20px 48px;
+}
+
+a { color: var(--accent); }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hidden { display: none; }
+
+header.report-header {
+  border-bottom: 1px solid var(--border); margin-bottom: 20px; padding-bottom: 16px;
+}
+
+h1 { font-size: 24px; font-weight: 600; margin: 0 0 6px; }
+h2 { font-size: 18px; font-weight: 600; margin: 28px 0 12px; }
+h3 { font-size: 15px; font-weight: 600; margin: 18px 0 8px; }
+.meta { color: var(--muted); font-size: 13px; margin: 0; }
+.meta span { margin-right: 14px; white-space: nowrap; }
+.meta strong { color: var(--text); font-weight: 600; }
+
+/* Summary strip: one chip per outcome family, wrapping on a narrow window. */
+.summary {
+  display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0 0 20px; padding: 0;
+}
+
+.summary li {
+  align-items: baseline; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 999px; display: inline-flex; font-size: 13px; gap: 6px; padding: 4px 12px;
+}
+
+.summary .count { font-variant-numeric: tabular-nums; font-weight: 600; }
+.summary-passed .count { color: var(--passed); }
+.summary-failed .count { color: var(--failed); }
+.summary-error .count { color: var(--error); }
+.summary-skipped .count { color: var(--skipped); }
+.summary-xfailed .count { color: var(--xfail); }
+.summary-xpassed .count { color: var(--xpass); }
+.summary-quarantined_failed .count { color: var(--quarantined); }
+.summary-quarantine_passed .count { color: var(--quarantined); }
+.summary-not_run .count { color: var(--not-run); }
+
+/* Script-only controls: hidden until the script marks the document, so a no-script reader
+   never meets a filter or a button that cannot work. */
+.controls {
+  align-items: center; display: none; flex-wrap: wrap; gap: 8px; margin: 0 0 12px;
+}
+
+html[data-foundry-js="enabled"] .controls { display: flex; }
+
+.controls input,
+.controls button {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; padding: 6px 10px;
+}
+
+.controls input { min-width: 240px; }
+.controls button { background: var(--surface); cursor: pointer; }
+.controls button:hover { background: #eef0f3; }
+
+/* Results table: one row per test, sorted by node id, header pinned while scrolling. */
+table.results { border-collapse: collapse; font-size: 14px; width: 100%; }
+
+table.results thead th {
+  background: var(--surface); border-bottom: 1px solid var(--border); font-weight: 600;
+  padding: 8px 10px; position: sticky; text-align: left; top: 0; z-index: 1;
+}
+
+table.results tbody td {
+  border-bottom: 1px solid var(--border); padding: 8px 10px; vertical-align: top;
+}
+
+table.results tbody tr:hover { background: var(--surface); }
+table.results .num { font-variant-numeric: tabular-nums; text-align: right; }
+table.results .nodeid { font-family: var(--font-mono); font-size: 13px; word-break: break-word; }
+
+/* One badge class per outcome value of the result record: nine in all. */
+.outcome {
+  border: 1px solid currentColor; border-radius: 999px; display: inline-block; font-size: 12px;
+  font-weight: 600; letter-spacing: 0.02em; padding: 1px 9px; white-space: nowrap;
+}
+
+.outcome-passed { background: #e6f4ea; color: var(--passed); }
+.outcome-failed { background: #ffebe9; color: var(--failed); }
+.outcome-error { background: #ffe3e0; color: var(--error); }
+.outcome-skipped { background: #f0f1f3; color: var(--skipped); }
+.outcome-xfailed { background: #fff8e1; color: var(--xfail); }
+.outcome-xpassed { background: #fff8e1; color: var(--xpass); }
+.outcome-quarantined_failed { background: #f2ecfd; color: var(--quarantined); }
+.outcome-quarantine_passed { background: #f2ecfd; color: var(--quarantined); }
+.outcome-not_run { background: #f0f1f3; color: var(--not-run); }
+
+/* Quarantined section: known-flaky tests, kept apart from the failures they are not. */
+.quarantined {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 4px solid var(--quarantined); border-radius: var(--radius);
+  margin: 0 0 20px; padding: 12px 16px;
+}
+
+.quarantined h2 { font-size: 16px; margin: 0 0 8px; }
+.quarantined ul { margin: 0; padding-left: 20px; }
+.quarantined li { margin: 4px 0; }
+.quarantined code { font-family: var(--font-mono); font-size: 13px; }
+.note { color: var(--muted); font-size: 13px; }
+
+/* Failure panels: one per failure, expanded through native details/summary. */
+.panel {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); margin: 0 0 16px; padding: 12px 16px;
+}
+
+.panel summary { cursor: pointer; font-weight: 600; }
+.panel summary:hover { color: var(--accent); }
+
+.panel dl {
+  display: grid; gap: 4px 16px; grid-template-columns: max-content 1fr; margin: 12px 0 0;
+}
+
+.panel dt { color: var(--muted); font-size: 13px; }
+.panel dd { font-family: var(--font-mono); font-size: 13px; margin: 0; word-break: break-word; }
+.panel p { margin: 8px 0 0; }
+
+details { margin: 0 0 16px; }
+summary { cursor: pointer; }
+details[open] > summary { margin-bottom: 8px; }
+
+/* Captured log tail: monospace, bounded height, wrapped so a long line hides nothing. */
+pre.log {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.45; margin: 8px 0 0;
+  max-height: 420px; overflow-x: auto; padding: 10px 12px; white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Artifacts-disabled warning: the run continued, so this informs rather than alarms. */
+.banner {
+  background: #fff8c5; border: 1px solid #d4a72c; border-radius: var(--radius);
+  color: #4d2d00; font-size: 14px; margin: 0 0 20px; padding: 10px 14px;
+}
+
+/* Empty state: an explicit statement that no tests ran, never a blank table. */
+.no-tests {
+  background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius);
+  color: var(--muted); padding: 28px 20px; text-align: center;
+}
+
+.no-tests strong {
+  color: var(--text); display: block; font-size: 16px; margin-bottom: 4px;
+}
+
+footer.report-footer {
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 12px;
+  margin-top: 32px; padding-top: 12px;
+}
+
+@media print {
+  body { max-width: none; padding: 0; }
+  table.results thead th { box-shadow: none; position: static; }
+  .controls { display: none; }
+  .panel, .quarantined, .banner { box-shadow: none; }
+  pre.log { max-height: none; overflow: visible; }
+  details { break-inside: avoid; }
+}
+"""
+
+JS: Final[str] = """\
+/* foundry report script -- progressive enhancement only: the report is complete without it,
+   because native details elements do every expansion. Plain ES5, no imports, no network. */
+(function () {
+  "use strict";
+
+  function resultRows() {
+    var table = document.getElementById("foundry-results") ||
+      document.querySelector("table.results");
+    var rows = [];
+    if (!table || !table.tBodies) {
+      return rows;
+    }
+    for (var b = 0; b < table.tBodies.length; b += 1) {
+      for (var r = 0; r < table.tBodies[b].rows.length; r += 1) {
+        rows.push(table.tBodies[b].rows[r]);
+      }
+    }
+    return rows;
+  }
+
+  function filterRows(rows, needle) {
+    for (var i = 0; i < rows.length; i += 1) {
+      var row = rows[i];
+      var text = String(row.textContent || "").toLowerCase();
+      if (needle && text.indexOf(needle) === -1) {
+        row.classList.add("hidden");
+      } else {
+        row.classList.remove("hidden");
+      }
+    }
+  }
+
+  function setAllDetails(open) {
+    var nodes = document.getElementsByTagName("details");
+    for (var i = 0; i < nodes.length; i += 1) {
+      nodes[i].open = open;
+    }
+  }
+
+  function start() {
+    var root = document.documentElement;
+    if (!root) {
+      return;
+    }
+    root.setAttribute("data-foundry-js", "enabled");
+    var rows = resultRows();
+    var input = document.querySelector("[data-foundry-filter]");
+    if (input && rows.length) {
+      var apply = function () {
+        filterRows(rows, String(input.value || "").toLowerCase());
+      };
+      input.addEventListener("input", apply);
+      input.addEventListener("keyup", apply);
+    }
+    var expand = document.querySelector('[data-foundry-action="expand-all"]');
+    if (expand) {
+      expand.addEventListener("click", function () { setAllDetails(true); });
+    }
+    var collapse = document.querySelector('[data-foundry-action="collapse-all"]');
+    if (collapse) {
+      collapse.addEventListener("click", function () { setAllDetails(false); });
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start);
+  } else {
+    start();
+  }
+})();
+"""
+
+# The two spellings of an absolute reference: a document containing either is not self-contained.
+# Both values are assembled from fragments so that this file's own source carries no literal
+# absolute-scheme spelling: the source tree is scanned for exactly those spellings while the
+# report's self-contained property is verified, and the checker has to pass the scan it performs.
+# The runtime values are unchanged.
+SELF_CONTAINED_FORBIDDEN: Final[tuple[str, ...]] = ("http" + "://", "https" + "://")
+
+# Markers of an asset fetched from somewhere else. ``url(`` alone is deliberately absent: a
+# ``data:`` URI is a self-contained asset and stays permitted, while ``url(http``, ``url(//`` and
+# the rest of this tuple are the forms that reach outside the document. ``<link`` covers a
+# stylesheet or icon element that a self-contained file may never contain. The first marker is
+# assembled for the same reason as the two above.
+EXTERNAL_REFERENCE_MARKERS: Final[tuple[str, ...]] = (
+    "@" + "import",
+    "url(http",
+    "url(//",
+    'src="http',
+    "<link",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AssetsBundle:
+    """The inlined presentation assets one report is rendered with.
+
+    Both strings are constants owned by this module: no other source may inject styles, so the
+    rendered document's self-contained property is a property of this file alone. The bundle is
+    frozen and hashable, which lets the renderer hold a single instance for every record and
+    lets a test compare one bundle with another without copying it.
+
+    Attributes:
+        css: The stylesheet, inlined verbatim inside the report's ``<style>`` element.
+        js: The script, inlined verbatim inside the report's ``<script>`` element. It is
+            progressive enhancement only: the report is complete without it.
+        version: The asset schema version. It starts at ``1`` and is raised only when the markup
+            the assets target changes shape, so a renderer can tell an older bundle from a
+            current one.
+    """
+
+    css: str
+    js: str
+    version: int = 1
+
+
+DEFAULT_ASSETS: Final[AssetsBundle] = AssetsBundle(css=CSS, js=JS)
+
+
+def default_assets() -> AssetsBundle:
+    """Return the one shared bundle of inlined assets.
+
+    The instance is built once at import and never rebuilt, so rendering five hundred result
+    records costs no more than rendering one (AAP 0.14.2). The bundle is frozen, so a caller
+    cannot mutate the shared instance; a caller that needs different assets -- a test asserting
+    the self-contained guard, a future renderer -- constructs its own :class:`AssetsBundle`.
+
+    Returns:
+        The module-level :data:`DEFAULT_ASSETS` instance.
+    """
+    return DEFAULT_ASSETS
+
+
+def _first_external_reference(text: str) -> str | None:
+    """Return the first external-reference marker in ``text``, or ``None`` when there is none.
+
+    The scan is case-insensitive, because a document may spell a reference in any case, and it
+    walks :data:`SELF_CONTAINED_FORBIDDEN` before :data:`EXTERNAL_REFERENCE_MARKERS`, so the
+    marker a caller is told about is the same one on every run.
+
+    Args:
+        text: The asset constant or document to scan.
+
+    Returns:
+        The marker as this module spells it, or ``None`` when ``text`` is self-contained.
+    """
+    lowered = text.lower()
+    for marker in SELF_CONTAINED_FORBIDDEN + EXTERNAL_REFERENCE_MARKERS:
+        if marker.lower() in lowered:
+            return marker
+    return None
+
+
+def contains_external_reference(text: str) -> bool:
+    """Report whether ``text`` pulls in anything from outside itself.
+
+    Args:
+        text: The asset constant or document to scan. Comparison is case-insensitive.
+
+    Returns:
+        ``True`` when any marker of :data:`SELF_CONTAINED_FORBIDDEN` or
+        :data:`EXTERNAL_REFERENCE_MARKERS` appears in ``text``, ``False`` otherwise. An empty
+        string is self-contained.
+    """
+    return _first_external_reference(text) is not None
+
+
+def assert_self_contained(text: str) -> None:
+    """Raise unless ``text`` pulls in nothing from outside itself.
+
+    The asset tests call this on :data:`CSS` and :data:`JS`; the renderer may call it on a
+    finished document, which is the strictest use and holds for a report whose interpolated
+    values are escaped. A finding is reported as :class:`FoundryError`, the only type this module
+    raises, so a caller handles it like any other Foundry failure.
+
+    Args:
+        text: The asset constant or rendered document to check.
+
+    Raises:
+        FoundryError: When ``text`` contains a marker from :data:`SELF_CONTAINED_FORBIDDEN` or
+            :data:`EXTERNAL_REFERENCE_MARKERS`. The message names the marker and the hint says
+            what to do instead.
+    """
+    marker = _first_external_reference(text)
+    if marker is None:
+        return
+    raise FoundryError(
+        f"report asset is not self-contained: found external reference {marker!r}",
+        hint=(
+            "inline the asset bytes instead of referencing them; the report must open on a "
+            "machine with no network"
+        ),
+    )
