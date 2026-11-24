@@ -1,31 +1,18 @@
 """Observability for Foundry: the logger, the log ring, the redactor, the artifact writer.
 
-``foundry.obs`` is the foundation package every other Foundry package logs, redacts and
-persists through. :mod:`foundry.obs.logging` owns the single ``foundry`` logger and its one
-``NullHandler``, :mod:`foundry.obs.capture` the bounded per-test log ring,
-:mod:`foundry.obs.redaction` the one redaction engine every sink calls before it writes,
-:mod:`foundry.obs.artifacts` and :mod:`foundry.obs.manifest` the per-test artifact writer and
-its manifest, and :mod:`foundry.obs.events` the structured lifecycle lines a run emits. This
-module is the barrel naming their public surface, so a caller imports from ``foundry.obs``
-rather than from a sibling.
+``foundry.obs`` is the foundation package every other Foundry package logs, redacts and persists
+through: :mod:`foundry.obs.logging` owns the single ``foundry`` logger and its one ``NullHandler``,
+:mod:`foundry.obs.capture` the bounded log ring, :mod:`foundry.obs.redaction` the one redaction
+engine every sink calls before it writes, :mod:`foundry.obs.artifacts` and
+:mod:`foundry.obs.manifest` the per-test artifact writer and its manifest, and
+:mod:`foundry.obs.events` the lifecycle lines a run emits. This module is the barrel naming them.
 
-**Import rule** (AAP 0.4.8). The package imports :mod:`foundry.core` and nothing else of
-Foundry, and no third-party distribution at all. Every sibling is standard-library-only, and
-that is what keeps this package -- and ``foundry.plugin``, which imports
-:mod:`foundry.obs.logging` at module scope -- inside the 150 ms startup budget (AAP 0.14.2). A
-third-party import added to any sibling re-exported here lands on that critical path, so it
-belongs inside the function that needs it.
-
-**Who writes.** Only :mod:`foundry.obs.artifacts`, :mod:`foundry.cassette.store` and
-:mod:`foundry.reporting.store` write files, each inside its own declared directory.
-
-**How faults are reported.** Foundry's own capture, redaction and reporting wrap their work: a
-plumbing fault logs at ``WARNING`` on the ``foundry`` logger and changes neither a test's
-outcome nor the exit code, the documented HTML-report fallback being the sole exception.
-Library code never logs above ``WARNING``.
-
-Importing this module defines names only. The ``NullHandler`` that :mod:`foundry.obs.logging`
-adds at import is the package's only import-time side effect, and root logging stays untouched.
+**Import rule** (AAP 0.4.8). The package imports :mod:`foundry.core` and nothing else of Foundry,
+and no third-party distribution, which keeps ``foundry.plugin`` inside the 150 ms startup budget
+(AAP 0.14.2). **Who writes.** Only :mod:`foundry.obs.artifacts`, :mod:`foundry.cassette.store` and
+:mod:`foundry.reporting.store` write files. **Faults.** A plumbing fault logs at ``WARNING`` on the
+``foundry`` logger and changes neither a test's outcome nor the exit code, the HTML fallback
+excepted; importing this module defines names only.
 """
 
 from .artifacts import ARTIFACT_FILENAMES as ARTIFACT_FILENAMES

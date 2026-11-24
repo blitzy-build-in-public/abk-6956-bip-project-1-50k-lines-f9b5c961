@@ -1,61 +1,22 @@
 """Bounded per-test log capture for Foundry: a ring of the last N ``logging`` records.
 
-Foundry retains at most ``logging.capture_lines`` records per test so that a failed test can
-carry a readable log tail into ``log_tail.log``, into the result record's ``artifacts`` list and
-into the report's failure panel (AAP 0.4.6; AAP 0.14.2 budgets the tail at "200 lines, from
-``logging.capture_lines``"). :class:`LogRing` is the storage -- a :class:`logging.Handler` over a
-:class:`collections.deque` bounded at construction -- and :func:`format_record` is the one
-formatter, so the artifact, the report panel and the ``user_properties`` ferry cannot render the
-same record three different ways.
+Foundry retains at most ``logging.capture_lines`` records per test, so a failed test carries a
+readable tail into ``log_tail.log``, the record's ``artifacts`` list and the report's failure panel
+(AAP 0.4.6; AAP 0.14.2 budgets the tail at "200 lines from ``logging.capture_lines``").
+:class:`LogRing` -- a :class:`logging.Handler` over a :class:`collections.deque` bounded at
+construction -- and :func:`format_record` are its only storage and formatter, so the artifact, the
+report panel and the ``user_properties`` ferry cannot render a record three ways. Formatting happens
+only when read, with no timestamp, host, thread or address, so two runs write identical tails
+(AAP 0.14.3); one line is capped at :data:`MAX_TAIL_LINE_LENGTH` and a multi-line message collapsed
+onto one, so a tail's line count equals its record count and stays bounded. The capacity belongs to
+the caller -- ``foundry.execution.session`` resolves it and :mod:`foundry.core.limits` holds its
+default and bounds -- so ``0`` retains nothing and nothing escapes :meth:`LogRing.emit` (AAP 0.4.8).
 
-Bounded on both axes
-    The ring keeps at most ``capacity`` records, dropping the oldest first, and
-    :func:`format_record` caps one line at :data:`MAX_TAIL_LINE_LENGTH` characters. A pathological
-    record therefore cannot make an artifact unbounded, which is the bounded-memory requirement
-    this subtree is held to.
-
-Formatted lazily, never timestamped
-    Records are stored as :class:`logging.LogRecord` objects and formatted only when read, so a
-    run that never inspects the tail pays nothing for it and a message built from ``%``-arguments
-    is rendered with its final values. :func:`format_record` emits ``"<LEVEL> <name>: <message>"``
-    -- the shape of :data:`foundry.obs.logging.LOG_FORMAT` -- with no timestamp, no millisecond
-    field, no host name, no thread name and no memory address, so two runs of the same suite
-    produce byte-identical tails (AAP 0.14.3, "Deterministic output"). A multi-line message is
-    collapsed onto one line, so the tail's line count equals its record count.
-
-The capacity belongs to the caller, never to this module
-    ``logging.capture_lines`` is resolved by ``foundry.execution.session``, which constructs
-    ``LogRing(capacity=...)``. This module reads no environment variable and imports no
-    configuration, because ``foundry.obs`` may import ``foundry.core`` only (AAP 0.4.8); the default
-    and the bounds it clamps into come from :mod:`foundry.core.limits`, the single definition site
-    of the ``logging.capture_lines`` numbers. A ``capacity`` of ``0`` is a supported configuration:
-    the ring retains nothing, :meth:`LogRing.tail` returns ``()`` and no ``log_tail.log`` artifact
-    is produced.
-
-What this module deliberately does not do
-    * It does not capture stdout or stderr. pytest's own capture machinery already does, and
-      ``foundry.obs.artifacts`` persists ``report.capstdout`` and ``report.capstderr``. Swapping
-      ``sys.stdout`` or ``sys.stderr`` here would break that capture, which is why
-      :class:`LogRing` touches neither stream.
-    * It starts no thread, installs no global filter and reconfigures no logger other than the
-      one :meth:`LogRing.attach` is given. Importing this module attaches nothing: the single
-      import-time handler in this package is the ``NullHandler`` that ``foundry.obs.logging``
-      owns.
-    * It holds no module-level state and no module-level :class:`contextvars.ContextVar`.
-      Correlation travels as the nodeid a caller passes to ``foundry.obs.events``, and the ring
-      itself is the per-test context, owned by ``item.stash`` behind a typed
-      ``pytest.StashKey`` because AAP 0.4.8 forbids module-level state.
-    * It never raises out of :meth:`LogRing.emit`. A capture fault is silent and changes neither a
-      test's outcome nor an exit code (failure isolation, AAP 0.1.2); in particular ``emit`` does
-      not call :meth:`logging.Handler.handleError`, whose traceback on ``stderr`` would pollute a
-      test's captured output.
-
-Typical use::
-
-    ring = LogRing(capacity=capture_lines)
-    with ring:
-        ...  # run the test
-    lines = ring.tail(capture_lines)
+It captures no stdout or stderr (pytest does, and ``foundry.obs.artifacts`` persists
+``report.capstdout``), holds no module-level state (the ring rides ``item.stash``, AAP 0.4.8),
+starts no thread, attaches nothing at import, and never raises out of :meth:`LogRing.emit`: a fault
+is silent, changes neither an outcome nor an exit code (AAP 0.1.2), and skips
+:meth:`logging.Handler.handleError`, whose traceback would pollute a captured artifact.
 """
 
 import logging
@@ -79,25 +40,17 @@ __all__ = [
 ]
 
 DEFAULT_CAPTURE_LINES: Final[int] = CAPTURE_LINES_DEFAULT
-"""Default ring size: the default of the ``logging.capture_lines`` configuration key.
+"""Default ring size: :data:`foundry.core.limits.CAPTURE_LINES_DEFAULT`, the single definition site.
 
-The number is defined once, in :data:`foundry.core.limits.CAPTURE_LINES_DEFAULT`, because this
-module may not import :mod:`foundry.config` (AAP 0.4.8) and a second copy is what lets a default
-drift from the surface AAP 0.4.5 publishes.
+A second copy could drift from the surface AAP 0.4.5 publishes, and this module may import
+:mod:`foundry.core` only (AAP 0.4.8).
 """
 
 MIN_CAPTURE_LINES: Final[int] = CAPTURE_LINES_MIN
-"""Smallest accepted ring size: the lower bound of ``logging.capture_lines``.
-
-``0`` is a clean no-capture state rather than an error. Defined once, in
-:data:`foundry.core.limits.CAPTURE_LINES_MIN`.
-"""
+"""Smallest accepted ring size of ``logging.capture_lines``; ``0`` disables capture."""
 
 MAX_CAPTURE_LINES: Final[int] = CAPTURE_LINES_MAX
-"""Largest accepted ring size: the upper bound of ``logging.capture_lines``.
-
-Defined once, in :data:`foundry.core.limits.CAPTURE_LINES_MAX`.
-"""
+"""Largest accepted ring size: the upper bound of ``logging.capture_lines``."""
 
 MAX_TAIL_LINE_LENGTH: Final[int] = 2_000
 """Cap on one formatted line, in characters, the truncation marker included."""
@@ -115,14 +68,7 @@ _UNFORMATTABLE_MESSAGE: Final[str] = "<unformattable log record>"
 def _clamp_capacity(capacity: int) -> int:
     """Clamp a requested ring size into the range ``logging.capture_lines`` accepts.
 
-    Args:
-        capacity: The requested size. It arrives from a hand-editable configuration file, so it
-            may be negative, larger than :data:`MAX_CAPTURE_LINES`, or not an integer at all.
-
-    Returns:
-        A size between :data:`MIN_CAPTURE_LINES` and :data:`MAX_CAPTURE_LINES`, inclusive. A
-        value that is not an integer falls back to :data:`DEFAULT_CAPTURE_LINES` rather than
-        raising, because a malformed capture setting must never fail a run.
+    A size outside it is clamped and a non-integer gives the default, never an error.
     """
     if isinstance(capacity, bool) or not isinstance(capacity, int):
         return DEFAULT_CAPTURE_LINES
@@ -132,34 +78,16 @@ def _clamp_capacity(capacity: int) -> int:
 def format_record(record: logging.LogRecord, *, limit: int = MAX_TAIL_LINE_LENGTH) -> str:
     """Format one log record as a single deterministic line.
 
-    Args:
-        record: The record to format. Formatting happens here, not at capture time, so a message
-            assembled from ``%``-arguments shows the values its arguments hold now.
-        limit: Maximum length of the returned line in characters, the truncation marker included.
-            A non-positive value disables truncation.
-
-    Returns:
-        ``"<LEVELNAME> <logger name>: <message>"``, the shape of
-        :data:`foundry.obs.logging.LOG_FORMAT` without the timestamp and millisecond fields a
-        :class:`logging.Formatter` would add, so two runs of the same suite format a given record
-        identically. Every newline is replaced by ``" | "`` so one record occupies one line, and a
-        line longer than ``limit`` is cut and terminated with :data:`TRUNCATION_MARKER`.
-
-    A record whose ``%``-arguments cannot be interpolated -- a hand-built record rather than one
-    the :mod:`logging` machinery created -- yields a placeholder message naming its level and
-    logger instead of raising, so a capture fault can never change a test's outcome.
+    ``"<LEVELNAME> <logger name>: <message>"``, newlines replaced by ``" | "`` and, past ``limit``
+    characters, :data:`TRUNCATION_MARKER` appended; an uninterpolatable record yields a
+    placeholder, so a capture fault never changes a test's outcome.
     """
     levelname, logger_name, message = _record_parts(record)
     return _normalise_line(f"{levelname} {logger_name}: {message}", limit)
 
 
 def _record_parts(record: logging.LogRecord) -> tuple[str, str, str]:
-    """Return ``record``'s level name, logger name and interpolated message.
-
-    The three are extracted together because the failure mode is shared: a record whose ``msg``
-    or ``args`` cannot be interpolated has to fall back as a whole, and the fallback still names
-    the record so the tail says something useful about where it came from.
-    """
+    """Return ``record``'s level, name and message, falling back together."""
     try:
         return str(record.levelname), str(record.name), record.getMessage()
     except (AttributeError, TypeError, ValueError):
@@ -180,28 +108,12 @@ def _normalise_line(line: str, limit: int) -> str:
 
 
 class LogRing(logging.Handler):
-    """A bounded ring holding the most recent :class:`logging.LogRecord` objects.
+    """A bounded ring holding the most recent :class:`logging.LogRecord` objects, per test.
 
-    Args:
-        capacity: How many records to retain. The value is clamped into
-            ``[MIN_CAPTURE_LINES, MAX_CAPTURE_LINES]`` rather than validated, because it arrives
-            from a hand-editable configuration file and an out-of-range ring must not raise;
-            ``0`` retains nothing.
-        level: The handler level. Records below it are dropped by :meth:`emit`; the default
-            ``NOTSET`` lets the ``foundry`` logger's own level -- set by
-            ``foundry.obs.logging.configure`` -- be the effective filter, which is why that call
-            precedes the first attach in the session bootstrap.
-
-    The ring is a :class:`logging.Handler` so it receives records by being attached to a logger,
-    normally the ``foundry`` logger through :func:`foundry.obs.logging.attach_handler`, and it
-    holds nothing beyond a :class:`collections.deque` bounded at construction. It is a per-test
-    object: a caller attaches it before the test and calls :meth:`detach` and :meth:`clear` at
-    teardown, so neither a record nor a large object a record's ``args`` points at outlives the
-    test that produced it.
-
-    ``logging.handlers.BufferingHandler`` is the same shape but the wrong class here: its
-    ``flush`` empties the buffer wherever a handler decides to flush, which would silently lose
-    the tail this class exists to keep.
+    Its capacity is clamped rather than validated, as it may come from a hand-edited file, and
+    ``level`` defaults to ``NOTSET`` so the ``foundry`` logger's level -- set by
+    :func:`foundry.obs.logging.configure` before the first attach -- filters. The caller attaches it
+    per test and detaches at teardown; ``BufferingHandler``'s ``flush`` would lose the tail.
     """
 
     def __init__(
@@ -227,13 +139,11 @@ class LogRing(logging.Handler):
         return len(self._records)
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Append ``record`` to the ring, discarding the oldest record once it is full.
+        """Append ``record`` to the ring, discarding the oldest once it is full.
 
-        Nothing here may raise, and nothing here may log: an exception escaping ``emit`` would
-        surface as a logging error on a test that may otherwise pass, and logging from inside a
-        handler attached to the ``foundry`` logger would re-enter this same handler. A malformed
-        record -- one missing ``levelno``, or an ``args`` the deque cannot reference -- leaves the
-        ring exactly as it was and returns.
+        Nothing here may raise or log: a fault would become a logging error on a passing test, and
+        logging from a handler on the ``foundry`` logger would re-enter this one, so a malformed
+        record leaves the ring as it was (failure isolation, AAP 0.1.2).
         """
         try:
             if record.levelno < self.level:
@@ -245,14 +155,8 @@ class LogRing(logging.Handler):
     def tail(self, n: int | None = None) -> tuple[str, ...]:
         """Return up to ``n`` formatted lines, oldest first.
 
-        Args:
-            n: How many of the newest lines to return. ``None`` returns every retained line, ``0``
-                and any negative value return ``()``, and a value larger than the ring returns
-                what is there without raising.
-
         Returns:
-            One string per record, formatted by :func:`format_record`, newest last so a report
-            panel reads chronologically.
+            One string per selected record, newest last; ``0`` and negative values ``()``.
         """
         records = tuple(self._records)
         if n is None:
@@ -264,35 +168,18 @@ class LogRing(logging.Handler):
         self._records.clear()
 
     def flush(self) -> None:
-        """Retain the ring's contents: this handler has nothing to flush.
-
-        The base contract exists for buffered handlers that push bytes to a stream. The ring
-        pushes nothing, and emptying it here -- as ``logging.handlers.BufferingHandler.flush``
-        does -- would discard exactly the tail a failed test needs, so
-        ``logging.shutdown``'s flush leaves the ring untouched.
-        """
+        """Retain the ring's contents: emptying it would discard the tail a failed test needs."""
 
     def close(self) -> None:
-        """Release the ring's records and deregister it from the logging machinery.
-
-        The deque is emptied first so that a closed ring references no ``LogRecord`` even if the
-        base implementation raises while removing this handler from the module-level handler
-        registry.
-        """
+        """Release the ring's records and deregister it; the deque empties first."""
         self.clear()
         super().close()
 
     def attach(self, logger: logging.Logger | None = None) -> None:
         """Attach this ring as a handler, on the ``foundry`` logger by default.
 
-        Args:
-            logger: The logger to attach to. ``None`` means the ``foundry`` logger, whose handler
-                list is modified only through :func:`foundry.obs.logging.attach_handler` so that
-                it has exactly one owner. Any other logger is a caller's own -- a unit test
-                capturing a private logger, for instance -- and is attached directly, since
-                ``foundry.obs.logging`` deliberately governs the ``foundry`` logger alone.
-
-        Attaching twice changes nothing, and no other logger is touched in either case.
+        ``None`` means the ``foundry`` logger, whose handler list only
+        :func:`foundry.obs.logging.attach_handler` may touch; any other logger is the caller's own.
         """
         if logger is None or logger is get_logger():
             attach_handler(self)
@@ -303,12 +190,8 @@ class LogRing(logging.Handler):
     def detach(self, logger: logging.Logger | None = None) -> None:
         """Detach this ring from the logger :meth:`attach` installed it on.
 
-        Args:
-            logger: The logger to detach from, resolving to the same target :meth:`attach` uses.
-                Detaching from a logger that never had this ring, or detaching twice, is a no-op.
-
-        The retained records survive detaching, so a caller can detach and still read the tail
-        into ``log_tail.log`` afterwards; :meth:`clear` or :meth:`close` is what releases them.
+        The retained records survive detaching, so a caller can still read the tail into
+        ``log_tail.log``; :meth:`clear` or :meth:`close` releases them.
         """
         if logger is None or logger is get_logger():
             detach_handler(self)
@@ -334,17 +217,8 @@ class LogRing(logging.Handler):
 def tail_lines(records: Sequence[logging.LogRecord], n: int) -> tuple[str, ...]:
     """Format the last ``n`` of ``records``, oldest first.
 
-    Args:
-        records: The records to format, in the order they were logged.
-        n: How many of the newest records to format. ``0`` and negative values yield ``()``, and
-            a value larger than ``len(records)`` formats every record without raising.
-
-    Returns:
-        One string per selected record, produced by :func:`format_record`, the newest last.
-
-    This is the pure helper :meth:`LogRing.tail` and the ``user_properties`` ferry in
-    ``foundry.execution.state`` share, so the format a worker ships across the xdist boundary and
-    the tail a report panel renders are produced by the same code and cannot drift.
+    One string per selected record from ``format_record``, newest last; ``0`` and negative values
+    yield ``()``. Shared by :meth:`LogRing.tail` and the ``user_properties`` ferry, so both agree.
     """
     if n <= 0:
         return ()

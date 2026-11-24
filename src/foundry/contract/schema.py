@@ -1,41 +1,24 @@
 """Schema documents: where they live, how they are parsed, what they may reference.
 
-Every schema Foundry validates against arrives in one of three shapes -- an in-memory
-:class:`~collections.abc.Mapping`, a ``str`` path, or a :class:`~pathlib.Path` -- and
-:func:`load_schema` turns all three into a JSON Schema document. A ``.json`` file is decoded with
-the standard library's :mod:`json`, a ``.yaml`` or ``.yml`` file with ``yaml.safe_load``, and an
-extension outside :data:`SUPPORTED_SCHEMA_SUFFIXES` is refused with the supported set spelled out
-in the failure, so a caller learns what is accepted from the error itself.
+:func:`load_schema` turns any of the three :data:`SchemaSource` shapes into a JSON Schema
+document: ``.json`` through :mod:`json`, ``.yaml``/``.yml`` through ``yaml.safe_load``, and every
+other extension refused with :data:`SUPPORTED_SCHEMA_SUFFIXES` named in the failure.
 
-Two safety rules are enforced here rather than left to the validator.
+Two safety rules hold here rather than in the validator, on every path. YAML is reachable only
+through ``yaml.safe_load``, imported inside that branch, so importing this module costs the
+standard library alone. A ``$ref``, ``$dynamicRef`` or ``$recursiveRef`` must be a fragment of
+the same document: anything else would make :mod:`jsonschema` retrieve a document, which means
+opening a socket, and Foundry runs offline.
 
-Safe deserialisation
-    YAML is reachable only through ``yaml.safe_load``. ``yaml.load`` is never called and no
-    loader or constructor is registered, so a schema file can build no Python object beyond the
-    primitives, lists and mappings a safe load builds. ``yaml`` is imported inside that branch
-    and never at module scope, so importing this module costs the standard library alone -- it
-    sits on the import path the HTTP layer loads at every ``pytest`` startup.
-
-Fragment-only references
-    A document may reference itself through ``$ref``, ``$dynamicRef`` or ``$recursiveRef`` only
-    with a fragment (``#/$defs/Price``). Anything else -- an ``https`` URL above all -- would
-    make :mod:`jsonschema` retrieve a document, which means opening a socket; Foundry runs
-    offline and its suite fails on a non-loopback connection, so such a reference is rejected
-    here, before a validator ever sees the document. ``$id`` is not inspected: it names the
-    document and triggers no retrieval.
-
-Every fault is a :class:`foundry.core.exceptions.ContractError` carrying ``json_path="$"``. The
-``json_path`` attribute locates a violation inside an *instance*, and a fault in the schema
-document has no instance location, so the actionable text goes in ``detail``, a one-line summary
-in the message, and the next step in ``hint``. No builtin and no third-party exception crosses
-this module's boundary.
-
-Importing this module defines names and does nothing else: no file is read, no environment
-variable is consulted, no logger is configured and no document is cached, so a second load of the
-same path always reflects the bytes on disk at that moment. The one record this module emits -- a
-``DEBUG`` line naming the schema path and the suffix, written before the file is read -- goes
-through :func:`foundry.obs.events.log_event`, imported inside :func:`_parse_by_suffix` so that
-this module's module-scope imports stay inside the set AAP 0.4.8 lists for ``foundry.contract``.
+Every fault is a :class:`foundry.core.exceptions.ContractError` carrying ``json_path="$"``: that
+attribute locates a violation inside an *instance* and a schema fault has none, so the summary goes
+in the message, the actionable text in ``detail`` and the next step in ``hint``. No builtin or
+third-party exception crosses this module's boundary, and ``$id`` is not inspected, since it names
+the document and triggers no retrieval. Importing this module reads no file, consults no
+environment variable, caches no document and configures no logger, so a second load reflects the
+bytes on disk; its one ``DEBUG`` record, naming path and suffix before the read, goes through
+:func:`foundry.obs.events.log_event`, imported inside :func:`_parse_by_suffix` so that module-scope
+imports stay inside the set AAP 0.4.8 lists for ``foundry.contract``.
 """
 
 from __future__ import annotations
@@ -72,18 +55,9 @@ _REFERENCE_KEYWORDS: Final[frozenset[str]] = frozenset({"$ref", "$dynamicRef", "
 def _error(detail: str, *, summary: str | None = None, hint: str | None = None) -> ContractError:
     """Build the :class:`~foundry.core.exceptions.ContractError` this module reports faults with.
 
-    Centralising construction is what makes one rule hold for every schema fault: ``json_path``
-    is the document root, because the fault is in the schema rather than in an instance, and the
-    specifics a caller branches on live in ``detail``.
-
-    Args:
-        detail: What went wrong, in the terms of the schema document at fault.
-        summary: The one-line message the exception renders; the detail when omitted.
-        hint: An actionable next step, or ``None``.
-
-    Returns:
-        The exception to raise, never raised here: each caller raises it inside its own
-        ``except`` clause so the original cause stays chained.
+    ``json_path`` is always the document root and ``summary`` defaults to ``detail``, so one rule
+    holds for every schema fault. The exception is returned, never raised here: each caller raises
+    it inside its own ``except`` clause so the original cause stays chained.
     """
     return ContractError(summary or detail, json_path=_DOCUMENT_ROOT, detail=detail, hint=hint)
 
@@ -91,25 +65,17 @@ def _error(detail: str, *, summary: str | None = None, hint: str | None = None) 
 def resolve_schema_path(source: str | Path, *, base_dir: Path | None = None) -> Path:
     """Resolve a schema path to an absolute one, refusing a path that escapes ``base_dir``.
 
-    A relative path is joined onto ``base_dir`` when one is given and resolved against
-    :func:`pathlib.Path.cwd` otherwise; an absolute path is used as given. ``~`` is *not*
-    expanded: a leading ``~`` in a configuration value would mean a different file on every
-    machine that ran the suite, so it stays a literal directory name here.
-
-    The result is passed through :meth:`pathlib.Path.resolve`, so ``..`` segments and symlinks
-    are eliminated before any check. When ``base_dir`` is supplied -- :mod:`foundry.data` passes
-    ``data.dir`` -- the resolved path must stay inside it, which is what stops a data file from
-    naming a schema anywhere on the disk. When ``base_dir`` is ``None`` no containment applies,
-    because a caller may legitimately point at a schema it owns elsewhere.
-
-    Nothing is opened, read or tested for writability here: this function is path arithmetic,
-    and the caller decides when to touch the filesystem.
+    A relative path is joined onto ``base_dir``, or onto :func:`pathlib.Path.cwd` when ``base_dir``
+    is ``None``, and an absolute one is used as given; the result passes through
+    :meth:`pathlib.Path.resolve`, so ``..`` segments and symlinks are gone before the containment
+    check -- which is what stops a data file from naming a schema anywhere on the disk. ``~`` is
+    deliberately not expanded: it would name a different file on every machine. Nothing is opened
+    here; this function is path arithmetic.
 
     Args:
         source: A path to a schema file, absolute or relative.
-        base_dir: The directory a relative path is resolved against, and the directory the
-            resolved path must stay inside; ``None`` resolves against the working directory and
-            imposes no containment.
+        base_dir: The directory a relative path is resolved against and must stay inside, or
+            ``None`` to resolve against the working directory with no containment.
 
     Returns:
         The resolved, absolute path.
@@ -135,32 +101,23 @@ def resolve_schema_path(source: str | Path, *, base_dir: Path | None = None) -> 
 def load_schema(source: SchemaSource, *, base_dir: Path | None = None) -> Mapping[str, object]:
     """Load a JSON Schema document from a mapping in memory or from a ``.json``/``.yaml`` file.
 
-    The three accepted shapes are a :class:`~collections.abc.Mapping`, a ``str`` path and a
-    :class:`~pathlib.Path`. A mapping is returned as the caller's own object -- not copied and
-    not rewritten, because the caller owns it and a validator treats a schema as read-only -- so
-    a caller that mutates its document between two validated calls sees the change take effect.
-
-    Both safety rules of this module apply on every path: YAML is parsed with ``yaml.safe_load``
-    only, and a reference that is not a fragment of the same document is refused, so no load can
-    reach the network. An empty document (``{}``) is a valid schema that matches everything, and
-    is returned rather than rejected.
+    A mapping is returned by identity rather than copied, because the caller owns it and a
+    validator treats a schema as read-only. Both safety rules of this module apply on every path,
+    and an empty document is a valid schema that matches everything.
 
     Args:
         source: The schema document itself, or the path to the file that holds it.
-        base_dir: The directory a relative path is resolved against and must stay inside;
-            ``None`` resolves against the working directory and imposes no containment.
+        base_dir: The directory a relative path is resolved against and must stay inside, or
+            ``None`` to resolve against the working directory with no containment.
 
     Returns:
-        The schema document, as the mapping the caller passed or as the parsed file. It is never
-        a copy of a caller's mapping.
+        The schema document: the caller's own mapping, or the parsed file.
 
     Raises:
-        ContractError: When the file does not exist, cannot be read, is not valid UTF-8, is not
-            valid JSON or YAML, or has an extension outside :data:`SUPPORTED_SCHEMA_SUFFIXES`;
-            when the parsed document is not a mapping; when the path escapes ``base_dir``; when
-            a ``$ref``, ``$dynamicRef`` or ``$recursiveRef`` is anything but a ``#`` fragment;
-            and when the source is none of the three accepted shapes. Every one of them reports
-            ``json_path="$"`` and carries the specifics in ``detail``.
+        ContractError: When the file does not exist, cannot be read or decoded, is not a mapping,
+            has an extension outside :data:`SUPPORTED_SCHEMA_SUFFIXES`, escapes ``base_dir``,
+            holds a reference that is not a ``#`` fragment, or when ``source`` is none of the
+            three accepted shapes. Each reports ``json_path="$"`` with the specifics in ``detail``.
     """
     try:
         return _load_schema(source, base_dir=base_dir)
@@ -177,15 +134,11 @@ def load_schema(source: SchemaSource, *, base_dir: Path | None = None) -> Mappin
 def declared_draft(document: Mapping[str, object]) -> str | None:
     """Return the draft a schema declares in its ``$schema`` keyword.
 
-    The URI is read, never validated: selecting a validator and rejecting a draft it cannot
-    support belongs to :mod:`foundry.contract.validate`, which reports the draft it refused.
-
-    Args:
-        document: A schema document, as :func:`load_schema` returns it.
+    The URI is read, never validated: choosing a validator and rejecting a draft it cannot support
+    belongs to :mod:`foundry.contract.validate`, which reports the draft it refused.
 
     Returns:
-        The declared draft URI, or ``None`` when the document declares none or declares a value
-        that is not a string.
+        The declared draft URI, or ``None`` when the document declares none or a non-string value.
     """
     declared = document.get("$schema")
     return declared if isinstance(declared, str) else None
@@ -193,13 +146,6 @@ def declared_draft(document: Mapping[str, object]) -> str | None:
 
 def _load_schema(source: SchemaSource, *, base_dir: Path | None) -> Mapping[str, object]:
     """Dispatch on the shape of ``source`` and return the schema document.
-
-    Args:
-        source: The mapping or the path to load.
-        base_dir: The directory a relative path is resolved against and must stay inside.
-
-    Returns:
-        The schema document; a caller's mapping is returned by identity.
 
     Raises:
         ContractError: For every fault listed on :func:`load_schema`.
@@ -227,18 +173,12 @@ def _load_schema(source: SchemaSource, *, base_dir: Path | None) -> Mapping[str,
 def _ensure_object(document: object, *, origin: Path | None) -> Mapping[str, object]:
     """Return ``document`` typed as a schema object, or raise.
 
-    Args:
-        document: The parsed document, or any value a loosely typed caller passed as one.
-        origin: The file the document came from and is named in the failure, or ``None`` for a
-            document that was passed in memory.
-
-    Returns:
-        The same object, unchanged. An empty mapping is a schema that matches everything and is
-        returned like any other.
+    ``origin`` is the file the document came from and is named in the failure, or ``None`` for a
+    document passed in memory. An empty mapping is a schema that matches everything.
 
     Raises:
-        ContractError: When ``document`` is not a mapping -- a list, a scalar, or ``None`` from
-            an empty YAML file.
+        ContractError: When ``document`` is not a mapping -- a list, a scalar, or ``None`` from an
+            empty YAML file.
     """
     if isinstance(document, Mapping):
         return cast("Mapping[str, object]", document)
@@ -256,12 +196,8 @@ def _ensure_object(document: object, *, origin: Path | None) -> Mapping[str, obj
 def _parse_by_suffix(path: Path) -> object:
     """Parse the file at ``path`` according to its lower-cased extension.
 
-    Args:
-        path: The resolved path of the schema file.
-
     Returns:
-        Whatever the parser produced. It is typed ``object`` because its shape is settled by
-        :func:`_ensure_object`, not by the extension.
+        Whatever the parser produced; its shape is settled by :func:`_ensure_object`.
 
     Raises:
         ContractError: When the extension is not one of :data:`SUPPORTED_SCHEMA_SUFFIXES`, the
@@ -294,12 +230,6 @@ def _parse_by_suffix(path: Path) -> object:
 def _read_text(path: Path) -> str:
     """Return the UTF-8 text of ``path``, reporting every read failure as a contract violation.
 
-    Args:
-        path: The resolved path of the schema file.
-
-    Returns:
-        The file's contents as text.
-
     Raises:
         ContractError: When the file does not exist, is a directory or is otherwise unreadable,
             or when its bytes are not valid UTF-8.
@@ -331,13 +261,6 @@ def _read_text(path: Path) -> str:
 def _parse_json(text: str, path: Path) -> object:
     """Decode a JSON schema document.
 
-    Args:
-        text: The file's contents.
-        path: The file the text came from, named in a failure.
-
-    Returns:
-        The decoded document.
-
     Raises:
         ContractError: When the text is not one valid JSON document, naming the line and column
             the decoder stopped at.
@@ -357,24 +280,14 @@ def _parse_json(text: str, path: Path) -> object:
 def _parse_yaml(text: str, path: Path) -> object:
     """Decode a YAML schema document with ``yaml.safe_load`` and nothing else.
 
-    ``yaml`` is imported here rather than at module scope. :mod:`foundry.http` imports this
-    module, so a module-scope import would be paid on every ``pytest`` startup, and the YAML
-    branch runs only for a document that actually is YAML text.
-
-    No ``Loader`` argument is passed and no constructor is registered, so a document can
-    construct only the primitives, lists and mappings a safe load builds -- never a Python
-    object, and never a callable.
-
-    Args:
-        text: The file's contents.
-        path: The file the text came from, named in a failure.
-
-    Returns:
-        The decoded document, which is ``None`` for an empty document.
+    ``yaml`` is imported here rather than at module scope, because :mod:`foundry.http` imports this
+    module and the YAML branch runs only for a document that actually is YAML text. No ``Loader``
+    argument is passed and no constructor is registered, so a document constructs only the
+    primitives, lists and mappings a safe load builds -- never a Python object or a callable.
 
     Raises:
-        ContractError: When the text is not valid YAML, naming the line and column of the mark
-            the parser stopped at when it recorded one.
+        ContractError: When the text is not valid YAML, naming the line and column of the mark the
+            parser stopped at when it recorded one.
     """
     import yaml
 
@@ -392,18 +305,13 @@ def _parse_yaml(text: str, path: Path) -> object:
 def _yaml_location(error: object) -> str:
     """Render the line and column a YAML parser fault points at.
 
-    A ``MarkedYAMLError`` carries a ``problem_mark`` whose ``line`` and ``column`` are
-    zero-based; a plain ``YAMLError`` carries neither. The mark is read with :func:`getattr`
-    instead of an annotation because naming the type would need ``yaml`` imported when this
-    module loads, which the startup budget forbids.
-
-    Args:
-        error: The exception the safe loader raised.
+    A ``MarkedYAMLError`` carries a zero-based ``problem_mark`` and a plain ``YAMLError`` carries
+    none, so the mark is read with :func:`getattr`: naming the type would need ``yaml`` imported
+    when this module loads, which the startup budget forbids.
 
     Returns:
-        ``line 3, column 9: mapping values are not allowed here`` where the marks exist, and the
-        parser's problem text -- or the exception's class name -- when they do not. Counts are
-        1-based, as an editor shows them.
+        ``line 3, column 9: <problem>`` where the marks exist, and the parser's problem text -- or
+        the exception's class name -- when they do not. Counts are 1-based, as an editor shows.
     """
     problem = getattr(error, "problem", None)
     mark = getattr(error, "problem_mark", None)
@@ -418,14 +326,6 @@ def _yaml_location(error: object) -> str:
 def _reject_remote_refs(document: object, *, origin: Path | None) -> None:
     """Refuse every reference in ``document`` that is not a fragment of the same document.
 
-    Args:
-        document: The schema document, in memory.
-        origin: The file the document came from, or ``None`` for a document passed in memory.
-
-    Returns:
-        None when every reference is a ``#`` fragment. The function reports its result through
-        the exception it raises.
-
     Raises:
         ContractError: When a ``$ref``, ``$dynamicRef`` or ``$recursiveRef`` value would make a
             validator retrieve another document.
@@ -436,13 +336,7 @@ def _reject_remote_refs(document: object, *, origin: Path | None) -> None:
 def _walk(node: object, *, path: str, origin: Path | None) -> None:
     """Check every reference inside ``node``, descending through mappings and lists.
 
-    Args:
-        node: The document, or any value nested inside it.
-        path: The JSON path of ``node``, so a rejected reference is located in the message.
-        origin: The file the document came from, or ``None``.
-
-    Returns:
-        None.
+    ``path`` is the JSON path of ``node``, so a rejected reference is located in the message.
 
     Raises:
         ContractError: When a reference in ``node`` is not a fragment.
@@ -461,14 +355,8 @@ def _walk(node: object, *, path: str, origin: Path | None) -> None:
 def _check_reference(value: object, *, path: str, origin: Path | None) -> None:
     """Raise unless ``value`` names a fragment of the document holding it.
 
-    Args:
-        value: The value of a reference keyword.
-        path: The JSON path of that keyword, rendered into the message so the reader can find
-            it in a document of any size.
-        origin: The file the document came from, named in the hint, or ``None``.
-
-    Returns:
-        None when the reference is a string beginning with ``#``.
+    ``path`` is the JSON path of the reference keyword, rendered into the message so the reader
+    can find it in a document of any size.
 
     Raises:
         ContractError: When the reference is a URL, a bare file name, a non-string, or anything
@@ -490,15 +378,10 @@ def _check_reference(value: object, *, path: str, origin: Path | None) -> None:
 def _child(path: str, key: object) -> str:
     """Return the JSON path of ``key`` inside the object at ``path``.
 
-    Args:
-        path: The JSON path of the object holding ``key``.
-        key: The key to descend to, which need not be a string in a document a caller passed in
-            memory.
-
     Returns:
         The child path: ``$.properties.items`` for a plain name, ``$.items.$ref`` for a schema
-        keyword, ``$["a.b"]`` for a key a dot would make ambiguous, and ``$[3]`` for a
-        non-string key.
+        keyword, ``$["a.b"]`` for a key a dot would make ambiguous, and ``$[3]`` for a non-string
+        key.
     """
     if isinstance(key, str) and _is_dotted_key(key):
         return f"{path}.{key}"
@@ -508,14 +391,11 @@ def _child(path: str, key: object) -> str:
 def _is_dotted_key(key: str) -> bool:
     """Return whether ``key`` renders in dotted form rather than as a quoted subscript.
 
-    Args:
-        key: A key of a JSON object.
-
     Returns:
         ``True`` for a name that reads as a Python identifier and is not a keyword, and for a
-        schema keyword such as ``$ref`` or ``@context`` whose leading ``$`` or ``@`` is
-        punctuation rather than part of the name; ``False`` for anything a dot would make
-        ambiguous, such as an empty key or ``a.b``.
+        schema keyword such as ``$ref`` or ``@context`` whose leading punctuation is not part of
+        the name; ``False`` for anything a dot would make ambiguous, such as an empty key or
+        ``a.b``.
     """
     if not key:
         return False
