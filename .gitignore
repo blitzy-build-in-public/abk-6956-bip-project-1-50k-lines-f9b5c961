@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# Build output
+dist/
+build/
+*.whl
+*.tar.gz
+
+# Foundry run output (written into the invocation directory by test runs)
+artifacts/
+results.json
+junit.xml
+report.html
+cassettes/
+!examples/checkout/cassettes/
+!examples/checkout/cassettes/**
+
+# Tool caches and reports
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.json
+.coverage-*
+htmlcov/
+*.junit.xml
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store

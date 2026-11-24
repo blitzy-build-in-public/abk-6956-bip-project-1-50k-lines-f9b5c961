@@ -1,0 +1,111 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pytest-foundry"
+version = "0.1.0"
+description = "Layered configuration, HTTP helpers, contract validation, data-driven cases, record/replay, retries, quarantine, sharding, artifact capture and reporting for pytest suites."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Foundry contributors" }]
+keywords = ["pytest", "plugin", "testing", "http", "contract", "record-replay", "sharding"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: Pytest",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
+]
+dependencies = [
+  "pytest>=8.2,<9",
+  "httpx>=0.27,<0.28",
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.2,<3",
+  "click>=8.1,<9",
+  "rich>=13.7,<14",
+  "Jinja2>=3.1,<4",
+  "PyYAML>=6.0.1,<7",
+  "jsonschema>=4.22,<5",
+  "Faker>=25,<26",
+  "SQLAlchemy>=2.0.30,<2.1",
+  "pytest-xdist>=3.6,<4",
+  "pytest-timeout>=2.3,<3",
+  "tomli-w>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.5,<1",
+  "mypy>=1.10,<2",
+  "pytest-cov>=5,<6",
+  "types-PyYAML",
+  "types-jsonschema",
+  "types-toml",
+  "build>=1.2",
+]
+
+[project.scripts]
+foundry = "foundry.cli.main:main"
+
+[project.entry-points.pytest11]
+foundry = "foundry.plugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/foundry"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/foundry",
+  "tests",
+  "examples",
+  "scripts",
+  "docs",
+  "README.md",
+  "CHANGELOG.md",
+  "LICENSE",
+  "pyproject.toml",
+  "uv.lock",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "examples"]
+extend-exclude = ["blitzy"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "PTH", "D"]
+# D213 is mutually exclusive with D212, and D203 with D211; pick the D212/D211
+# pair so ruff does not emit its "incompatible rules" warning on every run.
+ignore = ["D213", "D203"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["foundry"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+show_error_codes = true
+files = ["src/foundry"]
+
+[tool.pytest.ini_options]
+minversion = "8.2"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["foundry"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
