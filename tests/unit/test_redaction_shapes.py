@@ -24,6 +24,10 @@ What is pinned here, all of it through the public engine:
   echoed in an unlisted header is masked while a media type, a date or an identifier is untouched;
 * a second pass over masked text produces that text again, the property the engine's own comments
   give for ``_redact_header_value``, so no sink that re-scans its own output can re-expose a value;
+* a failure message carrying many ``name: text`` prefixes is scrubbed whole, and one that carries
+  more than the engine descends stops at :data:`MAX_DEPTH` and is marked with
+  :data:`NESTING_TRUNCATION_MARKER`, so text dropped for its depth never reads as a scrubbed secret
+  (AAP 0.4.6, AAP 0.7.4);
 * the cassette store names a pair-list key or a header whose value it scrubbed in the document's
   ``redacted_keys``, because AAP 0.4.6 has that field record what was scrubbed, and it still stores
   an unchanged header verbatim;
@@ -51,7 +55,13 @@ import pytest
 
 from foundry.cassette import CassetteStore, Interaction, RecordedRequest, RecordedResponse
 from foundry.cassette.models import normalise_query
-from foundry.obs.redaction import DEFAULT_HEADER_DENY_LIST, MAX_DEPTH, REDACTED, default_redactor
+from foundry.obs.redaction import (
+    DEFAULT_HEADER_DENY_LIST,
+    MAX_DEPTH,
+    NESTING_TRUNCATION_MARKER,
+    REDACTED,
+    default_redactor,
+)
 
 # A value no redacted form may contain, distinctive enough that a match is a real leak.
 _SENTINEL: Final[str] = "sentinel-shapes-4a91"
@@ -281,7 +291,7 @@ def test_a_kept_part_whose_body_holds_no_nested_part_is_left_intact(body: str) -
 
 
 #: One level past the deepest descent :data:`MAX_DEPTH` allows, so the cap is what ends the walk
-#: rather than the shape of the body: each kept part costs one level, and the cap is eight.
+#: rather than the shape of the body: each kept part costs one level, and :data:`MAX_DEPTH` is it.
 _OVERNESTED_LEVELS: Final[int] = MAX_DEPTH + 2
 
 
@@ -479,6 +489,66 @@ def test_a_second_pass_over_masked_text_changes_nothing(text: str) -> None:
     once = redactor.text(text.replace("$s", _SENTINEL))
 
     assert redactor.text(once) == once
+
+
+# --- A name: text chain in a failure message (AAP 0.4.6, AAP 0.7.4) --------
+
+#: One sentence of the long failure message, in the shape an assertion writes it: the ``name:``
+#: prefix the header-line pass recognises, then a readable tail that pass keeps.
+_MESSAGE_SENTENCE: Final[str] = (
+    "assertion failed: the checkout total was recomputed from the item rows and "
+    "matched the expected amount"
+)
+
+#: The message the finding measured: nineteen ``name: text`` prefixes on one line, 2062 characters,
+#: which an engine descending one level per prefix stored and rendered as its first 885 characters
+#: ending in the marker a scrubbed secret leaves.
+_LONG_MESSAGE: Final[str] = "".join(f"{_MESSAGE_SENTENCE} ({number}). " for number in range(1, 20))
+
+#: A ``name=value`` chain whose values run unbroken to the end of the text, so every pair it keeps
+#: costs one descent of the whole remainder: four thousand pairs, then the one secret-bearing pair
+#: the engine has to reach and the value behind it.
+_UNBROKEN_CHAIN: Final[str] = "a=" * 4000
+
+
+def test_a_long_message_of_name_text_fragments_survives_the_scrub_whole() -> None:
+    """A recorded message reaches the document whole, however many ``name: text`` prefixes it holds.
+
+    The engine used to stop after eight prefixes, so the ninth replaced every character left on the
+    line with :data:`REDACTED`: a 2062-character failure message was stored in ``results.json`` and
+    shown in the report's panel as 885 characters ending in the marker a scrubbed secret leaves,
+    which reads as a masked credential rather than as the assertion that failed (AAP 0.4.6, 0.7.4).
+    Nineteen prefixes stay inside the depth the engine now descends, and the second scrub pins the
+    idempotence every sink relies on when it re-scans its own output.
+    """
+    redactor = default_redactor()
+
+    assert len(_LONG_MESSAGE) > 2000, "the message must be long enough to trip the old depth guard"
+    scrubbed = redactor.text(_LONG_MESSAGE)
+
+    assert scrubbed == _LONG_MESSAGE
+    assert REDACTED not in scrubbed
+    assert redactor.text(scrubbed) == scrubbed
+
+
+def test_a_chain_past_the_nesting_depth_cap_is_masked_and_marked_as_dropped() -> None:
+    """Past the cap the text is masked and marked, so a dropped tail never reads as a secret.
+
+    A chain of pairs whose values run unbroken to the end of the text is the shape that costs one
+    descent of the whole remainder per pair, so the engine stops at :data:`MAX_DEPTH` pairs, masks
+    what is left and appends :data:`NESTING_TRUNCATION_MARKER`: a reader sees that text was dropped
+    instead of the bare :data:`REDACTED` a scrubbed credential leaves behind (AAP 0.4.6, 0.7.4).
+    The value behind the last pair stays out of the result, and a second scrub returns it unchanged.
+    """
+    redactor = default_redactor()
+    text = f"{_UNBROKEN_CHAIN}token={_SENTINEL}"
+
+    scrubbed = redactor.text(text)
+
+    assert _SENTINEL not in scrubbed
+    assert scrubbed.endswith(f"{REDACTED} {NESTING_TRUNCATION_MARKER}")
+    assert f"{REDACTED} {NESTING_TRUNCATION_MARKER}" in scrubbed
+    assert redactor.text(scrubbed) == scrubbed
 
 
 # --- The cassette's redacted_keys (AAP 0.4.6) ------------------------------

@@ -49,29 +49,31 @@
         <p>profile={{ ctx.profile }}, run {{ ctx.run_id }}</p>
       </div>
       {% else %}
-      <table class="results">
-        <caption>test results, one row per test, sorted by node id</caption>
-        <thead>
-          <tr>
-            <th scope="col">test</th>
-            <th scope="col">outcome</th>
-            <th scope="col">duration</th>
-            <th scope="col">profile</th>
-            <th scope="col">markers</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in ctx.rows %}
-          <tr>
-            <th scope="row" class="nodeid">{{ row.nodeid }}</th>
-            <td><span class="outcome {{ row.css_class }}">{{ row.outcome_value }}</span></td>
-            <td class="num">{{ row.duration_display }}</td>
-            <td>{{ row.profile }}</td>
-            <td>{{ row.markers | join(', ') if row.markers else '—' }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="results">
+          <caption>test results, one row per test, sorted by node id</caption>
+          <thead>
+            <tr>
+              <th scope="col">test</th>
+              <th scope="col">outcome</th>
+              <th scope="col">duration</th>
+              <th scope="col">profile</th>
+              <th scope="col">markers</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in ctx.rows %}
+            <tr>
+              <th scope="row" class="nodeid">{{ row.nodeid }}</th>
+              <td><span class="outcome {{ row.css_class }}">{{ row.outcome_value }}</span></td>
+              <td class="num">{{ row.duration_display }}</td>
+              <td>{{ row.profile }}</td>
+              <td>{{ row.markers | join(', ') if row.markers else '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
       {% endif %}
       {% if ctx.quarantined %}
       <section class="quarantined" aria-labelledby="quarantined-heading">

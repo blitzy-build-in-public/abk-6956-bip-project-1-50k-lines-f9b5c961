@@ -41,7 +41,7 @@ from typing import cast
 import pytest
 
 from foundry.core.exceptions import ElementTypeError
-from foundry.reporting import renderers, store
+from foundry.reporting import html, renderers, store
 from foundry.reporting.record import FailureRecord, Outcome, ResultElement, ResultRecord
 
 # --- Fixed fixtures --------------------------------------------------------
@@ -67,6 +67,15 @@ _LONE_SURROGATE_MESSAGE = f"path=/tmp/{_LONE_SURROGATE}bad: failure"
 
 _UNENCODABLE_REPORT_NAME = f"report{_LONE_SURROGATE}.json"
 """A report file name carrying that surrogate, as a path derived from a node id can."""
+
+_MESSAGE_SENTENCE = (
+    "assertion failed: the checkout total was recomputed from the item rows and "
+    "matched the expected amount"
+)
+"""The sentence a long failure message repeats: a ``name: text`` prefix and a readable tail."""
+
+_LONG_MESSAGE = "".join(f"{_MESSAGE_SENTENCE} ({number}). " for number in range(1, 20))
+"""Nineteen of those prefixes on one line -- 2062 characters, the message qa2-i4 measured."""
 
 
 def _record_for(name: str, **overrides: object) -> ResultRecord:
@@ -281,3 +290,34 @@ def test_an_unencodable_path_is_isolated(tmp_path: Path, monkeypatch: pytest.Mon
     assert head.endswith(f"could not write report file {tmp_path / 'report'}")
     assert tail.startswith(".json")
     assert list(tmp_path.iterdir()) == []
+
+
+# --- A long message at both sinks (qa2-i4, AAP 0.4.6, AAP 0.7.4) -----------
+
+
+def test_a_long_failure_message_reaches_both_sinks_whole(tmp_path: Path) -> None:
+    """qa2-i4: the message a run records is what ``results.json`` holds and what the panel shows.
+
+    The redaction engine descended one level per ``name: text`` prefix, so the tenth replaced the
+    rest of a one-line failure message with the redaction marker: a 2062-character message was
+    stored and rendered as its first 885 characters ending in ``***``, the shape a masked
+    credential leaves, with 1177 characters of the failure text gone. Both sinks the finding named
+    read the record's message as recorded (AAP 0.4.6, 0.7.4), so the assertions are byte-for-byte
+    equality with the recorded message and its presence in the rendered document, not a length or
+    a prefix that a truncated copy would also satisfy. The message carries no character Jinja
+    escapes, so the rendered copy is the message itself.
+    """
+    failed = _record_for(
+        "long_message",
+        outcome=Outcome.FAILED,
+        failures=(FailureRecord(phase="call", message=_LONG_MESSAGE),),
+    )
+    document = tmp_path / "results.json"
+
+    assert store.write([failed], document) == document
+    stored = json.loads(document.read_text(encoding="utf-8"))
+    rendered = html.render([failed], report_dir=tmp_path)
+
+    assert stored[0]["failures"][0]["message"] == _LONG_MESSAGE
+    assert rendered is not None
+    assert _LONG_MESSAGE in rendered

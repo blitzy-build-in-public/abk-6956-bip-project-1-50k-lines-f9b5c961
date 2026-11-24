@@ -52,6 +52,7 @@ CSS: Final[str] = """\
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --radius: 6px;
   --shadow: 0 1px 2px rgba(27, 31, 36, 0.08);
+  --accent-active: #0550ae;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -63,6 +64,8 @@ body {
 
 a { color: var(--accent); }
 a:hover { text-decoration: underline; }
+a:active { color: var(--accent-active); text-decoration: underline; }
+code { font-family: var(--font-mono); font-size: 13px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hidden { display: none; }
 
@@ -72,10 +75,8 @@ header.report-header {
 
 h1 { font-size: 24px; font-weight: 600; margin: 0 0 6px; }
 h2 { font-size: 18px; font-weight: 600; margin: 28px 0 12px; }
-h3 { font-size: 15px; font-weight: 600; margin: 18px 0 8px; }
 .meta { color: var(--muted); font-size: 13px; margin: 0; }
 .meta span { margin-right: 14px; white-space: nowrap; }
-.meta strong { color: var(--text); font-weight: 600; }
 
 /* Summary strip: one chip per outcome family, wrapping on a narrow window. */
 .summary {
@@ -116,7 +117,9 @@ html[data-foundry-js="enabled"] .controls { display: flex; }
 .controls button { background: var(--surface); cursor: pointer; }
 .controls button:hover { background: #eef0f3; }
 
-/* Results table: one row per test, sorted by node id, header pinned while scrolling. */
+/* Results table: one row per test, sorted by node id. The header pins while the page scrolls; the
+   narrow-window rules below make the table's own box a scroll container, and a box that scrolls
+   sideways cannot pin a descendant, so there the header travels with the table instead. */
 table.results { border-collapse: collapse; font-size: 14px; width: 100%; }
 
 table.results thead th {
@@ -132,7 +135,10 @@ table.results tbody th {
 table.results tbody th { font-weight: 400; text-align: left; }
 
 table.results tbody tr:hover { background: var(--surface); }
-table.results .num { font-variant-numeric: tabular-nums; text-align: right; }
+/* nowrap keeps a duration and its unit on one line, so tabular figures stay in one column. */
+table.results .num {
+  font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
+}
 table.results .nodeid { font-family: var(--font-mono); font-size: 13px; word-break: break-word; }
 
 /* One badge class per outcome value of the result record: nine in all. */
@@ -161,7 +167,7 @@ table.results .nodeid { font-family: var(--font-mono); font-size: 13px; word-bre
 .quarantined h2 { font-size: 16px; margin: 0 0 8px; }
 .quarantined ul { margin: 0; padding-left: 20px; }
 .quarantined li { margin: 4px 0; }
-.quarantined code { font-family: var(--font-mono); font-size: 13px; }
+.quarantined code { overflow-wrap: anywhere; }
 .note { color: var(--muted); font-size: 13px; }
 
 /* Failure panels: one per failure, expanded through native details/summary. */
@@ -170,8 +176,9 @@ table.results .nodeid { font-family: var(--font-mono); font-size: 13px; word-bre
   box-shadow: var(--shadow); margin: 0 0 16px; padding: 12px 16px;
 }
 
-.panel summary { cursor: pointer; font-weight: 600; }
+.panel summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
 .panel summary:hover { color: var(--accent); }
+.panel summary:active { color: var(--accent-active); }
 
 .panel dl {
   display: grid; gap: 4px 16px; grid-template-columns: max-content 1fr; margin: 12px 0 0;
@@ -179,7 +186,10 @@ table.results .nodeid { font-family: var(--font-mono); font-size: 13px; word-bre
 
 .panel dt { color: var(--muted); font-size: 13px; }
 .panel dd { font-family: var(--font-mono); font-size: 13px; margin: 0; word-break: break-word; }
-.panel p { margin: 8px 0 0; }
+.panel p { margin: 8px 0 0; overflow-wrap: anywhere; }
+
+/* Section lists: a run error can embed a long node id, so an entry wraps inside the column. */
+main > section li { overflow-wrap: anywhere; }
 
 details { margin: 0 0 16px; }
 summary { cursor: pointer; }
@@ -214,10 +224,29 @@ footer.report-footer {
   margin-top: 32px; padding-top: 12px;
 }
 
+/* A narrow window cannot hold five columns at their minimum widths without crushing the node id
+   column to a few characters per line, so below this width the table keeps the identifier column
+   readable at a fixed minimum, tightens its spacing, and scrolls sideways inside its own box
+   instead of widening the page: no column is dropped and nothing is pushed off the viewport. */
+@media (max-width: 768px) {
+  .table-scroll { overflow-x: auto; }
+  table.results { font-size: 13px; }
+  table.results thead th,
+  table.results tbody th,
+  table.results tbody td { padding: 6px 8px; }
+  table.results .nodeid { font-size: 12px; min-width: 20ch; }
+  /* A box that scrolls sideways cannot pin a descendant, and its height is the table's, so state
+     the unpinned header explicitly rather than leaving a sticky rule that can never take effect. */
+  table.results thead th { position: static; }
+  table.results caption { text-align: left; }
+}
+
 @media print {
   body { max-width: none; padding: 0; }
   table.results thead th { box-shadow: none; position: static; }
   .controls { display: none; }
+  /* A printed page cannot scroll sideways, so the table shows in full rather than clipped. */
+  .table-scroll { overflow: visible; }
   .panel, .quarantined, .banner { box-shadow: none; }
   pre.log { max-height: none; overflow: visible; }
   details { break-inside: avoid; }

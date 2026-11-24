@@ -17,6 +17,7 @@ __all__ = [
     "DEFAULT_QUERY_DENY_LIST",
     "MAX_DEPTH",
     "MAX_EXCERPT_BYTES",
+    "NESTING_TRUNCATION_MARKER",
     "REDACTED",
     "SECRET_NAME_PATTERN",
     "TRUNCATION_MARKER",
@@ -33,8 +34,14 @@ TRUNCATION_MARKER: Final[str] = "... [truncated]"
 #: Cap on a redacted body excerpt in UTF-8 bytes, the unit the contract fixes for a non-JSON body.
 MAX_EXCERPT_BYTES: Final[int] = 200
 
-#: Recursion guard for bodies, so a cyclic or hostile structure cannot exhaust the stack.
-MAX_DEPTH: Final[int] = 8
+#: Recursion guard for bodies and for the ``name: value`` pairs a line of text carries, so a cyclic
+#: or hostile structure cannot exhaust the stack. A failure message holds many pairs, each one
+#: costing a descent, so this is also the depth at which a scan stops and marks what it left.
+MAX_DEPTH: Final[int] = 32
+
+#: What a scan leaves where it stopped: text dropped, not a value scrubbed, so the two never read
+#: alike. :data:`TRUNCATION_MARKER` is the excerpt form, which says only that the text was cut.
+NESTING_TRUNCATION_MARKER: Final[str] = "... [truncated: nesting depth]"
 
 #: Header names that are always redacted; configuration can widen this set but never narrow it.
 DEFAULT_HEADER_DENY_LIST: Final[frozenset[str]] = frozenset(
@@ -536,7 +543,7 @@ class Redactor:
     def _scrub(self, value: str, *, include_urls: bool = True, nested: int = 0) -> str:
         """Apply every free-text pattern to ``value``; ``include_urls`` is off on a failed parse."""
         if nested > MAX_DEPTH:
-            return REDACTED
+            return f"{REDACTED} {NESTING_TRUNCATION_MARKER}"
         if include_urls:
             value = _URL_PATTERN.sub(self._redact_embedded_url, value)
         value = _CREDENTIAL_PATTERN.sub(self._redact_credential_value, value)
