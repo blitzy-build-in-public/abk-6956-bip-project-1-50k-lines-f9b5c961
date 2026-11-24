@@ -26,9 +26,9 @@ decision.
 
 The module does no work at import time -- no I/O, no environment read, no logger
 configuration, and only ``str`` constants as module state -- and imports
-:mod:`foundry.core.exceptions` alone. :mod:`foundry.config.layers` imports this module,
-so a Foundry import in the other direction would close that cycle on the startup path
-(AAP 0.4.8).
+:mod:`foundry.core.exceptions` and :mod:`foundry.core.limits` alone.
+:mod:`foundry.config.layers` imports this module, so a Foundry import in the other
+direction would close that cycle on the startup path (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Final
 
 from foundry.core.exceptions import ConfigError
+from foundry.core.limits import RANGE_FAULT_TEMPLATE, range_fault_message
 
 __all__: Final[tuple[str, ...]] = (
     "BAD_ENV_TEMPLATE",
@@ -173,8 +174,13 @@ UNKNOWN_KEY_TEMPLATE: Final[str] = "unknown configuration key: {key}"
 UNKNOWN_KEY_HINT_TEMPLATE: Final[str] = "did you mean '{closest}'?"
 """The suggestion half of an unknown-key hint, carrying ``difflib``'s nearest key."""
 
-RANGE_TEMPLATE: Final[str] = "invalid value for {key}: {value} (expected {constraint})"
-"""AAP 0.4.5 worked case: ``http.timeout = -1`` reports the key and its range."""
+RANGE_TEMPLATE: Final[str] = RANGE_FAULT_TEMPLATE
+"""AAP 0.4.5 worked case: ``http.timeout = -1`` reports the key and its range.
+
+The template is defined once, in :data:`foundry.core.limits.RANGE_FAULT_TEMPLATE`, and filled in
+by :func:`foundry.core.limits.range_fault_message`, so this layer and the capability packages that
+validate a policy of their own cannot spell one fault two different ways.
+"""
 
 BAD_ENV_TEMPLATE: Final[str] = (
     "invalid value for environment variable {variable}: expected {expected}"
@@ -385,7 +391,7 @@ def range_violation(
         A :class:`ConfigError` carrying the key, the layer and the layer note as its hint.
     """
     return ConfigError(
-        RANGE_TEMPLATE.format(key=key, value=value, constraint=constraint),
+        range_fault_message(key, value, constraint),
         key=key,
         layer=layer,
         hint=_layer_note(layer, detail),

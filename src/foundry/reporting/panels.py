@@ -57,9 +57,11 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Final
 
 from foundry.core.exceptions import ArtifactError
+from foundry.core.limits import CAPTURE_LINES_DEFAULT, CAPTURE_LINES_MAX
 from foundry.core.paths import resolve_under
 from foundry.core.types import PHASES, ArtifactKind, Phase
 from foundry.obs.events import emit_plumbing_failure
@@ -86,11 +88,19 @@ __all__: Final[tuple[str, ...]] = (
     "read_log_tail",
 )
 
-DEFAULT_LOG_TAIL_LINES: Final[int] = 200
-"""Default size of the log tail: the default of the ``logging.capture_lines`` key (AAP 0.14.2)."""
+DEFAULT_LOG_TAIL_LINES: Final[int] = CAPTURE_LINES_DEFAULT
+"""Default size of the log tail: the default of the ``logging.capture_lines`` key (AAP 0.14.2).
 
-MAX_LOG_TAIL_LINES: Final[int] = 10_000
-"""Largest accepted tail size: the upper bound of ``logging.capture_lines``."""
+Taken from :data:`foundry.core.limits.CAPTURE_LINES_DEFAULT`, the single definition site of the
+number. This package may not read the configuration the number comes from (AAP 0.4.8), and a
+second copy here is what would let a default drift from the published surface.
+"""
+
+MAX_LOG_TAIL_LINES: Final[int] = CAPTURE_LINES_MAX
+"""Largest accepted tail size: the upper bound of ``logging.capture_lines``.
+
+Taken from :data:`foundry.core.limits.CAPTURE_LINES_MAX`, the single definition site of the bound.
+"""
 
 MAX_LOG_TAIL_BYTES: Final[int] = 256 * 1024
 """Most bytes read from the end of ``log_tail.log``, so a huge artifact is never read whole."""
@@ -137,10 +147,15 @@ _TRACEBACK_KIND: Final[ArtifactKind] = "traceback"
 _LOG_TAIL_KIND: Final[ArtifactKind] = "log_tail"
 """Kind of the captured log tail a panel reads into its monospace block."""
 
-_PHASE_ORDER_INDEX: Final[Mapping[Phase, int]] = {
-    phase: index for index, phase in enumerate(PHASE_ORDER)
-}
-"""Position of each phase in :data:`PHASE_ORDER`, for the deterministic panel order."""
+_PHASE_ORDER_INDEX: Final[Mapping[Phase, int]] = MappingProxyType(
+    {phase: index for index, phase in enumerate(PHASE_ORDER)}
+)
+"""Position of each phase in :data:`PHASE_ORDER`, for the deterministic panel order.
+
+The mapping is read-only. :class:`types.MappingProxyType` wraps the dict, so lookups are all a
+caller has and the module-level state cannot be mutated after import (AAP 0.4.8); a ``Final``
+annotation alone stops a rebinding but not a write into the dict.
+"""
 
 
 def _clamp_lines(value: int) -> int:
@@ -448,16 +463,26 @@ def read_log_tail(
 ) -> tuple[tuple[str, ...], bool]:
     """Read, redact and truncate the last ``limit`` lines of a captured log tail.
 
-    This is total by design (AAP 0.14.3): a missing artifact, a path that is not a regular file, a
-    traversal escape, a read fault, a request for zero lines and undecodable bytes all yield
-    ``((), False)`` after at most one ``WARNING``, because Foundry's own plumbing never raises into
-    a test, changes an outcome or changes an exit code.
+    This is total by design (AAP 0.14.3): nothing here raises into a test, changes an outcome or
+    changes an exit code.
+
+    A ``limit`` of ``0`` is a supported configuration rather than a fault. A run configured with
+    ``logging.capture_lines = 0`` captures no tail at all, which
+    :data:`foundry.obs.capture.MIN_CAPTURE_LINES` documents as a clean no-capture state, so a zero
+    limit reads nothing, reports nothing and yields ``((), False)`` -- exactly as
+    :func:`_log_tail_for` short-circuits the same case.
+
+    The three genuine faults -- a path that escapes the run directory, a path that is not a
+    regular file, and a read fault -- each yield ``((), False)`` after one ``WARNING`` through
+    :func:`foundry.obs.events.emit_plumbing_failure`, because Foundry's own plumbing reports its
+    faults without raising into the test. Undecodable bytes are not one of them: they are replaced
+    as the tail is decoded, so a tail holding them is still shown.
 
     Args:
         path: The tail file. It is resolved with :func:`foundry.core.paths.resolve_under` against
             ``run_dir`` before it is opened.
         limit: How many of the newest lines to keep. It is clamped into ``0`` to
-            :data:`MAX_LOG_TAIL_LINES`; ``0`` yields no lines and no read.
+            :data:`MAX_LOG_TAIL_LINES`; ``0`` yields no lines, no read and no ``WARNING``.
         redactor: The redaction engine every line passes through before it can reach the report.
         run_dir: The directory ``path`` must stay inside, normally ``artifacts/<run_id>``. When it
             is ``None`` the path is used as given, which is what a caller outside a run -- such as
@@ -470,7 +495,6 @@ def read_log_tail(
     """
     wanted = _clamp_lines(limit)
     if wanted == 0:
-        emit_plumbing_failure(_COMPONENT, "log tail limit is 0, so no captured log lines were read")
         return (), False
 
     try:

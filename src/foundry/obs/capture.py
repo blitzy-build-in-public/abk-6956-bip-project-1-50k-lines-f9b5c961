@@ -26,9 +26,11 @@ Formatted lazily, never timestamped
 The capacity belongs to the caller, never to this module
     ``logging.capture_lines`` is resolved by ``foundry.execution.session``, which constructs
     ``LogRing(capacity=...)``. This module reads no environment variable and imports no
-    configuration, because ``foundry.obs`` may import ``foundry.core`` only (AAP 0.4.8). A
-    ``capacity`` of ``0`` is a supported configuration: the ring retains nothing,
-    :meth:`LogRing.tail` returns ``()`` and no ``log_tail.log`` artifact is produced.
+    configuration, because ``foundry.obs`` may import ``foundry.core`` only (AAP 0.4.8); the default
+    and the bounds it clamps into come from :mod:`foundry.core.limits`, the single definition site
+    of the ``logging.capture_lines`` numbers. A ``capacity`` of ``0`` is a supported configuration:
+    the ring retains nothing, :meth:`LogRing.tail` returns ``()`` and no ``log_tail.log`` artifact
+    is produced.
 
 What this module deliberately does not do
     * It does not capture stdout or stderr. pytest's own capture machinery already does, and
@@ -62,6 +64,7 @@ from collections.abc import Sequence
 from types import TracebackType
 from typing import Final
 
+from foundry.core.limits import CAPTURE_LINES_DEFAULT, CAPTURE_LINES_MAX, CAPTURE_LINES_MIN
 from foundry.obs.logging import attach_handler, detach_handler, get_logger
 
 __all__ = [
@@ -75,14 +78,26 @@ __all__ = [
     "tail_lines",
 ]
 
-DEFAULT_CAPTURE_LINES: Final[int] = 200
-"""Default ring size: the default of the ``logging.capture_lines`` configuration key."""
+DEFAULT_CAPTURE_LINES: Final[int] = CAPTURE_LINES_DEFAULT
+"""Default ring size: the default of the ``logging.capture_lines`` configuration key.
 
-MIN_CAPTURE_LINES: Final[int] = 0
-"""Smallest accepted ring size; ``0`` is a clean no-capture state rather than an error."""
+The number is defined once, in :data:`foundry.core.limits.CAPTURE_LINES_DEFAULT`, because this
+module may not import :mod:`foundry.config` (AAP 0.4.8) and a second copy is what lets a default
+drift from the surface AAP 0.4.5 publishes.
+"""
 
-MAX_CAPTURE_LINES: Final[int] = 10_000
-"""Largest accepted ring size: the upper bound of ``logging.capture_lines``."""
+MIN_CAPTURE_LINES: Final[int] = CAPTURE_LINES_MIN
+"""Smallest accepted ring size: the lower bound of ``logging.capture_lines``.
+
+``0`` is a clean no-capture state rather than an error. Defined once, in
+:data:`foundry.core.limits.CAPTURE_LINES_MIN`.
+"""
+
+MAX_CAPTURE_LINES: Final[int] = CAPTURE_LINES_MAX
+"""Largest accepted ring size: the upper bound of ``logging.capture_lines``.
+
+Defined once, in :data:`foundry.core.limits.CAPTURE_LINES_MAX`.
+"""
 
 MAX_TAIL_LINE_LENGTH: Final[int] = 2_000
 """Cap on one formatted line, in characters, the truncation marker included."""

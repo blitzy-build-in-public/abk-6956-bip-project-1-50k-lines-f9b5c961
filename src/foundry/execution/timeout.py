@@ -50,25 +50,34 @@ Lazy import of an optional peer
 Failure isolation
     Foundry's own plumbing never changes a test's outcome or the run's exit code (AAP 0.1.2). A
     pytest-timeout that cannot be imported, or that refuses the derived settings because a release
-    renamed a field, is reported as exactly one ``WARNING`` on the ``foundry`` logger through
-    :func:`foundry.obs.events.emit_plumbing_failure`, and the function returns ``False``. Nothing
-    here raises into a test, and the message it logs carries no path, no node id and no secret.
+    renamed a field, is reported as one ``WARNING`` on the ``foundry`` logger through
+    :func:`foundry.obs.events.emit_plumbing_failure`, and the function returns ``False``. One
+    ``WARNING`` covers the run's whole process, however many items the peer fails on: both hook
+    bodies run once per item, so :func:`_announce_once` latches each distinct fault and the level
+    policy that reserves ``WARNING`` for failure isolation is met without flooding the log (AAP
+    0.13.1). Nothing here raises into a test, and the message it logs carries no path, no node id
+    and no secret.
 
 Layer and import discipline
-    The imports below are :mod:`foundry.core.exceptions` and :mod:`foundry.obs.events`, both below
-    this package in the AAP 0.4.8 table, plus the standard library. Importing this module performs
-    no I/O, reads no environment variable, configures no logger, arms no timer and holds no
-    module-level mutable state.
+    The imports below are :mod:`foundry.core.exceptions`, :mod:`foundry.core.limits` and
+    :mod:`foundry.obs.events`, all below this package in the AAP 0.4.8 table, plus the standard
+    library. Importing this module performs no I/O, reads no environment variable, configures no
+    logger and arms no timer. The one piece of module-level state it holds is
+    :func:`_announce_once`'s memo, which records which peer faults have already been announced:
+    diagnostic bookkeeping only, carrying no configuration value, no path, no node id and no
+    outcome, and read by nothing that decides behaviour. It holds nothing else.
 """
 
 from __future__ import annotations
 
+import functools
 import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol, cast
 
 from foundry.core.exceptions import ConfigError
+from foundry.core.limits import TIMEOUT_MAX, TIMEOUT_MIN, TIMEOUT_RANGE, range_fault_message
 from foundry.obs.events import emit_plumbing_failure
 
 __all__ = [
@@ -111,19 +120,26 @@ therefore stay unbounded, so a slow session fixture is reported by the fixture r
 mislabelled as a timed-out test.
 """
 
-MIN_TIMEOUT_SECONDS: Final[float] = 0.0
-"""Exclusive lower bound of ``execution.timeout``; a limit of zero would arm no timer at all."""
+MIN_TIMEOUT_SECONDS: Final[float] = TIMEOUT_MIN
+"""Exclusive lower bound of ``execution.timeout``; a limit of zero would arm no timer at all.
 
-MAX_TIMEOUT_SECONDS: Final[float] = 3600.0
-"""Inclusive upper bound of ``execution.timeout``: one hour for a single test (AAP 0.4.5)."""
+Defined once, in :data:`foundry.core.limits.TIMEOUT_MIN`, because this package may not import the
+configuration model that publishes the bound (AAP 0.4.8).
+"""
 
-TIMEOUT_RANGE_TEXT: Final[str] = f"{MIN_TIMEOUT_SECONDS:g} < t <= {MAX_TIMEOUT_SECONDS:g}"
+MAX_TIMEOUT_SECONDS: Final[float] = TIMEOUT_MAX
+"""Inclusive upper bound of ``execution.timeout``: one hour for a single test (AAP 0.4.5).
+
+Defined once, in :data:`foundry.core.limits.TIMEOUT_MAX`.
+"""
+
+TIMEOUT_RANGE_TEXT: Final[str] = TIMEOUT_RANGE
 """The accepted range as the message states it: ``0 < t <= 3600``.
 
-The spelling matches the constraint
-:class:`foundry.config.keys.KeySpec` declares for ``execution.timeout`` and the text the
-documented ``foundry config validate`` failure carries, so the same sentence appears whichever
-surface reports the fault.
+Quoted verbatim from :data:`foundry.core.limits.TIMEOUT_RANGE`, the one spelling of the range. It
+matches the constraint :class:`foundry.config.keys.KeySpec` declares for ``execution.timeout`` and
+the text the documented ``foundry config validate`` failure carries, so the same sentence appears
+whichever surface reports the fault.
 """
 
 TIMEOUT_KEY: Final[str] = "execution.timeout"
@@ -152,6 +168,40 @@ _REFUSED_SETTINGS_MESSAGE: Final[str] = (
     "pytest-timeout refused the derived timer settings, so its own timer remains in effect"
 )
 """Logged when the installed release rejects the settings; names no path and no value."""
+
+
+@functools.cache
+def _announce_once(fault: str, error_name: str = "") -> None:
+    """Report one distinct pytest-timeout peer fault, once for the run's process.
+
+    Both hook bodies run once per item, so an unlatched announcement floods the log: a peer whose
+    hookspec is registered while its module cannot be imported, or which refuses the derived
+    settings, would write a ``WARNING`` for every item's set call and again for every item's cancel
+    call. ``WARNING`` is the level AAP 0.13.1 reserves for the failure-isolation cases, and a peer
+    fault is one, so the level stays and the announcement is latched instead: the memo makes this
+    body run on the first call for a given fault and never again, which is the once-per-run latch
+    :meth:`foundry.obs.artifacts.ArtifactWriter._warn_once` implements with an instance flag. This
+    module owns no instance to hang that flag on, and a bare module-level flag would be mutable
+    state of the kind AAP 0.4.8 restricts, so the memo is keyed by the fault itself.
+
+    ``error_name`` rides the message rather than travelling as ``exc=``, because a memo key cannot
+    carry a fresh exception instance and the class name is the only part of an exception ever
+    logged anyway: :func:`foundry.obs.events.emit_plumbing_failure` records
+    ``type(exc).__name__`` and never the message, the arguments or the traceback.
+
+    The memo holds no configuration, no path, no node id and no outcome, and nothing reads it to
+    decide behaviour -- it exists only to keep a diagnostic from repeating. A test that needs a
+    fresh announcement calls ``_announce_once.cache_clear()``.
+
+    Args:
+        fault: The static message naming what the peer could not do. It carries no path, no node
+            id and no value, so the same fault always forms the same memo key.
+        error_name: The class name of the exception the peer raised, or an empty string when the
+            fault has none, in which case the logged message is ``fault`` alone.
+    """
+    message = f"{fault} ({error_name})" if error_name else fault
+    emit_plumbing_failure(TIMEOUT_KEY, message)
+
 
 _UNRENDERABLE_ERRORS: Final[tuple[type[BaseException], ...]] = (
     AttributeError,
@@ -364,20 +414,21 @@ def apply_timer(config: object, item: object, policy: TimeoutPolicy) -> bool:
         implementation, which leaves the project's timer as the peer would have set it.
 
     Raises:
-        Nothing. A fault in the optional peer is reported as one ``WARNING`` through
-        :func:`foundry.obs.events.emit_plumbing_failure` and turned into ``False``.
+        Nothing. A fault in the optional peer is announced once for the run's process, through
+        :func:`_announce_once` and :func:`foundry.obs.events.emit_plumbing_failure`, and turned
+        into ``False``; a second item that meets the same fault logs nothing further.
     """
     if not policy.is_enabled:
         return False
     module = _load_timeout_module()
     if module is None:
-        emit_plumbing_failure(TIMEOUT_KEY, _MISSING_PLUGIN_MESSAGE)
+        _announce_once(_MISSING_PLUGIN_MESSAGE)
         return False
     try:
         settings = _build_settings(module.Settings, policy, _configured_method(config))
         module.pytest_timeout_set_timer(item, settings)
     except _TIMER_API_ERRORS as error:
-        emit_plumbing_failure(TIMEOUT_KEY, _REFUSED_SETTINGS_MESSAGE, exc=error)
+        _announce_once(_REFUSED_SETTINGS_MESSAGE, type(error).__name__)
         return False
     return True
 
@@ -395,17 +446,17 @@ def cancel_timer(item: object) -> bool:
 
     Returns:
         ``True`` when the peer cancelled the timer, ``False`` when the peer is not importable or
-        refused the call. Nothing is raised either way: a cancellation fault is reported as one
-        ``WARNING`` and the test's own outcome stands.
+        refused the call. Nothing is raised either way: a cancellation fault is announced once for
+        the run's process, as :func:`apply_timer`'s is, and the test's own outcome stands.
     """
     module = _load_timeout_module()
     if module is None:
-        emit_plumbing_failure(TIMEOUT_KEY, _MISSING_PLUGIN_MESSAGE)
+        _announce_once(_MISSING_PLUGIN_MESSAGE)
         return False
     try:
         module.pytest_timeout_cancel_timer(item)
     except _TIMER_API_ERRORS as error:
-        emit_plumbing_failure(TIMEOUT_KEY, _REFUSED_SETTINGS_MESSAGE, exc=error)
+        _announce_once(_REFUSED_SETTINGS_MESSAGE, type(error).__name__)
         return False
     return True
 
@@ -471,12 +522,14 @@ def _validated_seconds(seconds: object) -> float:
 def _range_error(seconds: object) -> ConfigError:
     """Return the :class:`ConfigError` that reports an unusable ``execution.timeout`` value.
 
-    The message names the key and the accepted range, which is what the behaviour contract pins for
-    an out-of-range value (``http.timeout = -1`` reports ``http.timeout`` and ``0 < t <= 300``);
-    the offending value is echoed because it came from the project's own configuration and a
-    timeout is never a secret.
+    The message is :func:`foundry.core.limits.range_fault_message`'s one wording, which names the
+    key and the accepted range -- what the behaviour contract pins for an out-of-range value
+    (``http.timeout = -1`` reports ``http.timeout`` and ``0 < t <= 300``); the offending value is
+    echoed because it came from the project's own configuration and a timeout is never a secret.
+    The hint repeats the range as the next step to take, and the key travels as the error's
+    ``key`` attribute so the command line maps the fault to exit code 2 without parsing prose.
     """
-    message = f"{TIMEOUT_KEY} must satisfy {TIMEOUT_RANGE_TEXT}, got {seconds!r}"
+    message = range_fault_message(TIMEOUT_KEY, seconds, TIMEOUT_RANGE_TEXT)
     hint = f"set {TIMEOUT_KEY} to a value in {TIMEOUT_RANGE_TEXT} seconds"
     return ConfigError(message, key=TIMEOUT_KEY, hint=hint)
 

@@ -66,6 +66,21 @@ from typing import Final
 import httpx
 
 from foundry.core.exceptions import ConfigError, RetryExhaustedError, TransportError
+from foundry.core.limits import (
+    BACKOFF_BASE_DEFAULT,
+    BACKOFF_BASE_MAX,
+    BACKOFF_BASE_MIN,
+    BACKOFF_BASE_RANGE,
+    BACKOFF_MAX_DEFAULT,
+    BACKOFF_MAX_MAX,
+    BACKOFF_MAX_MIN,
+    BACKOFF_MAX_RANGE,
+    MAX_ATTEMPTS_DEFAULT,
+    MAX_ATTEMPTS_MAX,
+    MAX_ATTEMPTS_MIN,
+    MAX_ATTEMPTS_RANGE,
+    range_fault_message,
+)
 from foundry.core.types import AttemptRecord, Sleep
 from foundry.obs.redaction import Redactor, default_redactor
 
@@ -131,14 +146,16 @@ DEFAULT_RETRY_ON: Final[tuple[str, ...]] = (
 project that wants Foundry to wait it out names the predicate explicitly.
 """
 
-# The accepted range of each numeric key (AAP 0.4.5). Exported because a caller that builds a
-# policy by hand, and the diagnostics that render one, both need the bounds.
-MIN_ATTEMPTS: Final[int] = 1
-MAX_ATTEMPTS: Final[int] = 10
-MIN_BACKOFF_BASE: Final[float] = 0.0
-MAX_BACKOFF_BASE: Final[float] = 10.0
-MIN_BACKOFF_MAX: Final[float] = 0.0
-MAX_BACKOFF_MAX: Final[float] = 60.0
+# The accepted range of each numeric key (AAP 0.4.5), exported because a caller that builds a policy
+# by hand, and the diagnostics that render one, both need the bounds. The numbers are defined once,
+# in foundry.core.limits: http may not import foundry.config (AAP 0.4.8), and a second copy here is
+# what would let a bound drift from the published surface.
+MIN_ATTEMPTS: Final[int] = MAX_ATTEMPTS_MIN
+MAX_ATTEMPTS: Final[int] = MAX_ATTEMPTS_MAX
+MIN_BACKOFF_BASE: Final[float] = BACKOFF_BASE_MIN
+MAX_BACKOFF_BASE: Final[float] = BACKOFF_BASE_MAX
+MIN_BACKOFF_MAX: Final[float] = BACKOFF_MAX_MIN
+MAX_BACKOFF_MAX: Final[float] = BACKOFF_MAX_MAX
 
 OUTCOME_RESPONSE: Final[str] = "response"
 """``AttemptRecord.outcome`` for the attempt whose response is being returned."""
@@ -268,50 +285,45 @@ def backoff(attempt: int, *, base: float, maximum: float) -> float:
 # --- Policy validation -----------------------------------------------------
 
 
-def _range_fault(key: str, minimum: float, maximum: float, value: object) -> str:
-    """Return the message of an out-of-range configuration fault.
-
-    An integral bound is written without a trailing ``.0``, so the text reads ``0 <= n <= 10``,
-    and the offending value is rendered with ``repr``, so a string is quoted and an ``int`` is
-    not -- the form AAP 0.4.5 pins for these keys.
-    """
-    bounds = f"{minimum:g} <= n <= {maximum:g}"
-    return f"{key} must satisfy {bounds}, got {value!r}"
-
-
-def _require_int(value: object, key: str, minimum: int, maximum: int) -> int:
+def _require_int(value: object, key: str, minimum: int, maximum: int, *, constraint: str) -> int:
     """Return ``value`` as an ``int`` inside ``minimum..maximum``, or raise ``ConfigError``.
 
     A configuration model rejects an out-of-range value before a policy exists, so reaching this
     check means the policy came from a fixture override or a test; the error still names the
     dotted key, because that is what an operator would fix. ``bool`` is refused even though it
-    subclasses ``int``: ``max_attempts=True`` is a mistake, not a one-attempt policy.
+    subclasses ``int``: ``max_attempts=True`` is a mistake, not a one-attempt policy. The message
+    is :func:`foundry.core.limits.range_fault_message`'s one wording, carrying ``constraint`` --
+    the range as the published registry spells it -- rather than one re-composed from the bounds.
 
     Raises:
         ConfigError: When the value is not an ``int`` or lies outside the range, carrying the
-            key and a message naming the key, the range and the offending value.
+            key and a message naming the key, the accepted range and the offending value.
     """
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-        raise ConfigError(_range_fault(key, minimum, maximum, value), key=key)
+        raise ConfigError(range_fault_message(key, value, constraint), key=key)
     return value
 
 
-def _require_float(value: object, key: str, minimum: float, maximum: float) -> float:
+def _require_float(
+    value: object, key: str, minimum: float, maximum: float, *, constraint: str
+) -> float:
     """Return ``value`` as a finite ``float`` inside ``minimum..maximum``, or raise.
 
     ``NaN`` and the infinities are refused along with values outside the range: either would
     travel into :func:`backoff` and then into the injected sleep, and the failure would surface
-    far from the configuration key that caused it.
+    far from the configuration key that caused it. The message is
+    :func:`foundry.core.limits.range_fault_message`'s one wording, carrying ``constraint`` -- the
+    range as the published registry spells it.
 
     Raises:
         ConfigError: When the value is not a real number, is not finite or lies outside the
-            range, carrying the key and a message naming both.
+            range, carrying the key and a message naming the accepted range and the value.
     """
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ConfigError(_range_fault(key, minimum, maximum, value), key=key)
+        raise ConfigError(range_fault_message(key, value, constraint), key=key)
     number = float(value)
     if not math.isfinite(number) or not minimum <= number <= maximum:
-        raise ConfigError(_range_fault(key, minimum, maximum, value), key=key)
+        raise ConfigError(range_fault_message(key, value, constraint), key=key)
     return number
 
 
@@ -337,9 +349,9 @@ class RetryPolicy:
             :data:`DEFAULT_RETRY_ON`.
     """
 
-    max_attempts: int = 3
-    backoff_base: float = 0.2
-    backoff_max: float = 2.0
+    max_attempts: int = MAX_ATTEMPTS_DEFAULT
+    backoff_base: float = BACKOFF_BASE_DEFAULT
+    backoff_max: float = BACKOFF_MAX_DEFAULT
     retry_on: frozenset[str] = frozenset(DEFAULT_RETRY_ON)
 
     def __post_init__(self) -> None:
@@ -355,11 +367,27 @@ class RetryPolicy:
                 ``retry_on`` names a predicate outside :data:`RETRY_PREDICATES`. Every message
                 names the dotted key it came from.
         """
-        attempts = _require_int(self.max_attempts, _MAX_ATTEMPTS_KEY, MIN_ATTEMPTS, MAX_ATTEMPTS)
-        base = _require_float(
-            self.backoff_base, _BACKOFF_BASE_KEY, MIN_BACKOFF_BASE, MAX_BACKOFF_BASE
+        attempts = _require_int(
+            self.max_attempts,
+            _MAX_ATTEMPTS_KEY,
+            MIN_ATTEMPTS,
+            MAX_ATTEMPTS,
+            constraint=MAX_ATTEMPTS_RANGE,
         )
-        cap = _require_float(self.backoff_max, _BACKOFF_MAX_KEY, MIN_BACKOFF_MAX, MAX_BACKOFF_MAX)
+        base = _require_float(
+            self.backoff_base,
+            _BACKOFF_BASE_KEY,
+            MIN_BACKOFF_BASE,
+            MAX_BACKOFF_BASE,
+            constraint=BACKOFF_BASE_RANGE,
+        )
+        cap = _require_float(
+            self.backoff_max,
+            _BACKOFF_MAX_KEY,
+            MIN_BACKOFF_MAX,
+            MAX_BACKOFF_MAX,
+            constraint=BACKOFF_MAX_RANGE,
+        )
         object.__setattr__(self, "max_attempts", attempts)
         object.__setattr__(self, "backoff_base", base)
         object.__setattr__(self, "backoff_max", cap)

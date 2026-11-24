@@ -45,6 +45,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
+from foundry.core.limits import CASSETTE_DIR_DEFAULT
 from foundry.core.paths import resolve_under, sanitize_nodeid
 
 __all__: Final[tuple[str, ...]] = (
@@ -55,14 +56,14 @@ __all__: Final[tuple[str, ...]] = (
     "cassette_relpath",
 )
 
-DEFAULT_CASSETTE_DIR: Final[str] = "cassettes"
+DEFAULT_CASSETTE_DIR: Final[str] = CASSETTE_DIR_DEFAULT
 """The ``cassette.dir`` default, used when a caller passes no directory.
 
-Kept here rather than read from the configuration model because this package may not import
-:mod:`foundry.config` (AAP 0.4.8). The value matches the default AAP 0.4.5 publishes for
-``cassette.dir``, so a caller that supplies nothing builds the same path the configuration would.
-A relative value, like every path in the configuration, is resolved against the invocation
-directory by :func:`cassette_path`.
+Defined once, in :data:`foundry.core.limits.CASSETTE_DIR_DEFAULT`: the value has to exist before
+any configuration layer is resolved, and this package may not import :mod:`foundry.config`
+(AAP 0.4.8), so the foundation rung is where it lives. Naming it here means a caller that supplies
+nothing builds the same path the configuration would. A relative value, like every path in the
+configuration, is resolved against the invocation directory by :func:`cassette_path`.
 """
 
 CASSETTE_SUFFIX: Final[str] = ".json"
