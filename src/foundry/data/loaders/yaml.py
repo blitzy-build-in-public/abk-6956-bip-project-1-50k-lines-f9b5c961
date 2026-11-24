@@ -31,12 +31,13 @@ with no columns and no rows, which the caller reports as ``no cases in <file>`` 
 than as a fault, exactly as a header-only CSV does (AAP 0.4.7). Every other payload keeps
 its own meaning, so a top-level scalar such as ``42`` is still a fault.
 
-Only :class:`foundry.core.exceptions.DataError` escapes :meth:`YamlLoader.load`. The three
-faults a reader can meet -- an unreadable file, a file that is not UTF-8, and a document
-PyYAML rejects -- are each caught once at that boundary and translated through
-:func:`base.data_error`, which names the file, the 1-based line and, when the fault is
-about a column, the column's name. Importing this module has no effect beyond defining
-names: no file is opened, no state is written and no logger is configured (AAP 0.4.8).
+Only :class:`foundry.core.exceptions.DataError` escapes :meth:`YamlLoader.load`. The four
+faults a reader can meet -- an unreadable file, a file that is not UTF-8, a document PyYAML
+rejects, and a document nested too deeply to parse -- are each caught once at that boundary
+and translated through :func:`base.data_error`, which names the file, the 1-based line and,
+when the fault is about a column, the column's name. Importing this module has no effect
+beyond defining names: no file is opened, no state is written and no logger is configured
+(AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -100,8 +101,9 @@ class YamlLoader:
         Raises:
             DataError: When the file cannot be read at all, when its bytes are not valid
                 UTF-8, when PyYAML rejects the document -- a syntax fault, a multi-document
-                stream and an unsafe tag all arrive that way -- or when the parsed payload
-                breaks the shape rule.
+                stream and an unsafe tag all arrive that way -- when the document is nested
+                too deeply to parse, which reports the file alone because the parser stops
+                without a position, or when the parsed payload breaks the shape rule.
         """
         # Imported here, not at module scope: a suite that reads no data files must not
         # pay for PyYAML at pytest startup (implicit requirement I5, AAP 0.14.2).
@@ -144,6 +146,11 @@ class YamlLoader:
             # The character offset belongs in the message: DataError.column is a column
             # *name*, and a load fault has no column name to give it (AAP 0.4.7).
             data_error(path, message, line=line)
+        except RecursionError:
+            # A document nested past the interpreter's stack limit exhausts the stack
+            # inside the parser, which builds no mark to report; the file alone locates
+            # the fault, and raising here keeps the original error chained as its context.
+            data_error(path, "document is nested too deeply to parse")
 
         if payload is None:
             return LoadedTable(path=path, columns=(), rows=())

@@ -69,13 +69,21 @@ if TYPE_CHECKING:
     """
 
 __all__: Final[tuple[str, ...]] = (
-    "ModelLike",
-    "ModelSpec",
     "create_all",
     "drop_all",
     "metadata_for",
     "normalize_models",
 )
+"""The four runtime calls this module publishes, sorted.
+
+``ModelLike`` and ``ModelSpec`` are deliberately absent. Both are unions over SQLAlchemy
+types, so they are bound only under ``TYPE_CHECKING``; listing them here would make
+``from foundry.db.schema import *`` raise ``AttributeError`` at runtime, and binding them
+for real would put a SQLAlchemy import on this module's import cost and take the plugin
+back over its 150 ms startup budget (AAP 0.13.1). A consumer that needs one of the
+annotations imports it under ``if TYPE_CHECKING:``, which is what
+:mod:`foundry.db.session` does.
+"""
 
 _NOT_A_MODEL_HINT: Final[str] = (
     "pass declarative model classes (DeclarativeBase subclasses) or Table objects"

@@ -25,7 +25,8 @@ requirement I6).
 Only :class:`foundry.core.exceptions.DataError` escapes :meth:`JsonlLoader.load`, and
 it is raised exclusively through :func:`data_error` in the loader base: the read, the
 decode and the per-line parse each translate their own builtin exception once, at the
-boundary of ``load`` (AAP 0.14.3).
+boundary of ``load`` (AAP 0.14.3). That includes a line nested too deeply to parse,
+which is reported against its own physical line rather than as an escaping builtin.
 
 Importing this module defines names and does nothing else -- the standard library plus
 the loader base, no I/O, no environment read, no logger configuration, and no state
@@ -80,9 +81,9 @@ class JsonlLoader:
 
         Raises:
             DataError: When the file cannot be read, when its bytes are not valid
-                UTF-8, when a line is not valid JSON, or when a line's value is not a
-                JSON object. Every case names the file; the per-line cases name the
-                line as well.
+                UTF-8, when a line is not valid JSON, when a line is nested too deeply
+                to parse, or when a line's value is not a JSON object. Every case names
+                the file; the per-line cases name the line as well.
         """
         try:
             # The whole file is decoded in one call instead of through a line iterator:
@@ -117,6 +118,11 @@ class JsonlLoader:
                     f"invalid JSON at line {offset} column {exc.colno}: {exc.msg}",
                     line=offset,
                 )
+            except RecursionError:
+                # A line nested past the interpreter's stack limit fails inside the parser
+                # with no position of its own, so the physical line this loop is on is the
+                # one to report; raising here keeps the original error chained as context.
+                data_error(path, f"line {offset} is nested too deeply to parse", line=offset)
             if not isinstance(document, Mapping):
                 # Always a table, never a matrix: a list on a line is not an axis set and
                 # a scalar is not a single record, so each reports the type it found.

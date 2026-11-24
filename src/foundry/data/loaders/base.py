@@ -301,7 +301,9 @@ def classify_document(payload: object, path: Path) -> LoadedDocument:
     5. A ``Mapping`` that mixes list and non-list values is a fault. An author who
        wrote one list axis meant a matrix, so reading that mapping as a single row
        holding a list cell would hide the mistake; the message names the axis and
-       the value that broke the rule instead.
+       the type of the non-list value that broke the rule instead, and never the
+       value itself, which is ``foundry.data.schema``'s rule for the messages it
+       reports.
     6. Anything else -- a scalar, ``None``, any type no rule above covers -- reports
        ``expected a list of mappings or a mapping, got <type>``.
 
@@ -352,7 +354,7 @@ def classify_document(payload: object, path: Path) -> LoadedDocument:
             data_error(
                 path,
                 f"mapping mixes list axis {axis_name!r} with a non-list value "
-                f"{other_value!r}; a matrix needs every value to be a list",
+                f"of type {type(other_value).__name__}; a matrix needs every value to be a list",
             )
         return build_table(path, [(payload, None)])
 

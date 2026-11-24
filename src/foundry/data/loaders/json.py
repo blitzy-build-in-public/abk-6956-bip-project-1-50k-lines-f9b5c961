@@ -10,13 +10,13 @@ empty document -- all of that is decided once, by
 apart.
 
 What is specific to this reader is turning bytes into a payload. The file is read
-as UTF-8, ``json.loads`` parses it, and each of the three ways that can fail -- an
-unreadable file, a file that is not valid UTF-8, a document that is not valid JSON
--- is translated into exactly one ``DataError`` naming the file. A JSON syntax
-error therefore reaches a user as a located data fault rather than as a builtin
-``JSONDecodeError`` (AAP 0.4.7, AAP 0.14.3), and that translation is the whole of
-this module's error handling: :meth:`JsonLoader.load` raises ``DataError`` and
-nothing else.
+as UTF-8, ``json.loads`` parses it, and each of the four ways that can fail -- an
+unreadable file, a file that is not valid UTF-8, a document that is not valid JSON,
+a document nested too deeply to parse -- is translated into exactly one ``DataError``
+naming the file. A JSON syntax error therefore reaches a user as a located data
+fault rather than as a builtin ``JSONDecodeError`` (AAP 0.4.7, AAP 0.14.3), and that
+translation is the whole of this module's error handling: :meth:`JsonLoader.load`
+raises ``DataError`` and nothing else.
 
 Two consequences of the format matter to a caller. A parsed JSON document carries
 no per-element line notion, so every row of a table produced here holds ``line=None``;
@@ -86,10 +86,12 @@ class JsonLoader:
 
         Raises:
             DataError: When the file cannot be read, is not valid UTF-8, is not valid
-                JSON, or holds a document the shape rule rejects. A syntax error
-                reports its 1-based line in ``DataError.line`` and its 1-based
-                character offset in the message, because ``DataError.column`` is
-                reserved for the name of a column rather than for a position.
+                JSON, is nested too deeply to parse, or holds a document the shape rule
+                rejects. A syntax error reports its 1-based line in ``DataError.line``
+                and its 1-based character offset in the message, because
+                ``DataError.column`` is reserved for the name of a column rather than
+                for a position; a document nested past the parser's stack carries no
+                position at all, so the file name alone locates it.
         """
         try:
             text = path.read_text(encoding="utf-8")
@@ -108,6 +110,11 @@ class JsonLoader:
                 f"invalid JSON at line {exc.lineno} column {exc.colno}: {exc.msg}",
                 line=exc.lineno,
             )
+        except RecursionError:
+            # A document nested past the interpreter's stack limit fails inside the
+            # parser, which reaches no position to report; the file alone locates the
+            # fault, and raising here keeps the original error chained as its context.
+            data_error(path, "document is nested too deeply to parse")
 
         return classify_document(payload, path)
 

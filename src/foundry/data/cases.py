@@ -26,9 +26,9 @@ else -- no I/O, no environment read, no logger configuration, no mutable module 
 (AAP 0.4.8).
 
 ``pytest`` is imported at module scope here because this module is the parametrisation
-adapter: ``pytest.param``, ``Metafunc`` and the ``ParameterSet`` a parameter is built from
-are values and types rather than hookspecs, so the rule that only ``foundry.plugin``
-implements pytest hooks (AAP 0.4.8) still holds.
+adapter: ``pytest.param`` is a value it calls and ``Metafunc`` is a type it only annotates,
+so neither is a hookspec and the rule that only ``foundry.plugin`` implements pytest hooks
+(AAP 0.4.8) still holds.
 """
 
 from __future__ import annotations
@@ -38,11 +38,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-# ``pytest`` 8.4 has no top-level ``ParameterSet``, so the annotation below names the very
-# class ``pytest.param`` returns. The leading underscore keeps the import out of this
-# module's public surface, which is exactly the five names in ``__all__``.
+# pytest publishes no public name for the class ``pytest.param`` returns, so the parameters
+# below are annotated ``object``. The self-referential spelling ``type(pytest.param(0))`` is
+# rejected by ``mypy --strict`` as ``[valid-type]`` ("Variable ... is not valid as a type"),
+# and naming the class through pytest's internals would stop this module importing whenever
+# a pytest release moved it, so the annotation stays public and deliberately loose.
 import pytest
-from _pytest.mark.structures import ParameterSet as _ParameterSet
 
 from foundry.data.ids import case_stem, tabular_case_id
 from foundry.data.loaders.base import LoadedTable
@@ -231,7 +232,7 @@ def _display_name(values: Mapping[str, object], fallback: str) -> str:
 # --- The pytest adapter ----------------------------------------------------
 
 
-def build_parameters(case_set: CaseSet) -> list[_ParameterSet]:
+def build_parameters(case_set: CaseSet) -> list[object]:
     """Build the ``pytest.param`` objects that parametrise a test over one case set.
 
     This is the primitive :func:`parametrize` hands to pytest, published separately so a
@@ -259,7 +260,7 @@ def build_parameters(case_set: CaseSet) -> list[_ParameterSet]:
     return [pytest.param(case, id=case.id) for case in case_set.cases]
 
 
-def _no_cases_parameter(source_file: Path) -> _ParameterSet:
+def _no_cases_parameter(source_file: Path) -> object:
     """Build the single skipped parameter an empty data file expands to.
 
     The skip reason is the message AAP 0.4.7 fixes, ``no cases in <file>``, with the file

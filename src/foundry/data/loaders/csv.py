@@ -6,11 +6,14 @@ format survives the read -- no dialect, no delimiter guess, no encoding sniff --
 builder, the matrix expander and the schema checker downstream depend on the table shape rather
 than on a parser (AAP 0.3.2).
 
-Line numbers are the reader's own. ``csv.reader.line_num`` is 1-based and counts *physical*
-lines as the reader consumes them, so a header on line 1 makes the first data row line 2, a
-quoted field holding a newline advances the count without ending the record, and a blank line
-between records still occupies its own line. A row's ``line`` is therefore the physical line
-the record ends on, which is the line the collection-time error of AAP 0.4.7 reports beside the
+Line numbers are the reader's own, reported where a record starts. ``csv.reader.line_num`` is
+1-based and counts *physical* lines as the reader consumes them, so once a record has been read it
+names that record's last line; the reader therefore remembers where the previous record ended and
+reports the next line as the one the following record starts on. A header on line 1 makes the
+first data row line 2, a quoted field holding a newline moves the records after it past every line
+it covers, and a blank line between records still occupies its own line. A row's ``line`` is
+therefore the physical line the record starts on -- the same contract ``RawRow.line`` and
+``Case.line`` state -- which is the line the collection-time error of AAP 0.4.7 reports beside the
 file and the column.
 
 This module raises only ``DataError``, and only through
@@ -100,7 +103,9 @@ class CsvLoader:
         one data row, in file order, whose ``row_index`` counts the *emitted* rows from 0 --
         contiguous, so the ``<stem>-<row_index>`` case ids built by ``cases.py`` are stable
         across runs and workers (AAP 0.7.2) -- and whose ``line`` is the 1-based physical line
-        the record ends on.
+        the record starts on, matching ``RawRow.line`` and ``Case.line``. A record's first line
+        is the one after the line the previous record ended on, so a quoted field holding a
+        newline pushes the records that follow it further down the file.
 
         Three states are not faults. A file with no lines at all returns a table with no
         columns and no rows. A file whose only line is the header returns the columns with no
@@ -132,14 +137,24 @@ class CsvLoader:
             # translation would corrupt a CRLF embedded inside a quoted field.
             with path.open("r", encoding="utf-8", newline="") as handle:
                 reader = csv.reader(handle)
+                # ``line_num`` counts the physical lines consumed so far, so the record about to
+                # be read starts on the line after it. Seeding the tracker from the header read
+                # keeps the first data row right when the header itself spans several lines, and
+                # refreshing it after every record keeps blank lines and quoted newlines aligned.
                 try:
                     header = next(reader)
                 except StopIteration:
                     return LoadedTable(path=path, columns=(), rows=())
+                previous_line = reader.line_num
                 columns = _validate_header(path, header)
-                for row in reader:
-                    line = reader.line_num
+                while True:
+                    line = previous_line + 1
                     current_line = line
+                    try:
+                        row = next(reader)
+                    except StopIteration:
+                        break
+                    previous_line = reader.line_num
                     if not row:
                         continue
                     check_row_width(

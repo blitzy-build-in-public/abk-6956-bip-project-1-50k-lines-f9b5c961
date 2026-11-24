@@ -3,11 +3,10 @@
 A contract failure is reported as the single first violation together with its JSON path, so a
 test fails on one locatable defect rather than on a list whose order the caller cannot rely on.
 That determinism is why this package exists separately: :mod:`jsonschema` documents no ordering
-for :meth:`~jsonschema.protocols.Validator.iter_errors` and offers
-:func:`~jsonschema.exceptions.best_match` only as an explicit heuristic, so "the first violation"
-is a rule Foundry fixes itself -- shallowest JSON path first, then the path structurally, then the
-message -- in :mod:`foundry.contract.violations`, and the same instance and schema always report
-the same violation.
+for :meth:`~jsonschema.protocols.Validator.iter_errors` and the relevance ranking it offers is an
+explicit heuristic, so "the first violation" is a rule Foundry fixes itself -- shallowest JSON
+path first, then the path structurally, then the message -- in :mod:`foundry.contract.violations`,
+and the same instance and schema always report the same violation.
 
 Two safety properties come with every name published here. YAML schema files are reachable only
 through ``yaml.safe_load``, and a ``$ref`` that is not a fragment of the same document is refused
@@ -16,9 +15,13 @@ on every path a caller takes, because loading belongs to :mod:`foundry.contract.
 validation to :mod:`foundry.contract.validate`, and neither delegates either rule anywhere else.
 
 The package imports :mod:`foundry.core` -- and :mod:`foundry.obs.redaction` through the single lazy
-import in :mod:`foundry.contract.violations` -- and nothing above it, so importing this module
-defines names only: no file is read, no environment variable is consulted, no logger is configured
-and nothing heavy (``jsonschema``, ``yaml``, ``pydantic``) is pulled in by the import itself.
+import in :mod:`foundry.contract.violations` -- and nothing above it. That obs edge is the
+package's one sanctioned exception to the permitted-import column of AAP 0.4.8, which lists
+``core`` alone: the capability row of AAP 0.3.2 lets a capability package import ``obs`` as well,
+and AAP 0.14.3 makes :mod:`foundry.obs.redaction` the only redaction engine every sink calls.
+Importing this module therefore defines names only: no file is read, no environment variable is
+consulted, no logger is configured and nothing heavy (``jsonschema``, ``yaml``, ``pydantic``) is
+pulled in by the import itself.
 
 Only the ten names in :data:`__all__` form the public surface. The ordering and rendering
 internals of :mod:`foundry.contract.violations` -- ``choose_first``, ``sort_violations``,

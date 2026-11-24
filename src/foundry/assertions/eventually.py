@@ -54,7 +54,11 @@ The ``clock`` keyword
     0.4.3 keeps working unchanged: the stability statement permits additions and forbids
     renames and removals (AAP 0.4.9). It exists because AAP 0.7.1 requires a deterministic
     deadline computed from a supplied clock, which is how a test asserts deadline behaviour
-    without waiting for it.
+    without waiting for it. Its ``now()`` must return a ``datetime`` on every call, the
+    baseline included: a reader that is callable but returns anything else -- a count of
+    seconds, a string, ``None`` -- raises this module's own ``AssertionError`` naming the
+    clock's type, instead of leaking an ``AttributeError`` or ``TypeError`` out of the poll
+    loop (AAP 0.13.1).
 
 Importing this module defines names only: the function, its helpers, the public name listed
 in ``__all__`` and the constants below. It performs no I/O, reads no environment variable,
@@ -66,6 +70,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Final, TypeVar
 
 from foundry.core.types import ClockLike, Sleep
@@ -139,6 +144,22 @@ def _format_seconds(value: float) -> str:
         The shortest faithful decimal spelling of ``value``, without a unit suffix.
     """
     return f"{value:g}"
+
+
+def _poll_word(polls: int) -> str:
+    """Render a poll count with the noun agreeing with it.
+
+    The count reaches a message a person reads and a test matches, and a single poll is a
+    common outcome -- ``timeout=0`` polls exactly once -- so a fixed plural would read
+    ``1 polls`` on the most easily reproduced failure there is.
+
+    Args:
+        polls: How many times the polled callable has been called.
+
+    Returns:
+        ``"1 poll"`` for a single poll, and ``"<n> polls"`` for every other count.
+    """
+    return f"{polls} poll" if polls == 1 else f"{polls} polls"
 
 
 def _as_finite_seconds(value: object) -> float | None:
@@ -242,6 +263,22 @@ def _require_sleep(sleep: Sleep) -> Sleep:
     return sleep
 
 
+def _clock_misuse(clock: object) -> AssertionError:
+    """Build the assertion raised when the supplied clock breaks the time-source contract.
+
+    One builder serves both halves of the contract -- a reader that is not callable and a
+    reader whose result is not a ``datetime`` -- so the message has a single source.
+
+    Args:
+        clock: The value the caller passed as ``clock``. Its type is named in the message,
+            because that is the object the caller has to fix.
+
+    Returns:
+        A fresh :class:`AssertionError` carrying the module prefix, which the caller raises.
+    """
+    return _misuse(f"clock must provide now() returning a datetime, got {type(clock).__name__}")
+
+
 def _require_clock(clock: ClockLike | None) -> ClockLike | None:
     """Validate the supplied time source.
 
@@ -254,13 +291,39 @@ def _require_clock(clock: ClockLike | None) -> ClockLike | None:
 
     Raises:
         AssertionError: When ``clock`` is neither ``None`` nor an object exposing a callable
-            ``now()``.
+            ``now()`` that returns a ``datetime``. This function checks that the reader is
+            present; :func:`_read_instant` enforces the returned type on every read, and
+            raises the same message when it does not hold.
     """
     if clock is None:
         return None
     if not callable(getattr(clock, "now", None)):
-        raise _misuse(f"clock must provide now() returning a datetime, got {type(clock).__name__}")
+        raise _clock_misuse(clock)
     return clock
+
+
+def _read_instant(clock: ClockLike) -> datetime:
+    """Read the supplied clock once and require the reading to be a ``datetime``.
+
+    The reading is validated here rather than once at the top of :func:`eventually` because a
+    clock can change what it returns between calls: one that answers with a ``datetime`` for
+    the baseline and a number afterwards would otherwise leak an ``AttributeError`` or a
+    ``TypeError`` from inside the poll loop, breaking the rule that :class:`AssertionError` is
+    the only type this module raises (AAP 0.13.1).
+
+    Args:
+        clock: The supplied time source, already validated as exposing a callable ``now()``.
+
+    Returns:
+        The instant ``clock.now()`` returned.
+
+    Raises:
+        AssertionError: When ``now()`` returns anything other than a :class:`datetime.datetime`.
+    """
+    reading = clock.now()
+    if not isinstance(reading, datetime):
+        raise _clock_misuse(clock)
+    return reading
 
 
 def _seconds_from_now(clock: ClockLike | None) -> Callable[[], float]:
@@ -271,18 +334,25 @@ def _seconds_from_now(clock: ClockLike | None) -> Callable[[], float]:
     later reading is turned into a difference. ``time.monotonic`` is the default source
     because it cannot go backwards when the machine's wall clock is adjusted.
 
+    Every reading is taken through :func:`_read_instant`, so a clock that stops returning a
+    ``datetime`` raises this module's own :class:`AssertionError` instead of a builtin one.
+
     Args:
         clock: The supplied time source, or ``None`` to measure on the monotonic clock.
 
     Returns:
         A zero-argument callable returning the seconds elapsed since this function was called,
         as a ``float``.
+
+    Raises:
+        AssertionError: When ``clock.now()`` returns anything other than a ``datetime``, at
+            the baseline or on any later read.
     """
     if clock is None:
         monotonic_origin = time.monotonic()
         return lambda: time.monotonic() - monotonic_origin
-    instant_origin = clock.now()
-    return lambda: (clock.now() - instant_origin).total_seconds()
+    instant_origin = _read_instant(clock)
+    return lambda: (_read_instant(clock) - instant_origin).total_seconds()
 
 
 def _one_line(text: str) -> str:
@@ -399,8 +469,9 @@ def eventually(
         AssertionError: When the deadline passes, when the poll budget is exhausted because a
             supplied clock never advanced, or when an argument is unusable (``fn`` not
             callable, ``timeout`` or ``interval`` outside its accepted range, ``sleep`` not
-            callable, ``clock`` without a callable ``now()``). The message names the last
-            outcome and the poll count, and quotes it redacted and bounded.
+            callable, ``clock`` without a callable ``now()`` returning a ``datetime``). The
+            message names the last outcome and the poll count, and quotes it redacted and
+            bounded.
 
     Example:
         Poll an endpoint until the order it describes is ready, without spending real time::
@@ -443,7 +514,7 @@ def eventually(
         elapsed = elapsed_seconds()
         if elapsed >= limit:
             raise AssertionError(
-                f"{_PREFIX}: timed out after {_format_seconds(limit)}s and {polls} polls "
+                f"{_PREFIX}: timed out after {_format_seconds(limit)}s and {_poll_word(polls)} "
                 f"(interval={_format_seconds(period)}s): "
                 f"{_outcome_text(last_error, last_value)}"
             )
@@ -455,7 +526,7 @@ def eventually(
             if stalled_polls >= poll_budget:
                 raise AssertionError(
                     f"{_PREFIX}: poll budget of {poll_budget} exhausted after "
-                    f"{_format_seconds(elapsed)}s and {polls} polls "
+                    f"{_format_seconds(elapsed)}s and {_poll_word(polls)} "
                     f"(interval={_format_seconds(period)}s): "
                     f"{_outcome_text(last_error, last_value)}"
                 )

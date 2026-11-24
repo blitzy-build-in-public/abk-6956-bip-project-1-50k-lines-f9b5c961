@@ -583,15 +583,16 @@ def _error_text(error: BaseException) -> str:
 
 
 def _is_pytest_failure(error: BaseException) -> bool:
-    """Return whether ``error`` is pytest's own ``Failed`` outcome exception.
+    """Return whether ``error`` is the outcome exception ``pytest.fail`` raises.
 
-    pytest is imported here rather than at module scope, and only on the path that already has a
-    matching message. When pytest cannot be imported at all -- this module used from a script --
-    the marker alone decides, because outside a pytest run there is no pytest failure type to
-    compare against.
+    The class compared against is pytest's public ``pytest.fail.Exception``, so no private pytest
+    namespace is imported. pytest is imported here rather than at module scope, and only on the
+    path that already has a matching message (AAP 0.13.1). When pytest cannot be imported at all
+    -- this module used from a script -- the marker alone decides, because outside a pytest run
+    there is no pytest failure type to compare against.
     """
     try:
-        from _pytest.outcomes import Failed
+        from pytest import fail
     except ImportError:
         return True
-    return isinstance(error, Failed)
+    return isinstance(error, fail.Exception)

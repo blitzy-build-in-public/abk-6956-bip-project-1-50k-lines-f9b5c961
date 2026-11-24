@@ -1,13 +1,17 @@
 """JSON Schema enforcement for the rows of a data file.
 
-A data file may carry a *sidecar* schema: a JSON Schema document beside it whose name is the data
-file's own full name plus ``.schema.json``, so ``testdata/cart.csv`` is described by
-``testdata/cart.csv.schema.json`` and ``testdata/pricing.json`` by
-``testdata/pricing.json.schema.json``. Keeping the full name, extension included, is what lets
-``cart.csv`` and ``cart.json`` sit in one directory with a schema each; sharing the bare stem
-would make the two documents collide. Nothing else declares a schema -- there is no schema key in
-a data file and none in the configuration -- so the sidecar's presence is the whole declaration,
-and a data file without one is enforced against nothing beyond the shape rules the readers apply.
+A data file may carry a *sidecar* schema: a JSON Schema document beside it, discovered under either
+of two spellings -- the data file's own full name plus ``.schema.json``, or its bare stem plus the
+same suffix -- so ``testdata/cart.csv`` is described by ``testdata/cart.csv.schema.json`` or by
+``testdata/cart.schema.json``, and ``testdata/pricing.json`` by
+``testdata/pricing.json.schema.json`` or by ``testdata/pricing.schema.json``. The full-name form
+is tried first and wins when both documents exist, which is what lets ``cart.csv`` and
+``cart.json`` sit in one directory with a schema each; the stem form is there for the sidecar an
+author writes beside the bare stem, and a stem keeps every dot it holds, so ``cart.pricing.csv``
+is described by ``cart.pricing.schema.json``. Nothing else declares a schema -- there is no schema
+key in a data file and none in the configuration -- so the sidecar's presence is the whole
+declaration, and a data file without one is enforced against nothing beyond the shape rules the
+readers apply.
 
 Two checks run for a row, in this order, and both report through
 :func:`foundry.data.loaders.base.data_error`, the package's single ``DataError`` construction
@@ -15,8 +19,9 @@ site, so every fault names the file and, where they are known, the line and the 
 (AAP 0.4.7, AAP 0.14.3):
 
 1. **Structure, before values.** A column the schema lists in ``required`` that the row does not
-   carry is reported by name, and a column the table header or the schema's ``properties`` does
-   not declare is reported by name when ``data.schema_strict`` is on (AAP 0.4.5). Running this
+   carry is reported by name, and a column the schema's ``properties`` does not declare is
+   reported by name when ``data.schema_strict`` is on (AAP 0.4.5); a schema that declares no
+   ``properties`` fixes no column set, so it has no undeclared column to report. Running this
    first is what keeps a missing column nameable: the ``required`` complaint a JSON Schema walk
    produces is located at the document root, where there is no column to report.
 2. **Values, through the contract layer.** The row's values are validated with
@@ -72,28 +77,43 @@ __all__ = [
 # --- Locating the sidecar --------------------------------------------------
 
 SCHEMA_SUFFIX: Final[str] = ".schema.json"
-"""The suffix appended to a data file's full name to name its schema document.
+"""The suffix appended to a data file's full name, or to its bare stem, to name its schema.
 
-``cart.csv`` keeps its extension, so the schema is ``cart.csv.schema.json`` rather than
-``cart.schema.json``: two data files sharing a stem in different formats therefore cannot claim
-one schema document.
+``cart.csv`` keeps its extension in the preferred spelling, ``cart.csv.schema.json``, and the bare
+stem gives the fallback spelling, ``cart.schema.json``; when both documents exist, the full-name
+one is the one enforced, so two data files sharing a stem in different formats never collide.
 """
 
 
 def schema_path_for(data_path: Path) -> Path:
     """Return the sidecar schema path that belongs to one data file.
 
-    Pure path arithmetic: nothing is opened, read or tested for existence, so a caller may use the
-    result to decide whether a schema exists at all.
+    This is the only place the sidecar's name is decided, and the two spellings are tried in a
+    fixed order: the full-name candidate ``<name>.schema.json`` when that file exists, else the
+    stem candidate ``<stem>.schema.json`` when that one exists, else the full-name candidate. The
+    existence tests stop here so that every caller -- including :func:`load_row_schema` -- reads
+    one decision instead of repeating it, and the final fallback keeps the canonical full-name
+    path as the answer for a data file that declares no schema. A data file whose stem is its own
+    name, one carrying no suffix or a dotfile, has a single candidate rather than two.
 
     Args:
         data_path: The data file's path, for example ``testdata/cart.csv``.
 
     Returns:
-        The schema document's path in the same directory, ``testdata/cart.csv.schema.json`` for
-        that input, or ``testdata/pricing.json.schema.json`` for ``testdata/pricing.json``.
+        The path of the schema document that exists, the full-name form winning when both do --
+        ``testdata/cart.csv.schema.json`` for ``testdata/cart.csv`` and
+        ``testdata/pricing.json.schema.json`` for ``testdata/pricing.json`` -- otherwise the
+        full-name candidate, ``testdata/cart.csv.schema.json`` for a data file carrying neither.
     """
-    return data_path.with_name(data_path.name + SCHEMA_SUFFIX)
+    full_name = data_path.with_name(data_path.name + SCHEMA_SUFFIX)
+    if data_path.stem == data_path.name:
+        return full_name
+    stem_name = data_path.with_name(data_path.stem + SCHEMA_SUFFIX)
+    if full_name.exists():
+        return full_name
+    if stem_name.exists():
+        return stem_name
+    return full_name
 
 
 def load_row_schema(
@@ -238,18 +258,18 @@ def enforce_table(
     strict: bool = True,
     schema: Mapping[str, object] | None = None,
 ) -> LoadedTable:
-    """Enforce a table's header and, when one is given, its schema, row by row.
+    """Enforce a table's rows against its schema, when the data file declares one.
 
     This is the one entry point the data registry calls, and it returns the table that
     :func:`foundry.data.cases.build_case_set` converts, so schema enforcement always precedes case
     construction and a rejected row never becomes a case.
 
-    Two checks apply. The header first: when the table carries column names, they are the declared
-    set, so a row holding a column the header never named is reported at that row's line under
-    ``strict`` -- the collection-time fault AAP 0.4.7 describes, naming the file, the line and the
-    column. Then, when ``schema`` is not ``None``, every row goes through :func:`enforce_row`, and
-    the validated rows are rebuilt so the caller receives what was actually checked: the row's own
-    values under ``strict``, and the declared columns alone when an author tolerates extras.
+    One check applies here. When ``schema`` is not ``None``, every row goes through
+    :func:`enforce_row`, which is the only party that compares a row's columns with the schema's
+    ``required`` list and its ``properties`` mapping, and the validated rows are rebuilt so the
+    caller receives what was actually checked: the row's own values under ``strict``, and the
+    declared columns alone when an author tolerates extras. A data file that declares no schema is
+    enforced against nothing, so the table comes back unchanged without a row being opened.
 
     Args:
         table: The table a reader produced, with its path, column order and rows.
@@ -262,21 +282,10 @@ def enforce_table(
         same order and carrying the same lines and row indexes.
 
     Raises:
-        DataError: When a row holds a column the header does not declare, or for any fault
-            :func:`enforce_row` reports.
+        DataError: For any fault :func:`enforce_row` reports -- a required column the row lacks, an
+            undeclared column present under ``strict``, or a value the schema rejects -- naming the
+            file, the row's line and the column.
     """
-    if table.columns:
-        known = frozenset(table.columns)
-        for row in table.rows:
-            extras = sorted(name for name, _ in row.values if name not in known)
-            if extras and strict:
-                data_error(
-                    table.path,
-                    f"unknown column '{extras[0]}'",
-                    line=row.line,
-                    column=extras[0],
-                )
-
     if schema is None:
         return table
 

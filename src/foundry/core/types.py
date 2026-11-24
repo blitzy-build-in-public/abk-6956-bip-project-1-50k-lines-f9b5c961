@@ -122,8 +122,11 @@ class AttemptRecord:
             attempt rather than one of the nine result-record outcome values
             that ``foundry.reporting.Outcome`` owns.
         elapsed_ms: Wall-clock duration of the attempt in milliseconds.
-        retry_on: The retry predicate that triggered a further attempt, or
-            ``None`` when this attempt was final.
+        retry_on: The retry predicate that describes how the attempt ended, or
+            ``None`` when no predicate does: a response that is returned never
+            names one, whatever its status. An attempt ended by a fault that
+            classifies as a predicate keeps it even when it was the last one, so
+            the number of records equals the number of attempts.
         message: Short description of the attempt, or ``None``. Callers pass
             only text that has already been through the redaction engine
             (AAP 0.3.2): the record reaches ``results.json``, the JUnit XML and

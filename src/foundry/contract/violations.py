@@ -41,7 +41,15 @@ no module-level mutable state. It imports :mod:`foundry.core.exceptions` at modu
 reaches :mod:`foundry.obs.redaction` through one lazy import inside :func:`_resolve_redactor`,
 which keeps the redaction engine off the plugin's startup path; ``jsonschema`` itself is imported
 only under ``TYPE_CHECKING`` for annotations, so importing this module costs a handful of stdlib
-lookups (AAP 0.4.8). It raises only :class:`~foundry.core.exceptions.ContractError`.
+lookups. It raises only :class:`~foundry.core.exceptions.ContractError`.
+
+That obs import is the one deliberate exception to the permitted-import column of AAP 0.4.8, which
+lists ``core`` alone. It points downward into the foundation rung, which the capability row of
+AAP 0.3.2 permits by letting a capability package import ``core``, ``obs`` and its siblings on the
+same rung, and AAP 0.14.3 makes :mod:`foundry.obs.redaction` the single engine every sink calls, so
+the :class:`~foundry.core.exceptions.ContractError` detail a failure displays is scrubbed here,
+before pytest renders it. A layering check written from AAP 0.4.8 carries exactly this one
+exception for this package.
 """
 
 from __future__ import annotations
@@ -372,8 +380,10 @@ def _resolve_redactor() -> RedactorCallable:
     :mod:`foundry.obs.redaction`, and the import sits inside the function on purpose: importing
     the engine at module scope would put it on the plugin's startup path, and a
     configuration-driven redactor cannot be built here at all because this package may not
-    import :mod:`foundry.config`. A caller that holds the configured keys injects its own
-    redactor instead.
+    import :mod:`foundry.config`. The edge is also the package's single sanctioned exception to the
+    permitted-import column of AAP 0.4.8, kept function-scope here and required by the single
+    redaction engine AAP 0.14.3 makes authoritative. A caller that holds the configured keys
+    injects its own redactor instead.
 
     Returns:
         A callable that scrubs secret values out of free text using the built-in header and
