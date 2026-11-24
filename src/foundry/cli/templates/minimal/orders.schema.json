@@ -4,16 +4,28 @@
   "type": "object",
   "properties": {
     "order_id": {
-      "type": "integer"
+      "description": "Order identifier. Integer >= 1; a CSV cell is text, so the decimal-string form is accepted too.",
+      "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "string", "pattern": "^[1-9][0-9]*$"}
+      ]
     },
     "sku": {
       "type": "string"
     },
     "quantity": {
-      "type": "integer"
+      "description": "Units ordered. Integer >= 1; a CSV cell is text, so the decimal-string form is accepted too.",
+      "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "string", "pattern": "^[1-9][0-9]*$"}
+      ]
     },
     "unit_price_cents": {
-      "type": "integer"
+      "description": "Unit price in cents. Integer >= 0, since a free line is a legal price; a CSV cell is text, so the decimal-string form is accepted too.",
+      "anyOf": [
+        {"type": "integer", "minimum": 0},
+        {"type": "string", "pattern": "^(0|[1-9][0-9]*)$"}
+      ]
     },
     "status": {
       "type": "string"

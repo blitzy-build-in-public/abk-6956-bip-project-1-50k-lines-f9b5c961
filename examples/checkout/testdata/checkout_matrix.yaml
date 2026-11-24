@@ -1,0 +1,8 @@
+# Matrix declaration read by examples/checkout/test_contracts.py.
+# Matrix name: order_contract. Matrix.name is derived from this file's stem.
+# Every value is a list, the shape foundry.data.loaders.base.classify_document
+# accepts as a matrix; one axis of three values expands to exactly 3 cases.
+currency:
+  - EUR
+  - GBP
+  - USD

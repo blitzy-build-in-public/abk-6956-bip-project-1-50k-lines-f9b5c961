@@ -1,0 +1,4 @@
+order_id,sku,quantity,unit_price_cents,status
+1001,SKU-RED-01,2,1499,paid
+1002,SKU-BLU-02,1,899,paid
+1003,SKU-GRN-03,4,249,refunded
