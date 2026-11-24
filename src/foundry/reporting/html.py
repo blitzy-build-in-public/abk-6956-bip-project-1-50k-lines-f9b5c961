@@ -65,10 +65,16 @@ Taken from :data:`foundry.reporting.panels.DEFAULT_LOG_TAIL_LINES`, the default 
 """
 
 QUARANTINE_REMOVAL_NOTE: Final[str] = (
-    "marked foundry_quarantine and passed: remove the marker so that a later failure of this test "
-    "fails the run again"
+    "foundry: quarantined test passed; remove the foundry_quarantine marker"
 )
-"""Recommendation rendered beside a ``quarantine_passed`` entry (assumption A11)."""
+"""The recommendation rendered beside a ``quarantine_passed`` entry (assumption A11).
+
+Byte-identical to :data:`foundry.reporting.junit.QUARANTINE_PASSED_NOTE`, the same run's JUnit
+``<system-out>`` note, so ``report.html`` and ``junit.xml`` carry one recommendation rather than
+two. The bytes are restated here instead of imported because ``foundry.reporting`` may not import
+``foundry.execution``, which holds the decision's own copy (AAP 0.4.8); a test pins the two
+reporting-side copies equal.
+"""
 
 _UNKNOWN: Final[str] = "unknown"
 """What ``run_id`` and ``profile`` fall back to when no record exists and no override was given.

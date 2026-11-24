@@ -533,6 +533,13 @@ def test_a_quarantined_failure_is_listed_in_its_own_section() -> None:
     assert "quarantined_failed" in document
 
 
+def test_the_removal_note_is_the_canonical_junit_note() -> None:
+    record = _record(outcome=Outcome.QUARANTINE_PASSED, quarantine=QuarantineRecord(state="passed"))
+    document = _render([record])
+    assert html.QUARANTINE_REMOVAL_NOTE == junit.QUARANTINE_PASSED_NOTE
+    assert document.count(html.QUARANTINE_REMOVAL_NOTE) == 1
+
+
 def test_a_failure_panel_links_the_dumps_and_shows_the_log_tail(tmp_path: Path) -> None:
     record, run_dir = _failing_capture(tmp_path)
     document = _render([record], artifacts_root=run_dir, report_dir=tmp_path)
