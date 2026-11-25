@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "checkout order",
+  "description": "The 201 response body of POST /orders served by the examples/checkout echo server.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "order_id",
+    "status",
+    "currency",
+    "items",
+    "total_cents"
+  ],
+  "properties": {
+    "order_id": {
+      "description": "Server-assigned order identifier: ord- followed by 12 lowercase hex characters.",
+      "type": "string",
+      "pattern": "^ord-[0-9a-f]{12}$"
+    },
+    "status": {
+      "description": "Order state at creation.",
+      "const": "created"
+    },
+    "currency": {
+      "description": "ISO 4217 code the order was priced in.",
+      "enum": [
+        "EUR",
+        "GBP",
+        "USD"
+      ]
+    },
+    "items": {
+      "description": "Order lines echoed from the request body.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sku",
+          "quantity",
+          "unit_price_cents"
+        ],
+        "properties": {
+          "sku": {
+            "description": "Product identifier of the ordered line.",
+            "type": "string",
+            "minLength": 1
+          },
+          "quantity": {
+            "description": "Units ordered on this line.",
+            "type": "integer",
+            "minimum": 1
+          },
+          "unit_price_cents": {
+            "description": "Unit price in cents for this line.",
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "total_cents": {
+      "description": "Order total in cents: the sum of quantity * unit_price_cents over items.",
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

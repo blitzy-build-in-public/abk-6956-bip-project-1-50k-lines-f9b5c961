@@ -1,4 +1,4 @@
-"""Timing instrument for plugin startup: ten boots of one command against the AAP 0.14.2 budget.
+"""Timing instrument for plugin startup: five interleaved pairs against the AAP 0.14.2 budget.
 
 AAP 0.14.2 budgets plugin startup overhead at "<= 150 ms, median of 5 ``pytest --collect-only`` runs
 on a one-test directory, measured against ``-p no:foundry``", and implicit requirement I5 -- every
@@ -44,6 +44,20 @@ timed directory is proved by a separate ``--trace-config`` run, which is exclude
 because it changes the output volume of an invocation. And a negative delta is noise, never a
 failure: only the ceiling is asserted, never a floor.
 
+**A pair the host starved is retaken, not measured.** Interleaving cancels a drift that moves both
+arms, but a 2-vCPU host shared with a batch of agents also adds wait that no interleaving removes: a
+container whose CPU quota is spent freezes every runnable task until the next accounting period,
+and a descheduled child spends wall clock on nothing while its CPU time stands still. Such a pair
+describes the host, not the plugin, and the CPU time of a starved run does not escape it -- a child
+that keeps losing its core also keeps losing its cache and its frequency. The proof that a pair was
+starved is read from the pair itself, never from the host's load: an arm whose own wall clock
+grossly exceeds its own CPU time spent the difference waiting
+(:func:`tests.integration._host_contention.was_preempted`). Up to :data:`PAIR_RETRY_BUDGET` extra
+pairs replace the starved ones, and a host that keeps starving every pair spends that budget and
+then has the pairs it starved the least measured in their place, so a real regression still fails
+the budget. The honest pairs measured, the pairs set aside and the cgroup's own throttling count are
+all printed beside the figures.
+
 The fresh-interpreter test is the runtime counterpart of AAP 0.4.8's module-scope import rule: it
 asserts what an installed ``import foundry.plugin`` actually pulls in, which no static scan can. No
 sleep is spent and no wall-clock reading is taken -- ``time.perf_counter`` and the kernel's CPU
@@ -62,6 +76,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, Protocol, TypeAlias
 
+from _host_contention import (
+    QuotaThrottling,
+    describe_quota_throttling,
+    read_quota_throttling,
+    was_preempted,
+)
+
 __all__: Final[tuple[str, ...]] = ("build_one_test_project",)
 
 # --- The budget, the sample and the project both arms share ------------------
@@ -71,6 +92,24 @@ STARTUP_BUDGET_MS: Final[float] = 150.0
 
 SAMPLE_COUNT: Final[int] = 5
 """How many timed invocations each arm gets: the count AAP 0.14.2 names for the median."""
+
+PAIR_RETRY_BUDGET: Final[int] = 5
+"""How many extra pairs may replace pairs the host starved, so a saturated host cannot loop here.
+
+Equal to :data:`SAMPLE_COUNT`, so a host that is contended throughout costs at most twice the ten
+boots the budget is read from, and small enough that the whole test stays inside the per-item
+timeout Foundry's own ``execution.timeout`` enforces on this suite.
+"""
+
+PREEMPTION_FLOOR_MS: Final[float] = 100.0
+"""How much wall clock one arm may spend beyond its own CPU time before the host starved it.
+
+Both arms are CPU-bound boots of the same command, so at full speed the two clocks agree to within
+a few milliseconds: measured on this 2-vCPU host, an arm that got its CPU stayed inside 44 ms of
+wait -- 0.3 ms once the host was calm -- while an arm that was kept off it lost 250 ms or more. The
+floor sits between the two, and ``PREEMPTION_RATIO`` in ``_host_contention`` widens it for a longer
+run.
+"""
 
 PROJECT_FILE_NAME: Final[str] = "test_one.py"
 """The one module the measured directory holds, named by the node id every arm must report."""
@@ -85,7 +124,7 @@ PROJECT_FILE_SOURCE: Final[str] = (
 """Its content: one trivial passing test, so collection has exactly one node id to report."""
 
 COLLECTED_NODEID: Final[str] = "test_one.py::test_one"
-"""The single node id each of the ten timed invocations must collect, in either arm."""
+"""The single node id every timed invocation must collect, in either arm."""
 
 _COLLECT_ARGS: Final[tuple[str, ...]] = ("--collect-only", "-q")
 """Arm A: the cheapest invocation that boots pytest with the installed plugin."""
@@ -140,9 +179,10 @@ Built from the constants above so the program and the assertion cannot drift apa
 _CHILD_TIMEOUT_SECONDS: Final[float] = 30.0
 """A ceiling on one child invocation, so a starved or hung interpreter fails rather than stalls.
 
-Five times the ~0.5 s a boot costs on an idle host, and small enough that the ten timed invocations
-plus the two auxiliary ones stay inside the per-test limit Foundry's own ``execution.timeout``
-enforces on this suite.
+Five times the ~0.5 s a boot costs on an idle host, and small enough that a boot that has not
+finished in that time is a fault. The test's own boots -- ten, or twenty once the retry budget is
+spent on a starved host -- stay inside the 60 s per-item limit Foundry's own ``execution.timeout``
+enforces on this suite at the measured cost of a boot.
 """
 
 ArmName: TypeAlias = Literal["with-plugin", "without-plugin"]
@@ -175,7 +215,9 @@ class TimedRun:
 
     ``cpu_ms`` is what the budget is read from and ``elapsed_ms`` is the wall clock a user waits;
     both are kept beside the exit code and the collected node ids so the caller can establish that
-    the invocation did the work before the clock is allowed to say anything.
+    the invocation did the work before the clock is allowed to say anything. ``throttled`` is the
+    CPU-quota throttling this cgroup recorded while the invocation ran, or ``None`` on a host that
+    keeps no such counters.
     """
 
     arm: ArmName
@@ -185,6 +227,7 @@ class TimedRun:
     nodeids: tuple[str, ...]
     stdout: str
     stderr: str
+    throttled: QuotaThrottling | None
 
 
 def _child_cpu_ms() -> float:
@@ -235,12 +278,19 @@ def _timed(
     cwd: Path,
     args: Sequence[str],
 ) -> TimedRun:
-    """Run one invocation through the harness, sampling it with the only two clocks read here."""
+    """Run one invocation through the harness, sampling it with the two clocks read here.
+
+    The cgroup's throttling counters are read just outside the timed window, so they cost nothing
+    the budget pays for and their delta describes the invocation the wall clock and the CPU time
+    describe. A host that keeps no such counters leaves :attr:`TimedRun.throttled` as ``None``.
+    """
+    throttled_before = read_quota_throttling()
     cpu_before = _child_cpu_ms()
     started = time.perf_counter()
     completed = run_pytest(*args, cwd=cwd, timeout=_CHILD_TIMEOUT_SECONDS)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     cpu_ms = _child_cpu_ms() - cpu_before
+    throttled_after = read_quota_throttling()
     return TimedRun(
         arm=arm,
         elapsed_ms=elapsed_ms,
@@ -249,7 +299,31 @@ def _timed(
         nodeids=_collected_nodeids(completed.stdout),
         stdout=completed.stdout,
         stderr=completed.stderr,
+        throttled=(
+            throttled_after.since(throttled_before)
+            if throttled_before is not None and throttled_after is not None
+            else None
+        ),
     )
+
+
+def _pair_was_preempted(pair: Sequence[TimedRun]) -> bool:
+    """Return whether the host starved either arm of a pair, so its cost is not the plugin's.
+
+    An arm that spent far more wall clock than CPU time was kept off a core for the difference, and
+    the CPU time of such a run is not the cost the budget describes either: a child that keeps
+    losing its core also loses its cache and its frequency. Only that evidence counts here, so a
+    pair that took its CPU time at full speed and still came out slow is measured, never retaken.
+    """
+    return any(
+        was_preempted(elapsed_ms=run.elapsed_ms, cpu_ms=run.cpu_ms, floor_ms=PREEMPTION_FLOOR_MS)
+        for run in pair
+    )
+
+
+def _pair_wait_ms(pair: Sequence[TimedRun]) -> float:
+    """Return the wall clock the host added to the longer-waiting arm of a pair."""
+    return max(run.elapsed_ms - run.cpu_ms for run in pair)
 
 
 def _median(samples: Sequence[float]) -> float:
@@ -283,25 +357,47 @@ def _assert_arms_did_the_work(runs: Sequence[TimedRun]) -> None:
 # --- The budget -------------------------------------------------------------
 
 
+def _timed_pair(run_pytest: RunPytest, project: Path) -> tuple[TimedRun, TimedRun]:
+    """Run one interleaved with-plugin then without-plugin pair and return both invocations.
+
+    Interleaved in this order for every pair, so a host that gets slower or busier while the loop
+    runs moves both arms together and the difference stays the plugin's own cost.
+    """
+    with_plugin = _timed(run_pytest, arm="with-plugin", cwd=project, args=_COLLECT_ARGS)
+    without_plugin = _timed(
+        run_pytest,
+        arm="without-plugin",
+        cwd=project,
+        args=(*_COLLECT_ARGS, *_PLUGIN_DISABLED_ARGS),
+    )
+    return with_plugin, without_plugin
+
+
 def test_plugin_startup_stays_inside_the_budget(run_pytest: RunPytest, tmp_path: Path) -> None:
     """The plugin's startup cost, median of five interleaved pairs, stays inside 150 ms."""
     project = build_one_test_project(tmp_path)
-    with_plugin: list[TimedRun] = []
-    without_plugin: list[TimedRun] = []
-    for _ in range(SAMPLE_COUNT):
-        # Interleaved in this order for every pair, so a host that gets slower or busier while the
-        # loop runs moves both arms together and the difference stays the plugin's own cost.
-        with_plugin.append(_timed(run_pytest, arm="with-plugin", cwd=project, args=_COLLECT_ARGS))
-        without_plugin.append(
-            _timed(
-                run_pytest,
-                arm="without-plugin",
-                cwd=project,
-                args=(*_COLLECT_ARGS, *_PLUGIN_DISABLED_ARGS),
-            )
-        )
+    honest: list[tuple[TimedRun, TimedRun]] = []
+    starved: list[tuple[TimedRun, TimedRun]] = []
+    for _ in range(SAMPLE_COUNT + PAIR_RETRY_BUDGET):
+        pair = _timed_pair(run_pytest, project)
+        if _pair_was_preempted(pair):
+            starved.append(pair)
+        else:
+            honest.append(pair)
+        if len(honest) == SAMPLE_COUNT:
+            break
 
-    _assert_arms_did_the_work((*with_plugin, *without_plugin))
+    attempts = (*honest, *starved)
+    _assert_arms_did_the_work(tuple(run for pair in attempts for run in pair))
+
+    # The budget is read from the pairs the host did not starve. A host that never let up spends the
+    # retry budget instead of looping, and the pairs it starved the least are then measured in place
+    # of nothing at all, so a real regression still reaches the ceiling below while the figures stay
+    # as close to the plugin's own cost as such a host allows.
+    least_starved = sorted(starved, key=_pair_wait_ms)
+    measured = (*honest, *least_starved[: SAMPLE_COUNT - len(honest)])
+    with_plugin = [pair[0] for pair in measured]
+    without_plugin = [pair[1] for pair in measured]
 
     samples_a = tuple(run.cpu_ms for run in with_plugin)
     samples_b = tuple(run.cpu_ms for run in without_plugin)
@@ -310,10 +406,16 @@ def test_plugin_startup_stays_inside_the_budget(run_pytest: RunPytest, tmp_path:
     delta = median_a - median_b
     wall_a = _median(tuple(run.elapsed_ms for run in with_plugin))
     wall_b = _median(tuple(run.elapsed_ms for run in without_plugin))
+    substituted = len(measured) - len(honest)
+    throttling = describe_quota_throttling(
+        [run.throttled for pair in attempts for run in pair if run.throttled is not None]
+    )
     print(
         f"plugin startup: with plugin {median_a:.1f} ms CPU, without {median_b:.1f} ms CPU, "
         f"delta {delta:.1f} ms (budget {STARTUP_BUDGET_MS:.0f} ms, {SAMPLE_COUNT} pairs); "
-        f"wall clock {wall_a:.1f} ms against {wall_b:.1f} ms, delta {wall_a - wall_b:.1f} ms"
+        f"wall clock {wall_a:.1f} ms against {wall_b:.1f} ms, delta {wall_a - wall_b:.1f} ms; "
+        f"pairs the host starved {len(starved)} set aside, {substituted} of the least starved "
+        f"measured after {SAMPLE_COUNT + PAIR_RETRY_BUDGET} pairs; {throttling}"
     )
 
     # Only the ceiling is asserted: the two arms share the interpreter's start and pytest's boot, so
@@ -322,7 +424,9 @@ def test_plugin_startup_stays_inside_the_budget(run_pytest: RunPytest, tmp_path:
         f"plugin startup overhead {delta:.2f} ms exceeds the 150 ms budget "
         f"(with plugin: {median_a:.2f} ms, without: {median_b:.2f} ms, "
         f"samples A: {sorted(samples_a)}, samples B: {sorted(samples_b)}; "
-        f"wall clock: with plugin {wall_a:.2f} ms, without {wall_b:.2f} ms)"
+        f"wall clock: with plugin {wall_a:.2f} ms, without {wall_b:.2f} ms; "
+        f"{len(starved)} starved pairs set aside, {substituted} of the least starved measured; "
+        f"{throttling})"
     )
 
 

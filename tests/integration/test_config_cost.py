@@ -14,6 +14,18 @@ before the budget assertion, because a resolution that fell back to the field de
 and meaningless; and the twenty resolutions are asserted equivalent afterwards, so a loop that
 stopped resolving cannot look cheap. No subprocess, server, socket or write outside ``tmp_path`` is
 involved (AAP 0.14.3).
+
+**A resolution the host starved is retaken, not measured.** A resolution reads a file and builds a
+model, so at full speed its wall clock matches its own CPU time to a fraction of a millisecond; a
+resolution the host kept off a core shows wall clock it never spent working, which on a 2-vCPU host
+shared with a batch of agents arrives in whole CPU-quota periods -- measured here, a sample of about
+1 ms reappeared at 27 ms and at 46 ms. The proof that a sample was starved is read from that sample
+itself (``_host_contention.was_preempted``), never from the host's load, so a resolution that took
+its CPU time at full speed and still came out slow is measured, never retaken. Up to
+:data:`SAMPLE_RETRY_BUDGET` extra resolutions replace the starved ones; a host that keeps starving
+every sample spends that budget and then has the samples it starved the least measured in their
+place, so a real regression still fails the ceiling. The samples set aside, the ones measured in
+their place and the cgroup's own throttling count are printed beside the figures.
 """
 
 from __future__ import annotations
@@ -24,6 +36,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
+
+from _host_contention import (
+    QuotaThrottling,
+    describe_quota_throttling,
+    read_quota_throttling,
+    was_preempted,
+)
 
 from foundry.config import (
     CassetteMode,
@@ -44,6 +63,24 @@ RESOLUTION_BUDGET_MS: Final[float] = 50.0
 
 SAMPLE_COUNT: Final[int] = 20
 """How many resolutions one measurement times: the count AAP 0.14.2 names."""
+
+SAMPLE_RETRY_BUDGET: Final[int] = 20
+"""How many extra resolutions may replace samples the host starved, so a saturated host cannot loop.
+
+One retry costs one resolution of about a millisecond, so this budget costs a saturated host a few
+milliseconds of extra wait and a quiet host nothing at all, while a host that starves a few samples
+out of twenty still yields the twenty honest samples the budget is stated over.
+"""
+
+PREEMPTION_FLOOR_MS: Final[float] = 5.0
+"""How much wall clock one resolution may spend beyond its own CPU time before the host starved it.
+
+A resolution of a millisecond that ran at full speed agrees with its own CPU time to a fraction of a
+millisecond, while one the host descheduled loses whole CPU-quota periods: measured on this 2-vCPU
+host under a parallel batch of agents, starved samples appeared at 27 ms and at 46 ms. The floor
+sits far above the first and far below the second, and ``PREEMPTION_RATIO`` in ``_host_contention``
+widens it for a longer sample.
+"""
 
 PUBLISHED_KEY_COUNT: Final[int] = 28
 """Leaf keys the resolved configuration carries, as AAP 0.4.5 publishes them.
@@ -197,11 +234,17 @@ class Measurement:
     """One measured run: the elapsed milliseconds per resolution and what each resolution returned.
 
     Keeping the twenty configurations beside the twenty samples is what lets the caller prove the
-    loop did the work it timed instead of trusting the clock.
+    loop did the work it timed instead of trusting the clock. ``retakes`` counts the samples set
+    aside because the host starved them, ``substituted`` how many of the least starved of those were
+    measured once the retry budget ran out, and ``throttled`` is the cgroup's CPU-quota throttling
+    over the whole loop, or ``None`` on a host that keeps no such counters.
     """
 
     samples: tuple[float, ...]
     configurations: tuple[FoundryConfig, ...]
+    retakes: int
+    substituted: int
+    throttled: QuotaThrottling | None
 
     @property
     def median_ms(self) -> float:
@@ -296,19 +339,52 @@ def measure_resolutions(environ: Mapping[str, str], cwd: Path) -> Measurement:
     Each iteration is exactly one :func:`foundry.config.merge.resolve` call, with the environment
     and invocation directory passed in, so nothing composed or copied sits inside a timed window.
     One untimed resolution runs first, because the first call of a process also imports ``pydantic``
-    and builds the field validators, which no later invocation pays again. No sample is retried,
-    because a budget that discards its slow samples measures nothing.
+    and builds the field validators, which no later invocation pays again.
+
+    Every iteration reads two clocks across its resolution: the wall clock the budget is stated in,
+    and the CPU time this thread spent, so a sample the host starved can be told from a slow one. A
+    starved sample is set aside and retaken, up to :data:`SAMPLE_RETRY_BUDGET` extra resolutions. A
+    sample that spent its CPU time at full speed and still came out slow is never set aside. A host
+    that starves every sample spends the budget, and the samples it starved the least are then
+    measured in place of nothing at all, so a real regression still reaches the ceiling.
+
+    The cgroup's throttling counters are read once around the loop rather than around each sample:
+    the samples are a millisecond long, and a file read between two of them would add work to a
+    window this tight. The delta names the contention the whole measurement ran under.
     """
     resolve(environ=environ, cwd=cwd)
 
-    samples: list[float] = []
-    configurations: list[FoundryConfig] = []
-    for _ in range(SAMPLE_COUNT):
+    honest: list[tuple[float, float, FoundryConfig]] = []
+    starved: list[tuple[float, float, FoundryConfig]] = []
+    throttled_before = read_quota_throttling()
+    for _ in range(SAMPLE_COUNT + SAMPLE_RETRY_BUDGET):
+        cpu_before = time.thread_time()
         started = time.perf_counter()
         config = resolve(environ=environ, cwd=cwd)
-        samples.append((time.perf_counter() - started) * 1000.0)
-        configurations.append(config)
-    return Measurement(samples=tuple(samples), configurations=tuple(configurations))
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        cpu_ms = (time.thread_time() - cpu_before) * 1000.0
+        sample = (elapsed_ms, elapsed_ms - cpu_ms, config)
+        if was_preempted(elapsed_ms=elapsed_ms, cpu_ms=cpu_ms, floor_ms=PREEMPTION_FLOOR_MS):
+            starved.append(sample)
+        else:
+            honest.append(sample)
+        if len(honest) == SAMPLE_COUNT:
+            break
+    throttled_after = read_quota_throttling()
+
+    least_starved = sorted(starved, key=lambda sample: sample[1])
+    kept = (*honest, *least_starved[: SAMPLE_COUNT - len(honest)])
+    return Measurement(
+        samples=tuple(elapsed_ms for elapsed_ms, _, _ in kept),
+        configurations=tuple(config for _, _, config in kept),
+        retakes=len(starved),
+        substituted=len(kept) - len(honest),
+        throttled=(
+            throttled_after.since(throttled_before)
+            if throttled_before is not None and throttled_after is not None
+            else None
+        ),
+    )
 
 
 def test_the_measured_configuration_resolves_to_the_values_it_declares(
@@ -353,9 +429,14 @@ def test_twenty_resolutions_stay_inside_the_fifty_millisecond_budget(
 
     median = measurement.median_ms
     sorted_samples = [round(sample, 3) for sample in sorted(measurement.samples)]
+    throttling = describe_quota_throttling(
+        [measurement.throttled] if measurement.throttled is not None else []
+    )
     print(
         f"configuration resolution: median {median:.2f} ms over {SAMPLE_COUNT} resolutions "
-        f"(budget {RESOLUTION_BUDGET_MS:.0f} ms), samples: {sorted_samples}"
+        f"(budget {RESOLUTION_BUDGET_MS:.0f} ms), samples: {sorted_samples}; starved samples set "
+        f"aside {measurement.retakes}, {measurement.substituted} of the least starved measured "
+        f"after {SAMPLE_COUNT + SAMPLE_RETRY_BUDGET} resolutions; {throttling}"
     )
 
     first = measurement.configurations[0].leaf_values()
@@ -371,7 +452,9 @@ def test_twenty_resolutions_stay_inside_the_fifty_millisecond_budget(
 
     assert median <= RESOLUTION_BUDGET_MS, (
         f"configuration resolution median {median:.2f} ms exceeds the "
-        f"{RESOLUTION_BUDGET_MS:.0f} ms budget (samples: {sorted_samples})"
+        f"{RESOLUTION_BUDGET_MS:.0f} ms budget (samples: {sorted_samples}; "
+        f"{measurement.retakes} starved samples set aside, {measurement.substituted} of the least "
+        f"starved measured; {throttling})"
     )
 
 
