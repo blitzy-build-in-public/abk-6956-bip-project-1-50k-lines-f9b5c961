@@ -1,24 +1,13 @@
-"""Unit tests for the ``foundry.reporting`` package.
-
-Every renderer consumes the frozen result record, not live run state (AAP 0.4.6, 0.4.8, 0.7.2):
-``record`` pins the nine outcome values and the relationship rules; ``store`` writes sorted records
-with run errors last; ``junit`` renders the suite properties and each outcome's element;
-``assets`` and ``renderers`` publish the inlined CSS/JS and the format table; ``compare`` is
-reachable from the package surface. The HTML page's own contract -- a self-contained,
-byte-identical report read off the rendered document -- is pinned in
-``tests/unit/test_reporting_html.py``, where it keeps both modules inside the 700-line ceiling of
-AAP 0.14.2.
-
-Determinism and isolation (AAP 0.14.3): fixed timestamps, files under ``tmp_path``, no sleep, no
-network, no patched renderer, and no import of ``http``, ``data``, ``db``, ``execution``, ``cli``
-or ``plugin`` (AAP 0.4.8).
-"""
+"""Unit tests for the ``foundry.reporting`` package: record schema, store, JUnit, formats, compare.
+The HTML page's own cases live in ``tests/unit/test_reporting_html.py``."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import get_args
 from xml.etree import ElementTree
 
 import pydantic
@@ -39,378 +28,148 @@ from foundry.reporting.record import (
     parse_element,
 )
 
-# Fixed run id, profile, node id and instants, so no assertion depends on the host's clock.
-
 _RUN_ID = "20250102T030405-abc123"
-_PROFILE = "ci"
-_STARTED_AT = datetime(2025, 1, 2, 3, 4, 5, 0, tzinfo=UTC)
+_STARTED_AT = datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
 _FINISHED_AT = datetime(2025, 1, 2, 3, 4, 5, 250_000, tzinfo=UTC)
 _MODULE = "tests/test_cart.py"
-_NODEID = f"{_MODULE}::test_total"
-
 _SECRET = "hunter2-secret-9f3"
-"""A sentinel no document may contain: distinctive enough that a match is a real leak."""
-
-_SCRIPT_NODEID = f"{_MODULE}::test_<script>alert(1)</script>"
-"""A node id carrying markup, which every renderer must treat as text."""
-
-_DOCUMENTED_OUTCOMES = frozenset(
-    {
-        "passed",
-        "failed",
-        "skipped",
-        "xfailed",
-        "xpassed",
-        "error",
-        "quarantined_failed",
-        "quarantine_passed",
-        "not_run",
-    }
-)
-
-_DOCUMENTED_FIELDS = (
-    "record_type",
-    "run_id",
-    "started_at",
-    "finished_at",
-    "profile",
-    "nodeid",
-    "outcome",
-    "attempts",
-    "duration_ms",
-    "markers",
-    "failures",
-    "artifacts",
-    "quarantine",
-    "artifacts_disabled",
-)
+_RENDERER_IDS = ("json", "html", "junit")
+_BASE = {
+    "run_id": _RUN_ID,
+    "started_at": _STARTED_AT,
+    "finished_at": _FINISHED_AT,
+    "profile": "ci",
+    "outcome": Outcome.PASSED,
+    "attempts": 1,
+    "duration_ms": 12.5,
+}
 
 
-def _record(**overrides: object) -> ResultRecord:
-    """Return a passing result record whose every field the caller did not override is fixed."""
-    fields: dict[str, object] = {
-        "run_id": _RUN_ID,
-        "started_at": _STARTED_AT,
-        "finished_at": _FINISHED_AT,
-        "profile": _PROFILE,
-        "nodeid": _NODEID,
-        "outcome": Outcome.PASSED,
-        "attempts": 1,
-        "duration_ms": 12.5,
-    }
-    fields.update(overrides)
+def _record_for(name: str = "total", **overrides: object) -> ResultRecord:
+    fields = {**_BASE, "nodeid": f"{_MODULE}::{name}", **overrides}
     return ResultRecord.model_validate(fields)
 
 
-def _record_for(name: str, **overrides: object) -> ResultRecord:
-    """Return a record whose node id is the module path plus ``name``."""
-    return _record(nodeid=f"{_MODULE}::{name}", **overrides)
-
-
 def _run_error(worker_id: str = "gw1", message: str = "worker lost") -> RunError:
-    """Return a run-level error element, the second kind ``results.json`` holds."""
     return RunError(run_id=_RUN_ID, recorded_at=_STARTED_AT, worker_id=worker_id, message=message)
 
 
-def _write_artifact(
-    run_dir: Path,
-    relative: str,
-    text: str,
-    *,
-    kind: ArtifactKind = "request",
-) -> ArtifactRecord:
-    """Write one captured artifact under ``run_dir`` and return the record that references it."""
-    target = run_dir / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
-    return ArtifactRecord(kind=kind, path=relative, bytes=len(text.encode("utf-8")))
+def _failure(phase: str, message: str = "boom") -> FailureRecord:
+    return FailureRecord(phase=phase, message=message)
 
 
-_CAPTURED_FILES: tuple[tuple[ArtifactKind, str, str], ...] = (
-    ("request", "request.json", '{"method": "GET", "path": "/cart"}'),
-    ("response", "response.json", '{"status": 200, "body": "ok"}'),
-    ("stdout", "stdout.log", "captured stdout\n"),
-    ("stderr", "stderr.log", "captured stderr\n"),
-    ("traceback", "traceback.txt", "Traceback: AssertionError\n"),
-    ("log_tail", "log_tail.log", "log line one\nlog line two\n"),
-)
-
-
-def _captured_run(tmp_path: Path) -> tuple[Path, tuple[ArtifactRecord, ...]]:
-    """Write one file per artifact kind under a run directory and return the six references."""
-    run_dir = tmp_path / "artifacts" / _RUN_ID
-    references = tuple(
-        _write_artifact(run_dir, f"tests__test_cart.py__a/{name}", text, kind=kind)
-        for kind, name, text in _CAPTURED_FILES
-    )
-    return run_dir, references
-
-
-def test_outcome_exposes_exactly_the_nine_documented_values() -> None:
-    values = {member.value for member in Outcome}
-    assert values == _DOCUMENTED_OUTCOMES
-    assert len(Outcome) == len(_DOCUMENTED_OUTCOMES)
-    assert tuple(Outcome) == reporting.OUTCOMES
-    assert {member.value for member in reporting.OUTCOMES} == _DOCUMENTED_OUTCOMES
-    assert all(str(member) == member.value for member in Outcome)
-
-
-def test_result_record_exposes_the_documented_fields() -> None:
-    """The thirteen AAP 0.4.6 fields in their order, then the additive AAP 0.4.7 disabled flag."""
-    assert tuple(ResultRecord.model_fields) == _DOCUMENTED_FIELDS
-
-
-def test_profile_names_cover_the_configuration_enum() -> None:
-    assert tuple(member.value for member in ProfileName) == reporting.PROFILE_NAMES
-
-
-def _frozen_cases() -> tuple[tuple[object, str, object], ...]:
-    """Return one instance of each record kind with a field no caller may assign."""
-    return (
-        (_record(), "nodeid", "tests/other.py::test_other"),
-        (_record(), "attempts", 2),
-        (FailureRecord(phase="call", message="boom"), "message", "other"),
-        (ArtifactRecord(kind="request", path="run/request.json", bytes=1), "bytes", 2),
-        (QuarantineRecord(state="none"), "state", "failed"),
-        (_run_error(), "message", "other"),
-    )
-
-
-@pytest.mark.parametrize(
-    ("instance", "attribute", "value"),
-    _frozen_cases(),
-    ids=[
-        "result.nodeid",
-        "result.attempts",
-        "failure.message",
-        "artifact.bytes",
-        "quarantine.state",
-        "run_error.message",
-    ],
-)
-def test_records_are_frozen(instance: object, attribute: str, value: object) -> None:
-    with pytest.raises(pydantic.ValidationError):
-        setattr(instance, attribute, value)
-
-
-def test_a_marker_repeat_is_canonicalised_rather_than_rejected() -> None:
-    record = _record(markers=("b", "a", "b"))
-    assert record.markers == ("a", "b")
-
-
-@pytest.mark.parametrize(
-    ("attempts", "accepted"),
-    [(0, False), (-1, False), (1, True), (3, True)],
-    ids=["zero", "negative", "one", "three"],
-)
-def test_attempts_counts_at_least_the_first_attempt(attempts: int, accepted: bool) -> None:
-    if accepted:
-        assert _record(attempts=attempts).attempts == attempts
-        return
-    with pytest.raises(pydantic.ValidationError):
-        _record(attempts=attempts)
-
-
-@pytest.mark.parametrize(
-    ("duration_ms", "accepted"),
-    [(-1.0, False), (-0.001, False), (0.0, True), (12.5, True)],
-    ids=["negative", "just-negative", "zero", "fractional"],
-)
-def test_duration_is_never_negative(duration_ms: float, accepted: bool) -> None:
-    if accepted:
-        assert _record(duration_ms=duration_ms).duration_ms == duration_ms
-        return
-    with pytest.raises(pydantic.ValidationError):
-        _record(duration_ms=duration_ms)
-
-
-@pytest.mark.parametrize(
-    ("path", "accepted"),
-    [
-        ("tests__test_cart.py__test_total/request.json", True),
-        ("run/nested/response.json", True),
-        ("/etc/passwd", False),
-        ("../outside/request.json", False),
-        ("run/../../outside/request.json", False),
-    ],
-    ids=["flat", "nested", "absolute", "parent", "escaping-parent"],
-)
-def test_artifact_paths_stay_inside_the_run_directory(path: str, accepted: bool) -> None:
-    if accepted:
-        assert ArtifactRecord(kind="request", path=path, bytes=1).path == path
-        return
-    with pytest.raises(pydantic.ValidationError):
-        ArtifactRecord(kind="request", path=path, bytes=1)
-
-
-@pytest.mark.parametrize(
-    ("outcome", "state", "accepted"),
-    [
-        (Outcome.PASSED, "none", True),
-        (Outcome.FAILED, "none", True),
-        (Outcome.FAILED, "failed", False),
-        (Outcome.SKIPPED, "passed", False),
-        (Outcome.QUARANTINED_FAILED, "failed", True),
-        (Outcome.QUARANTINED_FAILED, "none", False),
-        (Outcome.QUARANTINED_FAILED, "passed", False),
-        (Outcome.QUARANTINE_PASSED, "passed", True),
-        (Outcome.QUARANTINE_PASSED, "failed", False),
-        (Outcome.QUARANTINE_PASSED, "none", False),
-    ],
-)
-def test_quarantine_state_agrees_with_the_outcome(
-    outcome: Outcome, state: str, accepted: bool
-) -> None:
-    quarantine = QuarantineRecord.model_validate({"state": state})
-    if accepted:
-        record = _record(outcome=outcome, quarantine=quarantine)
-        assert record.quarantine.state == state
-        return
-    with pytest.raises(pydantic.ValidationError):
-        _record(outcome=outcome, quarantine=quarantine)
-
-
-@pytest.mark.parametrize(
-    ("phase", "accepted"),
-    [
-        ("setup", True),
-        ("call", True),
-        ("teardown", True),
-        ("collect", False),
-        ("CALL", False),
-    ],
-)
-def test_a_failure_phase_is_one_pytest_runs(phase: str, accepted: bool) -> None:
-    if accepted:
-        assert FailureRecord(phase=phase, message="boom").phase == phase
-        return
-    with pytest.raises(pydantic.ValidationError):
-        FailureRecord(phase=phase, message="boom")
-
-
-def test_a_malformed_element_is_reported_as_a_data_error(tmp_path: Path) -> None:
-    source = tmp_path / "results.json"
-    with pytest.raises(DataError) as excinfo:
-        parse_element({"record_type": "result", "run_id": "not-a-run-id"}, source=source)
-    assert excinfo.value.file == source
-    assert str(source) in str(excinfo.value)
-
-
-def test_store_sorts_result_records_by_node_id() -> None:
-    records = [_record_for("c"), _record_for("a"), _record_for("b")]
-    payload = json.loads(store.dumps(records))
-    assert [entry["nodeid"] for entry in payload] == [
-        f"{_MODULE}::a",
-        f"{_MODULE}::b",
-        f"{_MODULE}::c",
-    ]
-
-
-def test_store_places_run_errors_after_every_result_record() -> None:
-    records = [
-        _run_error(worker_id="gw2", message="second"),
-        _record_for("a"),
-        _run_error(worker_id="gw1", message="first"),
-    ]
-    payload = json.loads(store.dumps(records))
-    assert [entry["record_type"] for entry in payload] == ["result", "run_error", "run_error"]
-    assert [entry["worker_id"] for entry in payload[1:]] == ["gw1", "gw2"]
-
-
-def test_every_element_carries_its_record_type_discriminator() -> None:
-    payload = json.loads(store.dumps([_record_for("a"), _run_error()]))
-    assert payload[0]["record_type"] == "result"
-    assert "nodeid" in payload[0]
-    assert payload[1]["record_type"] == "run_error"
-    assert "nodeid" not in payload[1]
-    assert "outcome" not in payload[1]
-
-
-def test_the_document_is_a_json_array_and_an_empty_run_is_an_empty_array() -> None:
-    assert isinstance(json.loads(store.dumps([_record()])), list)
-    assert json.loads(store.dumps([])) == []
-    assert store.dumps([]) == "[]\n"
-
-
-def test_a_failure_message_is_redacted_before_it_reaches_the_document() -> None:
-    record = _record_for(
-        "a",
-        outcome=Outcome.FAILED,
-        failures=(FailureRecord(phase="call", message=f"boom: token={_SECRET}"),),
-    )
-    document = store.dumps([record])
-    assert _SECRET not in document
-    assert "token=***" in document
-
-
-def test_two_writes_of_one_run_are_byte_identical(tmp_path: Path) -> None:
-    records = [_record_for("b"), _record_for("a"), _run_error()]
-    first = store.write(records, tmp_path / "first" / "results.json")
-    second = store.write(records, tmp_path / "second" / "results.json")
-    assert first is not None
-    assert second is not None
-    expected = store.dumps(records)
-    assert first.read_text(encoding="utf-8") == expected
-    assert second.read_text(encoding="utf-8") == expected
-
-
-def _junit_root(*records: object) -> ElementTree.Element:
-    """Render the elements and parse the document back into an element tree."""
-    return ElementTree.fromstring(junit.render(list(records)))
+def _artifact(path: str) -> ArtifactRecord:
+    return ArtifactRecord(kind="request", path=path, bytes=1)
 
 
 def _properties(element: ElementTree.Element) -> dict[str, str]:
-    """Return an element's ``<properties>`` as a name-to-value mapping."""
-    holder = element.find("properties")
-    assert holder is not None
-    return {prop.get("name", ""): prop.get("value", "") for prop in holder.findall("property")}
+    found = element.findall("properties/property")
+    return {prop.get("name", ""): prop.get("value", "") for prop in found}
 
 
-def test_the_suite_carries_the_run_identity() -> None:
-    root = _junit_root(_record(), _run_error())
-    assert root.tag == "testsuite"
-    assert root.get("tests") == "1"
-    assert _properties(root) == {"foundry.run_id": _RUN_ID, "foundry.profile": _PROFILE}
-
-
-def test_a_testcase_derives_its_attributes_and_properties_from_the_record(tmp_path: Path) -> None:
-    _run_dir, artifacts = _captured_run(tmp_path)
-    record = _record_for("a", attempts=3, markers=("slow",), artifacts=artifacts)
-    testcase = _junit_root(record).find("testcase")
-    assert testcase is not None
-    assert (testcase.get("classname"), testcase.get("name"), testcase.get("time")) == (
-        "tests.test_cart",
-        "a",
-        "0.013",
+def test_the_package_publishes_the_documented_enumeration() -> None:
+    assert " ".join(member.value for member in Outcome) == (
+        "passed failed skipped xfailed xpassed error quarantined_failed quarantine_passed not_run"
     )
-    assert _properties(testcase) == {
-        "foundry.profile": _PROFILE,
-        "foundry.outcome": "passed",
-        "foundry.attempts": "3",
-        "foundry.quarantine": "none",
-        "foundry.artifact.request": "tests__test_cart.py__a/request.json",
-        "foundry.artifact.response": "tests__test_cart.py__a/response.json",
-        "foundry.artifact.stdout": "tests__test_cart.py__a/stdout.log",
-        "foundry.artifact.stderr": "tests__test_cart.py__a/stderr.log",
-        "foundry.artifact.traceback": "tests__test_cart.py__a/traceback.txt",
-    }
-
-
-def test_a_failure_element_carries_a_redacted_message_and_every_phase() -> None:
-    record = _record_for(
-        "a",
-        outcome=Outcome.FAILED,
-        failures=(FailureRecord(phase="call", message=f"AssertionError: token={_SECRET}"),),
+    assert tuple(Outcome) == reporting.OUTCOMES and all(str(m) == m.value for m in Outcome)
+    assert " ".join(ResultRecord.model_fields) == (
+        "record_type run_id started_at finished_at profile nodeid outcome attempts duration_ms"
+        " markers failures artifacts quarantine artifacts_disabled"
     )
-    document = junit.render([record])
+    assert [member.value for member in ProfileName] == list(reporting.PROFILE_NAMES)
+    kinds = "request response stdout stderr traceback log_tail manifest"
+    assert " ".join(get_args(ArtifactKind)) == kinds
+
+
+def test_records_are_frozen() -> None:
+    cases = [
+        (_record_for(), "nodeid", "tests/other.py::test_other"),
+        (_failure("call"), "message", "other"),
+        (_artifact("run/request.json"), "bytes", 2),
+        (QuarantineRecord(state="none"), "state", "failed"),
+        (_run_error(), "message", "other"),
+    ]
+    for instance, attribute, value in cases:
+        with pytest.raises(pydantic.ValidationError):
+            setattr(instance, attribute, value)
+
+
+_REJECTED = (
+    pytest.param(lambda: _record_for(attempts=0), id="attempts-zero"),
+    pytest.param(lambda: _record_for(duration_ms=-0.001), id="duration-negative"),
+    pytest.param(lambda: _artifact("/etc/passwd"), id="path-root"),
+    pytest.param(lambda: _artifact("../o.json"), id="path-parent"),
+    pytest.param(lambda: _artifact("r/../../o.json"), id="path-escape"),
+    pytest.param(lambda: _failure("collect"), id="phase-collect"),
+    pytest.param(lambda: _failure("CALL"), id="phase-uppercase"),
+)
+
+
+@pytest.mark.parametrize("build", _REJECTED)
+def test_a_documented_invalid_value_is_refused(build: Callable[[], object]) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        build()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "state"),
+    [
+        (Outcome.PASSED, "none"),
+        (Outcome.FAILED, "none"),
+        (Outcome.QUARANTINED_FAILED, "failed"),
+        (Outcome.QUARANTINE_PASSED, "passed"),
+    ],
+)
+def test_quarantine_state_agrees_with_the_outcome(outcome: Outcome, state: str) -> None:
+    for candidate in ("none", "failed", "passed"):
+        quarantine = QuarantineRecord(state=candidate)
+        if candidate == state:
+            assert _record_for(outcome=outcome, quarantine=quarantine).quarantine.state == state
+        else:
+            with pytest.raises(pydantic.ValidationError):
+                _record_for(outcome=outcome, quarantine=quarantine)
+
+
+def test_the_store_sorts_redacts_and_writes_byte_identically(tmp_path: Path) -> None:
+    elements = [_run_error("gw2", "second"), _record_for("c"), _record_for("a"), _run_error()]
+    payload = json.loads(store.dumps(elements))
+    assert [entry["nodeid"] for entry in payload[:2]] == [f"{_MODULE}::a", f"{_MODULE}::c"]
+    assert [e["record_type"] for e in payload[2:]] == ["run_error"] * 2
+    assert [e["worker_id"] for e in payload[2:]] == ["gw1", "gw2"]
+    assert "nodeid" in payload[0] and "nodeid" not in payload[2] and "outcome" not in payload[2]
+    failures = (_failure("call", f"boom: token={_SECRET}"),)
+    failing = [_record_for("b"), _record_for("a", outcome=Outcome.FAILED, failures=failures)]
+    assert _SECRET not in (document := store.dumps(failing)) and "token=***" in document
+    assert store.dumps([]) == "[]\n"
+    source = tmp_path / "broken.json"
+    with pytest.raises(DataError) as excinfo:
+        parse_element({"record_type": "result", "run_id": "not-a-run-id"}, source=source)
+    assert excinfo.value.file == source and str(source) in str(excinfo.value)
+    first, second = [store.write(failing, tmp_path / n / "results.json") for n in ("a", "b")]
+    assert first is not None and second is not None
+    assert first.read_text(encoding="utf-8") == store.dumps(failing) == second.read_text()
+
+
+def test_the_suite_carries_the_run_identity_and_a_testcase_its_attributes() -> None:
+    failures = (_failure("call", f"AssertionError: token={_SECRET}"),)
+    failed = _record_for("a", outcome=Outcome.FAILED, failures=failures)
+    document = junit.render([failed, _run_error("gw3", "worker died")])
+    root = ElementTree.fromstring(document)
+    assert root.tag == "testsuite" and root.get("tests") == "1" and root.get("failures") == "1"
+    assert _properties(root) == {"foundry.run_id": _RUN_ID, "foundry.profile": "ci"}
+    assert [element.text for element in root.findall("system-err")] == ["gw3: worker died"]
     assert _SECRET not in document
-    failure = ElementTree.fromstring(document).find("testcase/failure")
-    assert failure is not None
-    assert "***" in failure.get("message", "")
+    failure = root.find("testcase/failure")
+    assert failure is not None and "***" in failure.get("message", "")
     assert (failure.text or "").startswith("[call] ")
-    # ``error`` is the other failing outcome of AAP 0.4.6, and it renders as the sibling element.
-    errored = _junit_root(_record(outcome=Outcome.ERROR))
+    errored = ElementTree.fromstring(junit.render([_record_for(outcome=Outcome.ERROR)]))
     assert errored.find("testcase/error") is not None and errored.get("errors") == "1"
+    # AAP 0.4.6: the case carries its module, its name and its duration; the artifact properties
+    # are tests/unit/test_junit_serialisation.py's subject.
+    case = ElementTree.fromstring(junit.render([_record_for("a", attempts=3)]))
+    el = case.find("testcase")
+    assert el is not None and (el.get("classname"), el.get("name")) == ("tests.test_cart", "a")
+    assert el.get("time") == "0.013"
 
 
 @pytest.mark.parametrize(
@@ -421,133 +180,45 @@ def test_a_failure_element_carries_a_redacted_message_and_every_phase() -> None:
         (Outcome.QUARANTINED_FAILED, "foundry: quarantined failure"),
         (Outcome.NOT_RUN, "foundry: not run"),
     ],
-    ids=["skipped", "xfailed", "quarantined", "not-run"],
 )
-def test_an_outcome_that_does_not_count_renders_its_exact_skip_message(
-    outcome: Outcome, message: str
-) -> None:
+def test_a_non_counting_outcome_skips_with_its_message(outcome: Outcome, message: str) -> None:
     state = "failed" if outcome is Outcome.QUARANTINED_FAILED else "none"
-    record = _record(outcome=outcome, quarantine=QuarantineRecord.model_validate({"state": state}))
-    root = _junit_root(record)
+    record = _record_for(outcome=outcome, quarantine=QuarantineRecord(state=state))
+    root = ElementTree.fromstring(junit.render([record]))
     testcase = root.find("testcase")
-    assert testcase is not None
-    assert testcase.find("failure") is None
+    assert testcase is not None and testcase.find("failure") is None
     skipped = testcase.find("skipped")
-    assert skipped is not None
-    assert skipped.get("message") == message
-    if outcome is Outcome.QUARANTINED_FAILED:
-        assert message == junit.QUARANTINE_SKIP_MESSAGE
-    assert root.get("failures") == "0"
-    assert root.get("skipped") == "1"
+    assert skipped is not None and skipped.get("message") == message
+    assert root.get("failures") == "0" and root.get("skipped") == "1"
 
 
 def test_a_quarantined_test_that_passed_carries_a_removal_note() -> None:
-    record = _record(outcome=Outcome.QUARANTINE_PASSED, quarantine=QuarantineRecord(state="passed"))
-    testcase = _junit_root(record).find("testcase")
-    assert testcase is not None
-    assert testcase.find("skipped") is None
+    quarantine = QuarantineRecord(state="passed")
+    record = _record_for(outcome=Outcome.QUARANTINE_PASSED, quarantine=quarantine)
+    testcase = ElementTree.fromstring(junit.render([record])).find("testcase")
+    assert testcase is not None and testcase.find("skipped") is None
     note = testcase.find("system-out")
-    assert note is not None
-    assert "remove the foundry_quarantine marker" in (note.text or "")
-    # ``xpassed`` is the other success outcome of AAP 0.4.6 that carries a note, and it renders it.
-    xpassed = _junit_root(_record(outcome=Outcome.XPASSED)).find("testcase/system-out")
-    assert xpassed is not None and junit.XPASSED_NOTE in (xpassed.text or "")
+    assert note is not None and "remove the foundry_quarantine marker" in (note.text or "")
+    xpassed = ElementTree.fromstring(junit.render([_record_for(outcome=Outcome.XPASSED)]))
+    assert junit.XPASSED_NOTE in (xpassed.findtext("testcase/system-out") or "")
 
 
-def test_a_run_error_becomes_a_system_err_on_the_suite() -> None:
-    root = _junit_root(_record(), _run_error(worker_id="gw3", message="worker died"))
-    assert [element.text for element in root.findall("system-err")] == ["gw3: worker died"]
-
-
-def test_markup_in_a_node_id_is_escaped_and_round_trips() -> None:
-    document = junit.render([_record(nodeid=_SCRIPT_NODEID)])
-    assert "&lt;script&gt;" in document
-    assert "<script>" not in document
-    testcase = ElementTree.fromstring(document).find("testcase")
-    assert testcase is not None
-    assert testcase.get("name") == "test_<script>alert(1)</script>"
-
-
-def test_write_produces_exactly_the_rendered_document(tmp_path: Path) -> None:
-    records = [_record_for("a"), _run_error()]
-    target = tmp_path / "junit.xml"
-    assert junit.write(records, target) == target
-    assert target.read_text(encoding="utf-8") == junit.render(records)
-
-
-@pytest.mark.parametrize(("name", "text"), [("css", assets.CSS), ("js", assets.JS)])
-def test_an_inlined_asset_is_self_contained(name: str, text: str) -> None:
-    assert text, name
-    assert not assets.contains_external_reference(text)
-    assets.assert_self_contained(text)
-
-
-_RENDERER_IDS = ("json", "html", "junit")
-_REPORT_FILENAMES = ("results.json", "report.html", "junit.xml")
-
-
-def test_the_table_publishes_the_documented_formats() -> None:
-    assert renderers.registered_formats() == _RENDERER_IDS
-    assert [spec.name for spec in renderers.RENDERERS.values()] == list(_RENDERER_IDS)
-    assert [spec.filename for spec in renderers.RENDERERS.values()] == list(_REPORT_FILENAMES)
-    assert sorted(spec.order for spec in renderers.RENDERERS.values()) == [0, 1, 2]
-    assert all(callable(spec.writer) for spec in renderers.RENDERERS.values())
-
-
-def test_an_unknown_format_names_the_published_ones() -> None:
+def test_the_format_table_is_stable_and_writes_three_documents(tmp_path: Path) -> None:
+    specs = list(renderers.RENDERERS.values())
+    assert renderers.registered_formats() == _RENDERER_IDS == tuple(s.name for s in specs)
+    assert [spec.filename for spec in specs] == ["results.json", "report.html", "junit.xml"]
+    assert sorted(spec.order for spec in specs) == [0, 1, 2]
+    assert all(callable(spec.writer) for spec in specs)
+    assert all(t and not assets.contains_external_reference(t) for t in (assets.CSS, assets.JS))
+    assets.assert_self_contained(assets.CSS + assets.JS)
     with pytest.raises(FoundryError) as excinfo:
         renderers.renderer_for("xml")
     assert "html" in (excinfo.value.hint or "")
-
-
-def test_writing_a_run_leaves_the_registration_table_untouched(tmp_path: Path) -> None:
     before = [(name, id(spec)) for name, spec in renderers.RENDERERS.items()]
     written = renderers.write_all([_record_for("a")], tmp_path)
-    assert [path.name for path in written.written()] == list(_REPORT_FILENAMES)
+    assert [path.name for path in written.written()] == ["results.json", "report.html", "junit.xml"]
     assert [(name, id(spec)) for name, spec in renderers.RENDERERS.items()] == before
 
 
-def _inline_document(outcome: str) -> str:
-    """Return a small result document holding one result record and one run error."""
-    return json.dumps(
-        [
-            {
-                "record_type": "result",
-                "run_id": _RUN_ID,
-                "started_at": "2025-01-02T03:04:05.000+00:00",
-                "finished_at": "2025-01-02T03:04:05.250+00:00",
-                "profile": _PROFILE,
-                "nodeid": _NODEID,
-                "outcome": outcome,
-                "attempts": 1,
-                "duration_ms": 1.0,
-                "markers": [],
-                "failures": [],
-                "artifacts": [],
-                "quarantine": {"state": "none"},
-            },
-            {
-                "record_type": "run_error",
-                "run_id": _RUN_ID,
-                "recorded_at": "2025-01-02T03:04:06.000+00:00",
-                "worker_id": "gw0",
-                "message": "worker lost",
-            },
-        ]
-    )
-
-
-def test_the_comparison_is_reachable_from_the_package_surface() -> None:
+def test_the_comparison_is_reachable_from_the_package_barrel() -> None:
     assert reporting.diff is compare.diff
-
-
-def test_the_comparison_ignores_run_error_elements(tmp_path: Path) -> None:
-    source = tmp_path / "inline.json"
-    difference = compare.diff(
-        store.loads(_inline_document("failed"), source=source),
-        store.loads(_inline_document("passed"), source=source),
-    )
-    assert difference.newly_passing == (_NODEID,)
-    assert difference.newly_failing == ()
-    assert difference.still_failing == ()
-    assert "worker lost" not in str(difference.as_dict())

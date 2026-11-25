@@ -1,33 +1,19 @@
 """The ``foundry_data`` fixture: the data files one test reads by name.
 
 ``foundry_data`` is function scoped and returns a :class:`FoundryDataLoader` whose two published
-methods each read one data file: ``foundry_data.cases("cart.csv")`` returns every data row of
-``<data.dir>/cart.csv`` as a :class:`foundry.data.cases.Case`, and
-``foundry_data.matrix("pricing.yaml")`` returns the cases a matrix document's cross-product expands
-to. Both hand back immutable tuples in the order the loader produced them -- file order for a table,
-sorted-axis expansion order for a matrix -- so a test parametrises over a deterministic sequence.
+methods each read one data file: ``cases("cart.csv")`` returns every data row of the named file
+under ``data.dir`` as a :class:`foundry.data.cases.Case`, and ``matrix("pricing.yaml")`` returns the
+cases a matrix document's cross-product expands to. Both hand back immutable tuples in the order the
+loader produced them -- file order for a table, sorted-axis expansion order for a matrix -- so a
+test parametrises over a deterministic sequence.
 
-**Names, not paths.** A test names a file relative to ``data.dir`` (default ``testdata``), and
-nothing outside that directory is addressable:
-:func:`foundry.data.registry.resolve_data_file` refuses an escaping name through
-:func:`foundry.core.paths.resolve_under`, the tree's single containment check, and a relative
-``data.dir`` is resolved once, here, against pytest's invocation directory.
-
-**Strictness and the located ``DataError``.** ``data.schema_strict`` is passed to the loader as
-given: switched on (the default) a column the file's sidecar JSON Schema does not declare is a
-fault. Every fault a data file can produce surfaces as one
-:class:`foundry.core.exceptions.DataError` naming the file and, where they are known, the line and
-the column.
-
-**An empty file is not a fault.** A header-only CSV, an empty JSON array, a blank YAML document and
-a blank-only JSON Lines file all yield ``()``, which lets a parametrisation skip the item with the
-reason ``no cases in <file>`` rather than fail collection. An extension no reader claims is the
-opposite case and does raise, listing the extensions that would work.
-
-**Imported lazily.** This module is imported during ``pytest_configure`` inside the 150 ms budget,
-so module scope imports ``dataclasses``, ``pathlib``, ``typing`` and ``pytest`` and no Foundry
-module at all: the Foundry imports sit inside the method that first needs them, and annotation
-names under ``TYPE_CHECKING``.
+A test names a file relative to ``data.dir`` (default ``testdata``) and nothing outside that
+directory is addressable: :func:`foundry.data.registry.resolve_data_file` refuses an escaping name
+through :func:`foundry.core.paths.resolve_under`. ``data.schema_strict`` is passed to the loader as
+given, and every fault surfaces as one :class:`foundry.core.exceptions.DataError` naming the file
+and, where they are known, the line and the column. An empty file yields ``()``, so a
+parametrisation skips the item with the reason ``no cases in <file>`` rather than failing
+collection; an extension no reader claims raises, listing the extensions that would work.
 """
 
 from __future__ import annotations

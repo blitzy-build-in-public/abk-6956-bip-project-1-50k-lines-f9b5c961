@@ -1,12 +1,8 @@
 """Shared fixtures and process-wide guards for Foundry's own test suite.
 
-Carries the ``pytest_plugins`` declaration only the top-level conftest may make, session
-environment pinning at import (``TZ``, ``LC_ALL``, ``LANG``, the ``PYTEST_ADDOPTS`` deletion and
-``locale.setlocale``) so no assertion depends on the host's clock or locale, the shared fixtures,
-and the loopback-only socket guard, the suite-wide half of the offline control in AAP 0.14.3. The
-guard polices ``connect``, ``connect_ex``, ``getaddrinfo``, ``sendto`` and ``sendmsg``, allowing
-``127.0.0.0/8`` and ``::1`` and refusing every other target before the syscall; it patches this
-interpreter only, so the end-to-end tests isolate their children by the flags they are given.
+Holds the top-level ``pytest_plugins`` declaration, the session environment pinning (``TZ``,
+``LC_ALL``, ``LANG``, ``PYTEST_ADDOPTS``, ``locale``), the shared fixtures, and the loopback-only
+socket guard of AAP 0.14.3, which refuses every non-loopback target before the syscall.
 """
 
 from __future__ import annotations
@@ -27,31 +23,25 @@ from typing import Any, Final, Never
 
 import pytest
 
-# Declared here and only here: pytest aborts the run with "Defining 'pytest_plugins' in a
-# non-top-level conftest" when the same declaration appears in a nested conftest.
+# Declared here and only here: pytest aborts a run whose nested conftest repeats this declaration.
 pytest_plugins = ["pytester"]
 
-# The outer invocation has already parsed its own PYTEST_ADDOPTS, while every in-process pytester
-# run and every child process would apply those options again. Popping it at import is the fix.
+# The outer invocation has parsed PYTEST_ADDOPTS already; a pytester or child run would reapply it.
 os.environ.pop("PYTEST_ADDOPTS", None)
 
-# Pinned before any test module is imported, so no assertion depends on a wall-clock date or a
-# locale; time.tzset re-reads TZ for the C library, and hasattr keeps this importable off POSIX.
+# Pinned before any test module is imported; time.tzset re-reads TZ for the C library.
 os.environ["TZ"] = "UTC"
 os.environ["LC_ALL"] = "C"
 os.environ["LANG"] = "C"
 if hasattr(time, "tzset"):
     time.tzset()
 
-# os.environ re-runs nothing in this process, so the interpreter would keep its starting locale and
-# an in-process assertion would still see the host's. Failing to apply the AAP 0.14.3 pin is fatal
-# rather than skipped, because a silently unpinned locale is the dependence it rules out.
+# os.environ re-runs nothing here, so the starting locale must also be replaced; a pin that cannot
+# be applied is fatal rather than skipped, because an unpinned locale is the dependence ruled out.
 try:
     locale.setlocale(locale.LC_ALL, "C")
-except locale.Error as exc:
-    raise RuntimeError(
-        f"foundry test suite: could not pin the process locale to 'C': {exc}"
-    ) from exc
+except locale.Error as exc:  # pragma: no cover - the C locale exists on every supported host
+    raise RuntimeError(f"foundry test suite: could not pin the process locale: {exc}") from exc
 
 _INET_FAMILIES: Final[frozenset[int]] = frozenset({socket.AF_INET, socket.AF_INET6})
 """The families the guard polices; every other family is local by construction."""
@@ -67,28 +57,13 @@ _GUARD_MARK: Final[str] = "_foundry_suite_socket_guard"
 _OFFLINE_RULE: Final[str] = "AAP 0.14.3"
 
 
-@dataclass(frozen=True)
-class SocketGuardSnapshot:
-    """An immutable reading of the guard's counters and violations.
-
-    A test that provokes a refusal on purpose takes one first and hands it back to
-    :meth:`SocketGuardState.restore`, so the offline proof reads the count from before that test.
-    """
-
-    loopback_attempts: int = 0
-    non_loopback_attempts: int = 0
-    violations: tuple[str, ...] = ()
-
-
 @dataclass
 class SocketGuardState:
-    """Live counters of this suite's loopback-only socket guard.
+    """Live counters of this suite's loopback-only guard.
 
-    ``installed`` is true once the guard has patched the :mod:`socket` module; the counters and
-    ``violations`` are process-global and belong to one ``-n auto`` worker, so the offline proof
-    measures a delta with :meth:`refusals_since`. ``foundry.diagnostics.socket_guard`` recognises a
-    guard by ``FOUNDRY_SOCKET_GUARD`` and ``FOUNDRY_NON_LOOPBACK_ATTEMPTS``, which
-    :meth:`__getattr__` serves live, and ``examples/checkout/conftest.py`` publishes the same pair.
+    Process-global, so one ``-n auto`` worker owns them and the offline proof measures a delta.
+    ``foundry.diagnostics.socket_guard`` recognises a guard by ``FOUNDRY_SOCKET_GUARD`` and
+    ``FOUNDRY_NON_LOOPBACK_ATTEMPTS``, which :meth:`__getattr__` serves live.
     """
 
     installed: bool = True
@@ -102,28 +77,6 @@ class SocketGuardState:
         if name == "FOUNDRY_NON_LOOPBACK_ATTEMPTS":
             return object.__getattribute__(self, "non_loopback_attempts")
         raise AttributeError(name)
-
-    def snapshot(self) -> SocketGuardSnapshot:
-        """Return an immutable reading of the counters and violations as they stand now."""
-        return SocketGuardSnapshot(
-            loopback_attempts=self.loopback_attempts,
-            non_loopback_attempts=self.non_loopback_attempts,
-            violations=tuple(self.violations),
-        )
-
-    def restore(self, snapshot: SocketGuardSnapshot) -> None:
-        """Put the counters and violations back to ``snapshot``."""
-        self.loopback_attempts = snapshot.loopback_attempts
-        self.non_loopback_attempts = snapshot.non_loopback_attempts
-        self.violations = list(snapshot.violations)
-
-    def reset(self) -> None:
-        """Clear the counters and violations, restoring the zero :class:`SocketGuardSnapshot`."""
-        self.restore(SocketGuardSnapshot())
-
-    def refusals_since(self, snapshot: SocketGuardSnapshot) -> int:
-        """Return the refusals recorded since ``snapshot`` was taken."""
-        return self.non_loopback_attempts - snapshot.non_loopback_attempts
 
 
 # Saved before any patching, so the wrappers can connect, resolve and send without recursing into
@@ -144,47 +97,29 @@ def _host_text(host: object) -> str | None:
     return None
 
 
-def _is_loopback_literal(host: str) -> bool:
-    """Return True when ``host`` is a loopback IP literal.
-
-    :mod:`ipaddress` flags every address in ``127.0.0.0/8`` and ``::1``; an IPv4-mapped IPv6 address
-    is judged by its mapped form, because ``::ffff:127.0.0.1`` is not itself flagged loopback.
-    """
+def _is_local_host(host: str) -> bool:
+    """Return True when ``host`` is a loopback literal (or IPv4-mapped loopback) or a local name."""
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        return False
-    if address.is_loopback:
-        return True
+        return host.lower() in _LOCAL_HOSTNAMES
     mapped = getattr(address, "ipv4_mapped", None)
-    return bool(mapped is not None and mapped.is_loopback)
-
-
-def _is_local_host(host: str) -> bool:
-    """Return True when ``host`` is a loopback literal or a well-known local hostname."""
-    return _is_loopback_literal(host) or host.lower() in _LOCAL_HOSTNAMES
-
-
-def _split_target(address: object) -> tuple[str | None, object]:
-    """Split a socket address into host text and port, tolerating a non-tuple address."""
-    if isinstance(address, tuple) and len(address) >= 2:
-        return _host_text(address[0]), address[1]
-    return _host_text(address), 0
+    return address.is_loopback or bool(mapped is not None and mapped.is_loopback)
 
 
 def _refused_target(family: int, address: object) -> tuple[str, object] | None:
-    """Return the ``(host, port)`` to refuse for ``address``, or ``None`` when it may proceed.
+    """Return the ``(host, port)`` to refuse, or ``None`` when the target may proceed.
 
-    Only ``AF_INET`` and ``AF_INET6`` are policed: any other family and any non-tuple address are
-    local by construction. Every hostname that is not a loopback literal or a well-known local name
-    is refused *before* the resolver runs, because resolving it would open the very socket refused.
+    Only ``AF_INET``/``AF_INET6`` are policed, and a name is refused *before* the resolver runs,
+    because resolving it would open the very socket being refused.
     """
     if family not in _INET_FAMILIES:
         return None
-    host, port = _split_target(address)
+    pair = address if isinstance(address, tuple) and len(address) >= 2 else ()
+    host = _host_text(pair[0]) if pair else _host_text(address)
     if host is None or _is_local_host(host):
         return None
-    return host, port
+    return host, pair[1] if pair else 0
 
 
 def _refuse(host: str, port: object) -> Never:
@@ -246,11 +181,7 @@ def _guarded_sendto(self: socket.socket, *args: object) -> int:
 
 
 def _guarded_sendmsg(self: socket.socket, *args: object) -> int:
-    """Send one message to a loopback target only, refusing the rest before the syscall.
-
-    ``sendmsg`` takes its address as an optional last argument and omits it for a connected socket,
-    where the missing target is local and the send is allowed.
-    """
+    """Send one message to a loopback target only; a connected socket names no target."""
     address = args[-1] if args else None
     refused = _refused_target(self.family, address)
     if refused is not None:
@@ -274,20 +205,17 @@ FOUNDRY_SOCKET_GUARD: SocketGuardState = SOCKET_GUARD
 
 
 def _install_guard() -> None:
-    """Patch :mod:`socket` once per process, so a second import wraps it exactly once.
-
-    Each wrapper carries the live state under :data:`_GUARD_MARK`, the marker a second import adopts
-    instead of re-wrapping; the state is bound to :data:`SOCKET_GUARD` first, never unbound.
-    """
+    """Patch :mod:`socket` once per process; a second import adopts :data:`_GUARD_MARK`'s state."""
     if getattr(socket.socket.connect, _GUARD_MARK, None) is SOCKET_GUARD:
         return
-    for wrapper in (
+    wrappers = (
         _guarded_getaddrinfo,
         _guarded_connect,
         _guarded_connect_ex,
         _guarded_sendto,
         _guarded_sendmsg,
-    ):
+    )
+    for wrapper in wrappers:
         setattr(wrapper, _GUARD_MARK, SOCKET_GUARD)
     socket.getaddrinfo = _guarded_getaddrinfo
     socket.socket.connect = _guarded_connect
@@ -299,28 +227,15 @@ def _install_guard() -> None:
 _install_guard()
 
 
-def current_guard() -> SocketGuardState:
-    """Return the live guard state of this process, which the ``socket_guard`` fixture yields."""
+@pytest.fixture(scope="session")
+def socket_guard() -> SocketGuardState:
+    """Session scope: the live guard installed at import, with its counters and protocol names."""
     return SOCKET_GUARD
 
 
 @pytest.fixture(scope="session")
-def socket_guard() -> SocketGuardState:
-    """Session scope: the live guard installed at import of this module.
-
-    Consumer: ``tests/e2e/test_offline.py``, which measures :meth:`SocketGuardState.refusals_since`
-    around its own run rather than trusting the absolute session counter, because that counter
-    belongs to one ``-n auto`` worker.
-    """
-    return current_guard()
-
-
-@pytest.fixture(scope="session")
 def repo_root() -> pathlib.Path:
-    """Session scope: the repository root, checked for the markers its consumers need.
-
-    Consumers: the static checks in ``tests/unit/`` and every end-to-end module.
-    """
+    """Session scope: the repository root, checked for the markers its consumers need."""
     root = pathlib.Path(__file__).resolve().parents[1]
     missing = [name for name in ("pyproject.toml", "src/foundry") if not (root / name).exists()]
     if missing:
@@ -336,9 +251,7 @@ def foundry_python() -> str:
 
 @pytest.fixture(scope="session")
 def foundry_script() -> pathlib.Path:
-    """Session scope: the installed ``foundry`` console script, failing with the install command
-    instead of a bare ``FileNotFoundError`` when the distribution is absent.
-    """
+    """Session scope: the installed ``foundry`` console script, failing with the install command."""
     on_path = shutil.which("foundry")
     script = pathlib.Path(on_path) if on_path else pathlib.Path(sys.executable).parent / "foundry"
     if not script.exists():
@@ -365,11 +278,8 @@ _STRIPPED_PREFIXES: Final[tuple[str, ...]] = ("FOUNDRY_", "COV_CORE_", "COVERAGE
 
 @pytest.fixture(scope="session")
 def subprocess_env() -> Callable[..., dict[str, str]]:
-    """Session scope: a builder of child-process environments, merging an optional ``extra`` map.
-
-    ``os.environ`` is copied because ``PATH``, ``PYTHONPATH`` and ``VIRTUAL_ENV`` must survive,
-    while the outer run's pytest options, xdist identity, Foundry configuration and coverage state
-    are removed, so a child asserts against its own configuration alone.
+    """Session scope: a child-environment builder that drops this run's pytest, xdist, Foundry and
+    coverage state while keeping ``PATH`` and ``PYTHONPATH``.
     """
 
     def build(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -394,14 +304,30 @@ def subprocess_env() -> Callable[..., dict[str, str]]:
     return build
 
 
+def _capture(
+    command: list[str],
+    *,
+    cwd: pathlib.Path,
+    env: Mapping[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``command`` in a child process with its output captured and its status unraised."""
+    return subprocess.run(
+        command,
+        cwd=str(cwd),
+        env=dict(env),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
 @pytest.fixture(scope="session")
 def run_pytest(
     subprocess_env: Callable[..., dict[str, str]],
 ) -> Callable[..., subprocess.CompletedProcess[str]]:
-    """Session scope: run ``python -m pytest`` in a child process and capture its output.
-
-    The environment comes from ``subprocess_env``, so the outer invocation's options never leak in.
-    """
+    """Session scope: run ``python -m pytest`` in a child built from ``subprocess_env``'s output."""
 
     def run(
         *args: str,
@@ -409,14 +335,11 @@ def run_pytest(
         env: Mapping[str, str] | None = None,
         timeout: float = 300.0,
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        return _capture(
             [sys.executable, "-m", "pytest", *args],
-            cwd=str(cwd),
+            cwd=cwd,
             env=subprocess_env(env),
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            check=False,
         )
 
     return run
@@ -427,10 +350,7 @@ def run_foundry(
     foundry_script: pathlib.Path,
     subprocess_env: Callable[..., dict[str, str]],
 ) -> Callable[..., subprocess.CompletedProcess[str]]:
-    """Session scope: run the installed ``foundry`` console script and capture its output.
-
-    Consumers: every place only the real script satisfies the real-entry-point rule of AAP 0.14.5.
-    """
+    """Session scope: run the installed console script, the real entry point of AAP 0.14.5."""
 
     def run(
         *args: str,
@@ -438,14 +358,8 @@ def run_foundry(
         env: Mapping[str, str] | None = None,
         timeout: float = 300.0,
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [str(foundry_script), *args],
-            cwd=str(cwd),
-            env=subprocess_env(env),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+        return _capture(
+            [str(foundry_script), *args], cwd=cwd, env=subprocess_env(env), timeout=timeout
         )
 
     return run
@@ -453,10 +367,7 @@ def run_foundry(
 
 @pytest.fixture(scope="session")
 def example_project(repo_root: pathlib.Path) -> pathlib.Path:
-    """Session scope: ``examples/checkout``, the shipped 24-test project.
-
-    Fails rather than skipping when it is absent: a missing example is a missing deliverable.
-    """
+    """Session scope: ``examples/checkout``, the shipped 24-test project, which must exist."""
     project = repo_root / "examples" / "checkout"
     if not project.is_dir():
         pytest.fail(f"the example project is missing: {project} is not a directory")
@@ -467,12 +378,9 @@ def example_project(repo_root: pathlib.Path) -> pathlib.Path:
 def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
     """Function scope: write a throwaway project into a test-owned directory and return it.
 
-    ``files`` maps relative paths to content, ``conftest`` writes ``conftest.py`` and
-    ``foundry_toml`` writes ``foundry.toml``; every file is UTF-8 with LF newlines and a trailing
-    newline. ``pyproject.toml`` is written only when a caller passes it, which is what keeps a
-    scaffold or a zero-configuration directory genuinely configuration-free. Containment is
-    enforced: ``directory`` must lie inside the session's temporary base directory and every key
-    must be a relative path with no ``..`` segment, so ``examples/checkout`` can never be mutated.
+    Every file is UTF-8 with LF newlines and a trailing newline, ``pyproject.toml`` is written only
+    when a caller passes it (which keeps a zero-configuration directory genuinely configuration
+    free), and containment is enforced so ``examples/checkout`` can never be mutated.
     """
 
     base = tmp_path.parent.resolve()
@@ -486,11 +394,7 @@ def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
     ) -> pathlib.Path:
         root = directory.resolve()
         if root != base and base not in root.parents:
-            pytest.fail(
-                f"write_project refuses to write to {root}: it is not inside the session's "
-                f"temporary base directory {base}. Writes stay there so no test can mutate "
-                "examples/checkout."
-            )
+            pytest.fail(f"write_project refuses to write to {root}: it is not inside {base}")
         payload = dict(files or {})
         if conftest is not None:
             payload["conftest.py"] = conftest
@@ -498,20 +402,8 @@ def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
             payload["foundry.toml"] = foundry_toml
         for key in payload:
             key_path = pathlib.PurePosixPath(key)
-            if not key_path.parts:
-                pytest.fail(
-                    f"write_project refuses the file key {key!r}: it names no file inside {root}"
-                )
-            if key_path.is_absolute():
-                pytest.fail(
-                    f"write_project refuses the absolute file key {key!r}: writes stay inside "
-                    f"{root}"
-                )
-            if ".." in key_path.parts:
-                pytest.fail(
-                    f"write_project refuses the file key {key!r}: its '..' segment could write "
-                    f"outside {root}"
-                )
+            if not key_path.parts or key_path.is_absolute() or ".." in key_path.parts:
+                pytest.fail(f"write_project refuses the key {key!r}: it must stay inside {root}")
         root.mkdir(parents=True, exist_ok=True)
         for relative in sorted(payload):
             target = root / relative
@@ -529,11 +421,7 @@ def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
 
 @pytest.fixture
 def clean_foundry_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Function scope: no ``FOUNDRY_*`` variable in the environment, ``TZ``/``LC_ALL`` pinned.
-
-    Consumer: the configuration tests, which must not inherit a variable the developer's shell
-    happens to export.
-    """
+    """Function scope: no ``FOUNDRY_*`` variable in the environment, ``TZ``/``LC_ALL`` pinned."""
     for name in [key for key in os.environ if key.startswith("FOUNDRY_")]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TZ", "UTC")
@@ -542,11 +430,7 @@ def clean_foundry_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(scope="session")
 def installed_distribution() -> importlib.metadata.Distribution:
-    """Session scope: the installed ``pytest-foundry`` distribution, entry point checked.
-
-    Fails with the install command when it is absent and when the ``pytest11`` entry point named
-    ``foundry`` does not target ``foundry.plugin``: zero-configuration activation is that point.
-    """
+    """Session scope: the installed distribution, whose ``pytest11`` point targets the plugin."""
     try:
         distribution = importlib.metadata.distribution("pytest-foundry")
     except importlib.metadata.PackageNotFoundError:

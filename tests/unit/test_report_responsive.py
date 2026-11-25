@@ -1,10 +1,4 @@
-"""Unit tests for the report's narrow-window layout and its numeric cells.
-
-The results table keeps its five columns inside its own scroll container and pins its header there,
-the identifier column keeps a readable floor below the narrow breakpoint, a duration never breaks
-from its unit, a header sits over the values it labels, a zero tally is not painted as an outcome,
-every interactive element reaches a forty-four pixel target, and the document opens offline.
-"""
+"""Unit tests for the report's narrow-window layout and its numeric cells (AAP 0.7.4)."""
 
 from __future__ import annotations
 
@@ -17,10 +11,9 @@ _RUN_ID = "20250102T030405-abc123"
 _PROFILE = "ci"
 _STARTED_AT = datetime(2025, 1, 2, 3, 4, 5, 0, tzinfo=UTC)
 _FINISHED_AT = datetime(2025, 1, 2, 3, 4, 5, 250_000, tzinfo=UTC)
-_NARROW_QUERY = "@media (max-width: 768px)"
-_PRINT_QUERY = "@media print"
-_EXTERNAL_MARKERS = ("http" + "://", "https" + "://", "url" + "(", "@" + "import")
-
+_NARROW = "@media (max-width: 768px)"
+_PRINT = "@media print"
+_EXTERNAL = ("http" + "://", "https" + "://", "url" + "(", "@" + "import")
 _RECORD = ResultRecord(
     run_id=_RUN_ID,
     started_at=_STARTED_AT,
@@ -31,26 +24,22 @@ _RECORD = ResultRecord(
     attempts=1,
     duration_ms=12.5,
 )
-"""One validated passing record; frozen, so both tests below render the same fixed bytes."""
 
 
 def _render(records: list[ResultRecord]) -> str:
-    """Render the report and fail rather than accept the documented template fallback."""
     document = html.render(records, run_id=_RUN_ID, profile=_PROFILE)
-    assert document is not None
+    assert document is not None, "the report fell back to no document"
     return document
 
 
 def _rule(css: str, selector: str) -> str:
-    """Return one rule of ``css``, from its opening brace to its closing brace."""
     start = css.index(f"{selector} {{")
     return css[start : css.index("}", start) + 1]
 
 
-def _responsive_block() -> str:
-    """Return the narrow-window block: its media query up to the next media query."""
-    start = assets.CSS.index(_NARROW_QUERY)
-    end = assets.CSS.find("@media", start + len(_NARROW_QUERY))
+def _narrow() -> str:
+    start = assets.CSS.index(_NARROW)
+    end = assets.CSS.find("@media", start + len(_NARROW))
     assert end > start, "the narrow-window block must be followed by another media query"
     return assets.CSS[start:end]
 
@@ -67,14 +56,13 @@ def test_the_results_table_sits_inside_its_own_scroll_container() -> None:
 
 def test_a_run_with_no_records_renders_no_table_and_no_scroll_container() -> None:
     document = _render([])
-    assert "no tests collected" in document
-    assert "<table" not in document
+    assert "no tests collected" in document and "<table" not in document
     assert 'class="table-scroll"' not in document
 
 
 def test_the_narrow_window_block_floors_the_identifier_column_and_scrolls_the_table() -> None:
-    assert assets.CSS.count(_NARROW_QUERY) == 1
-    block = _responsive_block()
+    assert assets.CSS.count(_NARROW) == 1
+    block = _narrow()
     assert "overflow-x: auto" in _rule(block, ".table-scroll")
     assert "min-width:" in _rule(block, "table.results .nodeid")
     assert "text-align: left" in _rule(block, "table.results caption")
@@ -86,19 +74,18 @@ def test_a_duration_never_breaks_between_the_number_and_its_unit() -> None:
 
 def test_the_narrow_window_block_keeps_the_report_offline_openable() -> None:
     assets.assert_self_contained(assets.CSS)
-    block = _responsive_block()
-    leaked = [marker for marker in _EXTERNAL_MARKERS if marker in block]
+    block = _narrow()
+    leaked = [marker for marker in _EXTERNAL if marker in block]
     assert leaked == [], f"the narrow-window block references {leaked}"
     assert not assets.contains_external_reference(block)
 
 
 def test_the_header_pins_inside_its_scroll_box_below_the_breakpoint() -> None:
-    """The header pins at every width; below the breakpoint it pins to the table scroll box."""
     assert "position: sticky" in _rule(assets.CSS, "table.results thead th")
-    block = _responsive_block()
+    block = _narrow()
     assert "position: sticky" in _rule(block, "table.results thead th")
     assert "max-height: 80vh" in _rule(block, ".table-scroll")
-    print_block = assets.CSS[assets.CSS.index(_PRINT_QUERY) :]
+    print_block = assets.CSS[assets.CSS.index(_PRINT) :]
     assert "max-height: none" in _rule(print_block, ".table-scroll")
 
 
@@ -111,10 +98,8 @@ def test_the_duration_header_sits_over_the_values_it_labels() -> None:
 
 def test_a_zero_tally_is_neutral_and_a_non_zero_tally_keeps_its_outcome_colour() -> None:
     document = _render([_RECORD])
-    assert '<li class="summary-passed">' in document, (
-        "the one passing tally lost its outcome colour"
-    )
-    assert '<li class="summary-failed is-zero">' in document, "a zero tally is not marked neutral"
+    assert '<li class="summary-passed">' in document, "the passing tally lost its colour"
+    assert '<li class="summary-failed is-zero">' in document, "a zero tally is not neutral"
     assert "color: var(--muted)" in _rule(assets.CSS, ".summary li.is-zero .count")
 
 
@@ -127,7 +112,7 @@ def test_the_summary_and_the_artifact_links_reach_the_forty_four_pixel_target() 
 def test_the_caption_text_is_pinned_inside_the_narrow_scroll_box() -> None:
     document = _render([_RECORD])
     assert document.count('<span class="caption-text">') == 1
-    block = _responsive_block()
+    block = _narrow()
     assert "position: sticky" in _rule(block, "table.results .caption-text")
     assert "background-attachment: local, local, scroll, scroll" in block
 
@@ -138,7 +123,6 @@ def test_the_quarantined_section_keeps_the_page_rhythm_below_the_table() -> None
 
 
 def test_the_drawn_disclosure_triangle_survives_a_forced_colours_palette() -> None:
-    """A forced palette repaints the triangle's borders, so the block is clipped back into shape."""
     block = assets.CSS[assets.CSS.index("@media (forced-colors: active)") :]
     rule = _rule(block, ".panel summary::before")
     assert "border-width: 0" in rule, f"the squared block is not replaced: {rule}"

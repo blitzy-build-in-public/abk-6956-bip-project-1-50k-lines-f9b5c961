@@ -1,24 +1,5 @@
-"""AAP 0.14.1 criterion 2: a suite is a Foundry suite with no configuration file at all.
-
-The observation this module makes is the activation proof AAP 0.4.2 publishes. In a directory that
-holds one test file and nothing else -- no ``foundry.toml``, no ``pyproject.toml`` and no
-``pytest.ini``, with no plugin-enabling argument on the command line -- pytest exits 0, the terminal
-summary carries ``foundry: profile=default``, ``foundry_config`` reports the field defaults of
-AAP 0.4.5, and the three report files of AAP 0.4.6 appear beside the test. Activation is the
-installed ``pytest11`` entry point and nothing else: each inner run is driven through ``pytester``,
-so the plugin is exercised through pytest's own machinery rather than by calling one of its hooks by
-hand, and every assertion reads a file the run produced or the banner itself.
-
-Two facts about the harness shape the module. The ``pytest_plugins`` declaration that enables
-``pytester`` lives in ``tests/conftest.py`` alone, because pytest aborts a run whose nested conftest
-repeats it -- which is why this package has no ``conftest.py`` of its own. And ``clean_foundry_env``
-removes any ``FOUNDRY_*`` variable an operator's shell exports, so a host environment can never turn
-one of the asserted defaults into an override.
-
-The subprocess half of the same criterion -- an installed console script driven in a child
-interpreter -- belongs to ``tests/e2e/test_zero_config_subprocess.py``; the wheel, install and
-example-project evidence belongs to ``tests/e2e/test_install.py`` and
-``tests/e2e/test_example_project.py``. Nothing here duplicates either.
+"""Zero-config activation through ``pytester``: exit 0, the ``foundry: profile=default`` banner,
+every published field default, the run tree and the three report files, with no plugin flag passed.
 """
 
 from __future__ import annotations
@@ -26,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 import xml.etree.ElementTree as ElementTree
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -40,440 +22,185 @@ REACHES: tuple[str, ...] = (
     "format:junit.xml",
     "format:report.html",
 )
-"""The public surfaces this module drives through a real pytest session (AAP 0.14.1, criterion 13).
 
-``tests/plugin/test_reachability.py`` reads this declaration, so each entry names a surface an inner
-run above actually requests or a file it actually writes, never a name this docstring merely
-mentions.
-"""
-
-_RUN_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}")
-"""A run id as AAP 0.4.3 publishes it: a UTC stamp and six lowercase hexadecimal digits."""
-
-_NODEID_MODULE: Final[str] = "test_zero_config_defaults"
-"""File name of the inner module whose one test asserts the field defaults."""
-
-_NODEID_FUNCTION: Final[str] = "test_zero_config_reports_defaults"
-"""Name of that inner test, which is also the node id ``results.json`` must record it under."""
-
-_NODEID: Final[str] = f"{_NODEID_MODULE}.py::{_NODEID_FUNCTION}"
-"""The inner test's node id as pytest writes it, built from the names ``makepyfile`` is given."""
-
-_HIDDEN_NODEID_CHARACTERS: Final[tuple[str, ...]] = ("/", "::", "[")
-"""What a node id may not leak into a directory name, because each would change the layout."""
-
-_ARTIFACT_MODULE: Final[str] = "test_zero_config_artifacts"
-"""File name of the inner module that reports the run identity and one artifact directory."""
-
-_ARTIFACT_RECORD: Final[str] = "artifacts.json"
-"""What that inner module writes for the outer assertions to read.
-
-A run id, the run directory it named and the per-test directory ``dir_for`` answered with.
-"""
-
-_PUBLISHED_MODULE: Final[str] = "test_zero_config_published_write"
-"""File name of the inner module that drives the published ``write`` and ``manifest`` members."""
-
-_PUBLISHED_RECORD: Final[str] = "published-write.json"
-"""What that inner module writes for the outer assertions to read.
-
-The artifact the published ``write`` member recorded, and the manifest it read back.
-"""
-
-_EVENTS_MODULE: Final[str] = "test_zero_config_events"
-"""File name of the inner module run under a conftest that records the Foundry log."""
-
-_EVENT_RECORD: Final[str] = "foundry-events.log"
-"""The file that conftest writes, one ``LEVELNAME|message`` line per record."""
-
-_NO_CONFIG_LINE: Final[str] = "DEBUG|foundry: no config file found"
-"""The whole line AAP 0.4.7 pins for the zero-configuration state, with its level in front."""
-
-_OPTION_SPELLINGS: Final[tuple[str, ...]] = (
-    "--foundry-config",
-    "--foundry-json-report",
-    "--foundry-profile",
-    "--foundry-record",
-    "--foundry-replay",
-    "--foundry-retries",
-    "--foundry-timeout",
+_MODULE: Final[str] = "test_activation"
+_RUN_ID: Final[re.Pattern[str]] = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}")
+_REPORTS: Final[tuple[str, ...]] = ("junit.xml", "report.html", "results.json")
+_OPTIONS: Final[tuple[str, ...]] = tuple(
+    f"--foundry-{name}"
+    for name in ("config", "json-report", "profile", "record", "replay", "retries", "timeout")
 )
-"""The named options AAP 0.4.4 publishes, in sorted order; ``--help`` must list every one."""
 
-_REPORT_FILES: Final[tuple[str, ...]] = ("junit.xml", "report.html", "results.json")
-"""The three report files AAP 0.4.6 places in the invocation directory, sorted."""
-
-_NO_MATCH_KEYWORD: Final[str] = "no_such_test"
-"""A ``-k`` expression no inner test matches, which empties a run of AAP 0.4.7 row 12's kind."""
-
-_NO_TESTS_EXIT: Final[int] = 5
-"""pytest 8.4.2's own no-tests-collected code, which is the value row 12's ``4`` is read as.
-
-The row's number is not a code Foundry forces: AAP 0.4.4 forbids rewriting pytest's 3, 4 and 5, and
-pytest answers a run emptied by a filter with 5, so the preserved code is the one asserted here.
-"""
-
-_DEFAULTS_MODULE: Final[str] = '''"""Assert the field defaults with nothing configured."""
-
-import pathlib
-
-
-def _plain(value: object) -> object:
-    """Return an enum member's value, leaving any other value as it stands."""
-    return getattr(value, "value", value)
-
-
-def test_zero_config_reports_defaults(foundry_config, foundry_profile) -> None:
-    """One passing test is the proof that every default asserted here held."""
-    assert _plain(foundry_profile) == "default"
-    assert _plain(foundry_config.profile) == "default"
-    assert foundry_config.http.timeout == 10.0
-    assert foundry_config.http.base_url is None
-    assert foundry_config.execution.retries == 0
-    assert foundry_config.execution.timeout == 60.0
-    assert _plain(foundry_config.execution.quarantine_mode) == "report"
-    assert _plain(foundry_config.cassette.mode) == "off"
-    assert foundry_config.reporting.html is True
-    assert foundry_config.reporting.json is True
-    assert foundry_config.logging.capture_lines == 200
-    assert _plain(foundry_config.logging.level) == "INFO"
-    assert foundry_config.data.dir == pathlib.Path("testdata")
-    assert foundry_config.artifacts.dir == pathlib.Path("artifacts")
-    assert foundry_config.artifacts.keep_passed is False
-    assert list(foundry_config.secrets.redact_keys) == [
-        "authorization",
-        "set-cookie",
-        "cookie",
-        "x-api-key",
-    ]
-'''
-"""The inner test of criterion 2's default values, one assertion per documented key."""
-
-_ARTIFACT_MODULE_SOURCE: Final[str] = '''"""Report the run id and one artifact directory."""
-
-import json
+_PROJECT: Final[str] = """import json
 import pathlib
 import re
 
 
-def test_zero_config_artifacts(foundry_artifacts, foundry_run_id, request) -> None:
-    """The run id has its shape and dir_for answers inside artifacts/<run_id>/."""
+def test_zero_config_reports_defaults(foundry_config, foundry_profile):
+    c = foundry_config
+    assert foundry_profile == "default" and c.profile == "default"
+    assert c.http.timeout == 10.0 and c.http.base_url is None
+    assert c.execution.retries == 0 and c.execution.timeout == 60.0
+    assert c.execution.quarantine_mode == "report" and c.cassette.mode == "off"
+    assert c.reporting.html is True and c.reporting.json is True
+    assert c.logging.capture_lines == 200 and c.logging.level == "INFO"
+    assert c.data.dir == pathlib.Path("testdata")
+    assert c.artifacts.dir == pathlib.Path("artifacts")
+    assert c.artifacts.keep_passed is False
+    assert list(c.secrets.redact_keys) == ["authorization", "set-cookie", "cookie", "x-api-key"]
+
+def test_zero_config_artifacts(foundry_artifacts, foundry_run_id, request):
     assert re.fullmatch(r"\\d{8}T\\d{6}-[0-9a-f]{6}", foundry_run_id)
     directory = foundry_artifacts.dir_for(request.node.nodeid)
     assert directory.is_dir()
     assert directory.parent.name == foundry_run_id
     assert directory.parent.parent.name == "artifacts"
-    pathlib.Path(__file__).with_name("artifacts.json").write_text(
-        json.dumps(
-            {"dir": str(directory), "run_id": foundry_run_id, "nodeid": request.node.nodeid},
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-'''
-"""The inner test of the run identity and the per-test artifact directory (AAP 0.4.6)."""
+    facts = {"dir": str(directory), "run_id": foundry_run_id, "nodeid": request.node.nodeid}
+    out = pathlib.Path(__file__).with_name("artifacts.json")
+    out.write_text(json.dumps(facts, sort_keys=True), encoding="utf-8")
+"""
 
-_PUBLISHED_MODULE_SOURCE: Final[str] = '''"""Drive the published write and manifest members."""
-
-import json
-import pathlib
-
-
-def test_zero_config_published_write(foundry_artifacts) -> None:
-    """AAP 0.4.3: ``write`` returns a reference to a file in this test's own directory."""
-    reference = foundry_artifacts.write("stdout", None, "published write")
-    assert reference is not None, "the published write member returned no reference"
-    assert reference.kind == "stdout", reference
-    assert pathlib.PurePosixPath(reference.path).name == "stdout.log", reference
-    matches = sorted(pathlib.Path("artifacts").glob(f"*/{reference.path}"))
-    assert len(matches) == 1, f"the reference {reference.path!r} names no file on disk: {matches}"
-    assert matches[0].read_text(encoding="utf-8") == "published write"
-    manifest = foundry_artifacts.manifest
-    assert reference in manifest, f"the written artifact is missing from {manifest}"
-    pathlib.Path(__file__).with_name("published-write.json").write_text(
-        json.dumps(
-            {
-                "path": reference.path,
-                "manifest": [entry.path for entry in manifest],
-                "directory": str(matches[0].parent.name),
-            },
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-'''
-"""The inner test of the published ``write`` and ``manifest`` members (AAP 0.4.3)."""
-
-_EVENTS_MODULE_SOURCE: Final[str] = '''"""A plain passing test that requests nothing."""
-
-
-def test_zero_config_events() -> None:
-    """Nothing is requested, so the record the outer test asserts on came from the bootstrap."""
-    assert True
-'''
-"""The inner test of the no-configuration log line, deliberately fixture-free."""
-
-_EVENTS_CONFTEST: Final[str] = '''"""Record Foundry records before the plugin resolves."""
-
-import logging
+_EVENTS_CONFTEST: Final[str] = """import logging
 import pathlib
 
 import pytest
 
-_EVENTS = pathlib.Path(__file__).with_name("foundry-events.log")
-_HANDLER = None
-_PRIOR_LEVEL = None
+EVENTS = pathlib.Path(__file__).with_name("foundry-events.log")
+LOG = logging.getLogger("foundry")
+PRIOR = LOG.level
 
-
-class _LineHandler(logging.Handler):
-    """Append one ``LEVELNAME|message`` line per record, so the file is readable by a test."""
-
+class _Lines(logging.Handler):
     def emit(self, record):
-        """Write the record's level and rendered message."""
-        with _EVENTS.open("a", encoding="utf-8") as stream:
+        with EVENTS.open("a", encoding="utf-8") as stream:
             stream.write(f"{record.levelname}|{record.getMessage()}\\n")
 
-
-@pytest.hookimpl(tryfirst=True)
-def pytest_configure(config):
-    """Attach the handler and allow DEBUG through, before Foundry resolves anything.
-
-    The ``foundry`` logger inherits the root logger's level, which is ``WARNING`` unless the host
-    project says otherwise, so without this line the DEBUG record AAP 0.4.7 pins is dropped before
-    it reaches any handler.
-    """
-    global _HANDLER, _PRIOR_LEVEL
-    logger = logging.getLogger("foundry")
-    _PRIOR_LEVEL = logger.level
-    logger.setLevel(logging.DEBUG)
-    _HANDLER = _LineHandler()
-    logger.addHandler(_HANDLER)
-
+HANDLER = _Lines()
+LOG.setLevel(logging.DEBUG)
+LOG.addHandler(HANDLER)
 
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config):
-    """Detach the handler and restore the level, so an in-process run leaks no logging state."""
-    logger = logging.getLogger("foundry")
-    if _HANDLER is not None:
-        logger.removeHandler(_HANDLER)
-    if _PRIOR_LEVEL is not None:
-        logger.setLevel(_PRIOR_LEVEL)
-'''
-"""The conftest the logging test writes, which is a consuming project's own logging setup."""
+    LOG.removeHandler(HANDLER)
+    LOG.setLevel(PRIOR)
+"""
+
+_NO_MATCH: Final[str] = "no_such_test"
+_NO_TESTS_EXIT: Final[int] = 5
+_HIDDEN: Final[tuple[str, ...]] = ("/", "::", "[")
+
+_PUBLISHED: Final[str] = (
+    "import json, pathlib\n\n\n"
+    "def test_zero_config_published_write(foundry_artifacts):\n"
+    '    reference = foundry_artifacts.write("stdout", None, "published write")\n'
+    '    assert reference is not None and reference.kind == "stdout", reference\n'
+    '    assert pathlib.PurePosixPath(reference.path).name == "stdout.log", reference\n'
+    '    found = sorted(pathlib.Path("artifacts").glob(f"*/{reference.path}"))\n'
+    '    assert [item.read_text(encoding="utf-8") for item in found] == ["published write"]\n'
+    "    manifest = foundry_artifacts.manifest\n"
+    "    assert reference in manifest, manifest\n"
+    '    facts = {"path": reference.path, "directory": found[0].parent.name,\n'
+    '             "manifest": [entry.path for entry in manifest]}\n'
+    '    pathlib.Path(__file__).with_name("published-write.json").write_text(\n'
+    '        json.dumps(facts, sort_keys=True), encoding="utf-8")\n'
+)
 
 
-def _read_json(path: Path) -> object:
-    """Return the document ``path`` holds, decoded by the standard library's own reader.
-
-    Read with :mod:`json` rather than through Foundry's reporting code on purpose: what is under
-    assertion is a file a run produced, so the assertion must not travel back through the code that
-    produced it.
-    """
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def test_zero_config_activation_reports_default_profile(
+def test_activation_runs_green_and_reports_the_defaults(
     pytester: pytest.Pytester, clean_foundry_env: None
 ) -> None:
-    """A directory holding one test file and nothing else runs green and reports the defaults."""
-    pytester.makepyfile(**{_NODEID_MODULE: _DEFAULTS_MODULE})
-    # Checked once the test module exists, so these two lines rule out a configuration file the
-    # harness wrote rather than one this test merely forgot to write itself.
+    pytester.makeconftest(_EVENTS_CONFTEST)
+    pytester.makepyfile(**{_MODULE: _PROJECT})
+    # Checked once the test module exists, so neither line can pass by finding an empty directory.
     assert not (pytester.path / "foundry.toml").exists()
     assert not (pytester.path / "pyproject.toml").exists()
-    # No argument is passed that loads the plugin by name: the installed entry point is the whole
-    # activation path AAP 0.4.2 promises, and an option-free run is what proves it.
     result = pytester.runpytest()
     assert result.ret == 0
-    result.assert_outcomes(passed=1)
+    result.assert_outcomes(passed=2)
     result.stdout.fnmatch_lines(["*foundry: profile=default*"])
-
-
-def test_run_id_and_artifact_root(pytester: pytest.Pytester, clean_foundry_env: None) -> None:
-    """The fixture reports the session's own run id, which names the run's one artifact root."""
-    pytester.makepyfile(**{_ARTIFACT_MODULE: _ARTIFACT_MODULE_SOURCE})
-    result = pytester.runpytest()
-    assert result.ret == 0
-    result.assert_outcomes(passed=1)
-    recorded = _read_json(pytester.path / _ARTIFACT_RECORD)
-    assert isinstance(recorded, dict)
-    run_id = recorded["run_id"]
-    assert isinstance(run_id, str)
-    assert _RUN_ID_PATTERN.fullmatch(run_id) is not None
-    assert recorded["nodeid"] == f"{_ARTIFACT_MODULE}.py::test_zero_config_artifacts"
-
-    # Four independent reports of one identity: the fixture's value, the record ``results.json``
-    # carries, the ``artifacts/<run_id>/`` directory, and the terminal banner (AAP 0.4.3 requires
-    # the run id to be "also the artifact directory name"; AAP 0.4.6 fixes one root per run). A
-    # fixture that minted an id of its own would agree with none of the other three.
-    records = _read_json(pytester.path / "results.json")
-    assert isinstance(records, list)
-    assert len(records) == 1
-    record = records[0]
-    assert isinstance(record, dict)
-    assert record["nodeid"] == recorded["nodeid"]
-    assert record["run_id"] == run_id, (
-        f"the record names {record['run_id']!r}, the fixture {run_id!r}"
+    for name in _REPORTS:
+        assert (pytester.path / name).is_file(), name
+    records = json.loads((pytester.path / "results.json").read_text(encoding="utf-8"))
+    assert isinstance(records, list) and len(records) == 2
+    record = next(item for item in records if item["nodeid"].endswith("reports_defaults"))
+    assert record["record_type"] == "result"
+    assert record["nodeid"] == f"{_MODULE}.py::test_zero_config_reports_defaults"
+    assert record["profile"] == "default"
+    assert record["outcome"] == "passed" and record["attempts"] == 1
+    run_id = record["run_id"]
+    assert isinstance(run_id, str) and _RUN_ID.fullmatch(run_id) is not None
+    suite = ElementTree.parse(pytester.path / "junit.xml").getroot()
+    assert suite.tag == "testsuite" and len(suite.findall("testcase")) == 2
+    report = (pytester.path / "report.html").read_text(encoding="utf-8")
+    assert report.strip() and run_id in report
+    facts = json.loads((pytester.path / "artifacts.json").read_text(encoding="utf-8"))
+    assert (
+        isinstance(facts, dict) and facts["nodeid"] == f"{_MODULE}.py::test_zero_config_artifacts"
     )
-
-    root = pytester.path / "artifacts"
-    run_dir = root / run_id
-    assert run_dir.is_dir(), f"{run_dir} is missing"
-    directory = Path(recorded["dir"])
-    assert directory.is_dir()
-    assert directory.parent == run_dir, f"{directory.parent} is not the run root {run_dir}"
-    roots = sorted(entry.name for entry in root.iterdir() if entry.is_dir())
-    assert roots == [run_id], f"one run left {len(roots)} artifact roots: {roots}"
-
-    banner = re.findall(r"foundry: run (\S+) artifacts at", result.stdout.str())
-    assert banner == [run_id], f"the banner names {banner} for a run the fixture calls {run_id!r}"
-
+    artifact_run_id = facts["run_id"]
+    assert isinstance(artifact_run_id, str) and _RUN_ID.fullmatch(artifact_run_id) is not None
+    run_dir = pytester.path / "artifacts" / artifact_run_id
+    directory = Path(facts["dir"])
+    assert run_dir.is_dir() and directory.parent == run_dir
     names = sorted(entry.name for entry in run_dir.iterdir())
     assert directory.name in names
-    for name in names:
-        for forbidden in _HIDDEN_NODEID_CHARACTERS:
-            assert forbidden not in name, f"{name!r} carries a node id separator {forbidden!r}"
-
-
-def test_three_report_files_are_written_by_default(
-    pytester: pytest.Pytester, clean_foundry_env: None
-) -> None:
-    """An unconfigured run writes results.json, junit.xml and report.html beside the test."""
-    pytester.makepyfile(**{_NODEID_MODULE: _DEFAULTS_MODULE})
-    result = pytester.runpytest()
-    assert result.ret == 0
-    result.assert_outcomes(passed=1)
-    for name in _REPORT_FILES:
-        assert (pytester.path / name).is_file(), f"{name} is missing from {pytester.path}"
-    records = _read_json(pytester.path / "results.json")
-    assert isinstance(records, list)
-    assert len(records) == 1
-    record = records[0]
-    assert isinstance(record, dict)
-    assert record["record_type"] == "result"
-    assert record["nodeid"] == _NODEID
-    assert record["profile"] == "default"
-    assert record["outcome"] == "passed"
-    assert record["attempts"] == 1
-    run_id = record["run_id"]
-    assert isinstance(run_id, str)
-    assert _RUN_ID_PATTERN.fullmatch(run_id) is not None
-    suite = ElementTree.parse(pytester.path / "junit.xml").getroot()
-    assert suite.tag == "testsuite"
-    assert len(suite.findall("testcase")) == 1
-    report = (pytester.path / "report.html").read_text(encoding="utf-8")
-    assert report.strip()
-    assert run_id in report
-
-
-def test_all_tests_deselected_writes_no_report(
-    pytester: pytest.Pytester, clean_foundry_env: None
-) -> None:
-    """A run whose only test is deselected writes no report file at all (AAP 0.4.7 row 12).
-
-    The code the run ends with is pytest's own: AAP 0.4.4 forbids rewriting pytest's 3, 4 and 5, and
-    pytest 8.4.2 answers a whole-run deselection with its no-tests-collected code 5, so row 12's "4"
-    is read as pytest's own code rather than a number Foundry forces. AAP 0.4.6 reserves the empty
-    document for a run that collected nothing, which is why no file of the three appears here.
-    """
-    pytester.makepyfile(**{_NODEID_MODULE: _DEFAULTS_MODULE})
-    result = pytester.runpytest("-k", _NO_MATCH_KEYWORD)
-    assert result.ret == _NO_TESTS_EXIT
-    result.assert_outcomes(deselected=1)
-    result.stdout.fnmatch_lines(["*1 deselected*"])
-    written = sorted(name for name in _REPORT_FILES if (pytester.path / name).exists())
-    assert not written, f"an all-deselected run writes no report, but {written} exist"
-
-
-def test_matching_keyword_still_writes_every_report(
-    pytester: pytest.Pytester, clean_foundry_env: None
-) -> None:
-    """A ``-k`` filter that keeps the test still writes all three report files (AAP 0.4.6).
-
-    The control for the case above: a guard that suppressed every filtered run would satisfy that
-    case vacuously and fails this one.
-    """
-    pytester.makepyfile(**{_NODEID_MODULE: _DEFAULTS_MODULE})
-    result = pytester.runpytest("-k", _NODEID_FUNCTION)
-    assert result.ret == 0
-    result.assert_outcomes(passed=1)
-    missing = sorted(name for name in _REPORT_FILES if not (pytester.path / name).is_file())
-    assert not missing, f"{missing} are missing from {pytester.path}"
-
-
-def test_collection_only_run_writes_no_report(
-    pytester: pytest.Pytester, clean_foundry_env: None
-) -> None:
-    """A ``--collect-only`` session runs no test and writes no report file (AAP 0.4.6).
-
-    The other report-less state of the session-finish guard: the run has no result to record, and
-    pytest's own 0 for a collection-only session is preserved as AAP 0.4.4 requires.
-    """
-    pytester.makepyfile(**{_NODEID_MODULE: _DEFAULTS_MODULE})
-    result = pytester.runpytest("--collect-only", "-q")
-    assert result.ret == 0
-    result.stdout.fnmatch_lines([f"*{_NODEID}*"])
-    written = sorted(name for name in _REPORT_FILES if (pytester.path / name).exists())
-    assert not written, f"a collection-only run writes no report, but {written} exist"
+    # A node id separator would change the run tree's layout, so none may reach a directory name.
+    assert all(not any(char in name for char in ("/", "::", "[")) for name in names)
+    # The conftest is the consuming project's own logging setup; the pinned DEBUG line needs it.
+    lines = (pytester.path / "foundry-events.log").read_text(encoding="utf-8").splitlines()
+    assert "DEBUG|foundry: no config file found" in [line.strip() for line in lines]
 
 
 def test_option_group_is_registered(pytester: pytest.Pytester, clean_foundry_env: None) -> None:
-    """``--help`` lists every named option of AAP 0.4.4, with no configuration file present."""
     result = pytester.runpytest("--help")
     assert result.ret == 0
     assert not (pytester.path / "foundry.toml").exists()
     listed = result.stdout.str()
-    missing = [spelling for spelling in _OPTION_SPELLINGS if spelling not in listed]
+    missing = [name for name in _OPTIONS if name not in listed]
     assert missing == [], f"--help does not list {missing}"
 
 
-def test_no_config_file_logs_a_debug_line(
-    pytester: pytest.Pytester, clean_foundry_env: None
+@pytest.mark.parametrize(
+    ("argv", "code", "outcomes", "line", "reports"),
+    [
+        (("-k", _NO_MATCH), _NO_TESTS_EXIT, {"deselected": 2}, "*2 deselected*", False),
+        (("-k", "reports_defaults"), 0, {"passed": 1, "deselected": 1}, None, True),
+        (("--collect-only", "-q"), 0, {"tests": 2}, "*::test_zero_config_reports_defaults*", False),
+    ],
+    ids=["all-deselected", "keyword", "collect-only"],
+)
+def test_only_a_run_that_runs_a_test_writes_a_report(
+    pytester: pytest.Pytester,
+    clean_foundry_env: None,
+    argv: tuple[str, ...],
+    code: int,
+    outcomes: Mapping[str, int],
+    line: str | None,
+    reports: bool,
 ) -> None:
-    """The zero-configuration state is recorded at DEBUG on the Foundry logger (AAP 0.4.7)."""
-    pytester.makeconftest(_EVENTS_CONFTEST)
-    pytester.makepyfile(**{_EVENTS_MODULE: _EVENTS_MODULE_SOURCE})
-    result = pytester.runpytest()
-    assert result.ret == 0
-    result.assert_outcomes(passed=1)
-    lines = (pytester.path / _EVENT_RECORD).read_text(encoding="utf-8").splitlines()
-    assert _NO_CONFIG_LINE in [line.strip() for line in lines]
+    # AAP 0.4.4 forbids rewriting pytest's own 3, 4 and 5, so a run emptied by a filter keeps 5.
+    pytester.makepyfile(**{_MODULE: _PROJECT})
+    result = pytester.runpytest(*argv)
+    assert result.ret == code and result.parseoutcomes() == outcomes
+    if line is not None:
+        result.stdout.fnmatch_lines([line])
+    written = sorted(name for name in _REPORTS if (pytester.path / name).exists())
+    assert bool(written) is reports, written
 
 
 def test_the_published_write_and_manifest_members_work(
     pytester: pytest.Pytester, clean_foundry_env: None
 ) -> None:
-    """AAP 0.4.3: ``write`` and ``manifest`` answer for the test in flight, file and record alike.
-
-    The inner test drives both members exactly as the fixture table publishes them -- no node id and
-    no unpublished member anywhere in it. ``artifacts.keep_passed`` then keeps what a passing test
-    wrote, so the file and its record entry are still readable after the run, and the option is the
-    run's only configuration, which keeps this on the zero-configuration surface.
-    """
-    pytester.makepyfile(**{_PUBLISHED_MODULE: _PUBLISHED_MODULE_SOURCE})
+    pytester.makepyfile(test_published=_PUBLISHED)
     result = pytester.runpytest("--foundry-artifacts.keep_passed", "true")
     assert result.ret == 0
     result.assert_outcomes(passed=1)
-
-    recorded = _read_json(pytester.path / _PUBLISHED_RECORD)
-    assert isinstance(recorded, dict)
+    recorded = json.loads((pytester.path / "published-write.json").read_text(encoding="utf-8"))
     relative = recorded["path"]
-    assert isinstance(relative, str)
-    assert Path(relative).name == "stdout.log", relative
-    assert recorded["manifest"] == [relative], recorded
-
-    records = _read_json(pytester.path / "results.json")
-    assert isinstance(records, list)
-    record = records[0]
-    assert isinstance(record, dict)
-    run_id = record["run_id"]
-    assert isinstance(run_id, str)
-    written = pytester.path / "artifacts" / run_id / relative
+    assert Path(relative).name == "stdout.log" and recorded["manifest"] == [relative]
+    record = json.loads((pytester.path / "results.json").read_text(encoding="utf-8"))[0]
+    written = pytester.path / "artifacts" / record["run_id"] / relative
     assert written.is_file(), f"the write member recorded {relative!r} but wrote no such file"
-    assert written.parent.parent == pytester.path / "artifacts" / run_id
-    assert written.parent.name == recorded["directory"]
-    assert _PUBLISHED_MODULE in written.parent.name, written.parent.name
-    for forbidden in _HIDDEN_NODEID_CHARACTERS:
-        assert forbidden not in written.parent.name, written.parent.name
-    listed = [{"kind": entry["kind"], "path": entry["path"]} for entry in record["artifacts"]]
+    assert written.parent.name == recorded["directory"] and "published" in written.parent.name
+    assert not [char for char in _HIDDEN if char in written.parent.name]
+    listed = [{"kind": item["kind"], "path": item["path"]} for item in record["artifacts"]]
     assert {"kind": "stdout", "path": relative} in listed, listed

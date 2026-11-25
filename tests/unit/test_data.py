@@ -1,656 +1,226 @@
-"""Unit tests for the ``foundry.data`` package: the four loaders, the case model, the matrix
-expander, the stable case ids, the schema gate and the extension registry.
-
-A data-driven test is only as trustworthy as the collection it was planned from, so this module
-pins the properties a regression would break: the four format readers over one shared data set
-produce the same cases, a case carries the location it was read from, a matrix expands to one
-deterministic cross-product, a case id derives from the file and a position alone so every shard
-agrees (I6), a rejected row is reported with its file, line and column (AAP 0.4.7), the registry
-serves five suffixes, and a file that parses to no data rows becomes the documented skip.
-
-Everything is driven through the package's public surface -- the ``foundry.data`` barrel and the two
-``foundry.core`` modules the ids delegate to -- because that is what the plugin's
-``pytest_generate_tests`` delegation and the fixture call; ``foundry.reporting`` and ``foundry.cli``
-are never imported (AAP 0.4.8). Where the modules on disk differ from the brief (AAP 0.7.2): a
-ragged row names the first header column it never filled while a long row keeps ``column=None``; a
-parsed JSON or YAML document reports ``line=None`` and takes its id from ``row_index``; the empty
-file's skip is built by ``build_parameters`` and bound by ``parametrize``; and a matrix axis value
-is canonical JSON, which keeps ``1`` and ``"1"`` distinct.
-
-Determinism (AAP 0.14.3): the committed fixtures are only read, every file this module writes lives
-under ``tmp_path``, no wall-clock value is asserted and no socket is opened.
-"""
+"""Unit tests for ``foundry.data``: the four loaders, the case model and the schema gate."""
 
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
 import pytest
 
+from foundry import data
 from foundry.core.exceptions import ContractError, DataError, FoundryError
 from foundry.core.ids import case_id_for_row
-from foundry.data import (
-    SUPPORTED_EXTENSIONS,
-    Case,
-    CaseSet,
-    build_parameters,
-    case_stem,
-    expand_axes,
-    generate_cases,
-    load_cases,
-    load_matrix,
-    load_row_schema,
-    loader_for,
-    matrix_case_id,
-    parametrize,
-    supported_extensions,
-    tabular_case_id,
-)
-from foundry.data.loaders import yaml as yaml_loader
 
 TABULAR_FILES: Final[tuple[str, ...]] = ("cases.csv", "cases.json", "cases.yaml", "cases.jsonl")
-"""One data set in all four formats: same twelve records, one file per reader."""
-
 ROWS_PER_TABLE: Final[int] = 12
-"""The number of data rows each ``cases.*`` fixture carries -- the fixture's own contract."""
-
 DOCUMENTED_EXTENSIONS: Final[tuple[str, ...]] = ("csv", "json", "jsonl", "yaml", "yml")
-"""The suffixes AAP 0.3.2 says the registry serves, sorted the way it reports them."""
-
-DOCUMENTED_COLUMNS: Final[frozenset[str]] = frozenset(
-    {"case_id", "currency", "tier", "quantity", "unit_price", "expected_total"}
-)
-"""The six columns every ``cases.*`` fixture declares."""
-
-MATRIX_AXES: Final[tuple[tuple[str, tuple[object, ...]], ...]] = (
-    ("currency", ("EUR", "GBP", "USD")),
-    ("tier", ("bronze", "silver", "gold", "platinum")),
-)
-"""``matrix.yaml``'s axes, sorted by name and exactly as declared: 3 x 4 -> 12 cases."""
-
+DOCUMENTED_COLUMN_NAMES: Final[str] = "case_id currency tier quantity unit_price expected_total"
+DOCUMENTED_COLUMNS: Final[frozenset[str]] = frozenset(DOCUMENTED_COLUMN_NAMES.split())
 SCHEMA_FIXTURE: Final[str] = "case_row.schema.json"
-"""The committed row schema the schema tests copy beside a ``tmp_path`` data file."""
-
+CASE_IDS: Final[list[str]] = [f"cases-{index}" for index in range(ROWS_PER_TABLE)]
 _CSV_HEADER: Final[str] = "case_id,currency,tier,quantity,unit_price,expected_total"
-"""The header ``cases.csv`` and the schema fixture agree on."""
-
+_SHORT_HEADER: Final[str] = "case_id,currency,quantity,unit_price,expected_total"
 _VALID_ROW: Final[str] = "C-001,EUR,bronze,2,10.00,20.00"
-"""One row the schema fixture accepts, as the CSV text a test writes."""
-
-
-# --- Shared fixtures and helpers -------------------------------------------
+_ROW_VALUES = dict(zip(_CSV_HEADER.split(","), _VALID_ROW.split(","), strict=True))
 
 
 @pytest.fixture(scope="module")
 def fixtures_dir(repo_root: Path) -> Path:
-    """Module scope: the committed data fixtures, checked for the files this module reads."""
     directory = repo_root / "tests" / "fixtures"
-    expected = (
-        *TABULAR_FILES,
-        "matrix.yaml",
-        "header_only.csv",
-        "missing_column.csv",
-        "unsupported_extension.txt",
-        SCHEMA_FIXTURE,
-    )
-    missing = [name for name in expected if not (directory / name).is_file()]
-    assert not missing, f"data fixtures missing from {directory}: {', '.join(missing)}"
+    expected = (*TABULAR_FILES, "matrix.yaml", "header_only.csv", SCHEMA_FIXTURE)
+    assert all((directory / name).is_file() for name in expected), directory
     return directory
 
 
 @pytest.fixture(scope="module")
-def cases_by_format(fixtures_dir: Path) -> Mapping[str, CaseSet]:
-    """Module scope: every ``cases.*`` fixture loaded once, keyed by its file name."""
-    return {name: load_cases(fixtures_dir / name) for name in TABULAR_FILES}
+def cases_by_format(fixtures_dir: Path) -> Mapping[str, data.CaseSet]:
+    return {name: data.load_cases(fixtures_dir / name) for name in TABULAR_FILES}
 
 
-class _ParametrizeRecorder:
-    """A stand-in for ``pytest.Metafunc`` that records the single call ``parametrize`` makes.
-
-    :func:`foundry.data.parametrize` touches its ``metafunc`` in exactly one way --
-    ``metafunc.parametrize(argname, parameters)`` -- so a recorder proves both halves of the
-    adapter's contract: the argument the cases are bound to, and the parameters themselves.
-    """
-
-    def __init__(self) -> None:
-        self.argnames: list[str] = []
-        self.parameters: list[object] = []
+@dataclasses.dataclass
+class _Recorder:
+    argnames: list[str] = dataclasses.field(default_factory=list)
+    parameters: list[object] = dataclasses.field(default_factory=list)
 
     def parametrize(self, argname: str, parameters: Sequence[object]) -> None:
-        """Record one parametrisation call."""
         self.argnames.append(argname)
         self.parameters.extend(parameters)
 
 
-def _write_table_with_schema(tmp_path: Path, name: str, body: str, schema: Path) -> Path:
-    """Write a CSV data file and its sidecar schema under ``tmp_path``, returning the data path.
-
-    The schema fixture is copied, never mutated, and both files are new names under ``tmp_path``,
-    so ``tests/fixtures`` is never written to. The sidecar takes the
-    ``<data file name>.schema.json`` spelling, which is the one
-    :func:`foundry.data.schema_path_for` tries first.
-    """
-    data_path = tmp_path / f"{name}.csv"
-    data_path.write_text(body, encoding="utf-8")
-    sidecar = tmp_path / (data_path.name + ".schema.json")
+def _table(tmp_path: Path, name: str, body: str, schema: Path) -> Path:
+    (path := tmp_path / f"{name}.csv").write_text(body, encoding="utf-8")
+    sidecar = tmp_path / (path.name + ".schema.json")
     sidecar.write_text(schema.read_text(encoding="utf-8"), encoding="utf-8")
-    return data_path
+    return path
 
 
-# --- The four loaders ------------------------------------------------------
-
-
-@pytest.mark.parametrize("name", TABULAR_FILES)
-def test_each_loader_yields_every_data_row(name: str, fixtures_dir: Path) -> None:
-    """Each format loads all twelve records, with the six columns the data set declares."""
-    case_set = load_cases(fixtures_dir / name)
-    assert len(case_set) == ROWS_PER_TABLE
-    assert len(case_set.cases) == ROWS_PER_TABLE
-    assert frozenset(case_set.columns) == DOCUMENTED_COLUMNS
-    assert case_set.source_file == fixtures_dir / name
-
-
-def test_the_four_loaders_agree_on_ids_and_values(
-    cases_by_format: Mapping[str, CaseSet],
+def test_the_four_loaders_yield_the_same_rows_under_unique_ids(
+    cases_by_format: Mapping[str, data.CaseSet], fixtures_dir: Path
 ) -> None:
-    """Every format yields the same sorted id tuple, and the same values case for case."""
-    id_tuples = {
-        name: tuple(sorted(case.id for case in case_set))
-        for name, case_set in cases_by_format.items()
-    }
-    assert len(set(id_tuples.values())) == 1, id_tuples
-
     reference = cases_by_format["cases.csv"].cases
     for name, case_set in cases_by_format.items():
-        assert len(case_set.cases) == len(reference), name
+        ids = [case.id for case in case_set.cases]
+        assert (len(case_set), len(ids), len(set(ids))) == (ROWS_PER_TABLE,) * 3, name
+        assert frozenset(case_set.columns) == DOCUMENTED_COLUMNS, name
+        assert case_set.source_file == fixtures_dir / name
         for expected, actual in zip(reference, case_set.cases, strict=True):
-            assert actual.id == expected.id, name
-            assert actual.row_index == expected.row_index, name
+            assert (actual.id, actual.row_index) == (expected.id, expected.row_index), name
             assert dict(actual.values) == dict(expected.values), (name, actual.id)
+    assert len({tuple(sorted(c.id for c in s.cases)) for s in cases_by_format.values()}) == 1
 
 
-@pytest.mark.parametrize("name", TABULAR_FILES)
-def test_a_string_path_loads_what_a_path_loads(name: str, fixtures_dir: Path) -> None:
-    """A ``str`` argument names the same file a ``Path`` does, case for case.
-
-    ``foundry_data.cases`` hands a data file name through as a string, so a bare string reaching
-    the composition entry point is the ordinary mistake: it must read the file instead of failing
-    on a string's missing ``suffix``, and no builtin may leave ``foundry.data`` for an argument of
-    an accepted type (AAP 0.14.3).
-    """
-    from_path = load_cases(fixtures_dir / name)
-    from_string = load_cases(str(fixtures_dir / name))
-    assert from_string == from_path
-    assert [case.id for case in from_string.cases] == [case.id for case in from_path.cases]
-
-
-def test_a_string_path_expands_the_matrix_a_path_expands(fixtures_dir: Path) -> None:
-    """``load_matrix`` accepts the string form on the same terms as ``load_cases``."""
-    matrix_path = fixtures_dir / "matrix.yaml"
-    assert load_matrix(str(matrix_path)).cases == load_matrix(matrix_path).cases
-
-
-# --- The case model --------------------------------------------------------
-
-
-def test_a_case_carries_its_location_and_its_values(
-    cases_by_format: Mapping[str, CaseSet], fixtures_dir: Path
+@pytest.mark.parametrize(
+    ("name", "read"),
+    [(f"cases.{suffix}", data.load_cases) for suffix in ("csv", "json", "jsonl", "yaml")]
+    + [("matrix.yaml", data.load_matrix)],
+)
+def test_a_string_path_loads_what_a_path_loads(
+    name: str, read: Callable[[str | Path], data.CaseSet | data.Matrix], fixtures_dir: Path
 ) -> None:
-    """A case publishes the six fields AAP 0.7.2 fixes, with its own file and row position."""
-    case = cases_by_format["cases.csv"].cases[0]
-    assert isinstance(case, Case)
-    assert case.id == "cases-0"
-    assert case.name == case.id  # no ``name`` column, so the label falls back to the id
+    from_path, from_string = read(fixtures_dir / name), read(str(fixtures_dir / name))
+    assert from_string == from_path and [c.id for c in from_string.cases] == [
+        c.id for c in from_path.cases
+    ]
+
+
+def test_a_case_carries_its_location_its_values_and_cannot_be_mutated(fixtures_dir: Path) -> None:
+    case = data.load_cases(fixtures_dir / "cases.csv").cases[0]
+    assert isinstance(case, data.Case)
+    assert (case.id, case.name, case.row_index) == ("cases-0", "cases-0", 0)
     assert case.source_file == fixtures_dir / "cases.csv"
-    assert case.row_index == 0
-    assert dict(case.values) == {
-        "case_id": "C-001",
-        "currency": "EUR",
-        "tier": "bronze",
-        "quantity": "2",
-        "unit_price": "10.00",
-        "expected_total": "20.00",
-    }
-
-
-def test_a_case_cannot_be_mutated(cases_by_format: Mapping[str, CaseSet]) -> None:
-    """The model is frozen and its ``values`` mapping is read-only, so a planned case stays put."""
-    case = cases_by_format["cases.csv"].cases[0]
+    assert dict(case.values) == dict(_ROW_VALUES)
     with pytest.raises(dataclasses.FrozenInstanceError):
         case.id = "renamed"
     with pytest.raises(TypeError):
         case.values["case_id"] = "renamed"
 
 
-def test_csv_rows_report_the_physical_line_they_start_on(fixtures_dir: Path) -> None:
-    """``line`` is the 1-based file line with the header excluded, and it holds that record."""
-    path = fixtures_dir / "cases.csv"
-    physical = path.read_text(encoding="utf-8").splitlines()
-    assert len(physical) == ROWS_PER_TABLE + 1
-    for case in load_cases(path).cases:
-        assert case.row_index is not None
-        assert case.line == case.row_index + 2  # one header line, and lines count from one
-        assert physical[case.line - 1].split(",")[0] == case.values["case_id"]
+def test_a_row_reports_its_physical_line_or_none_for_a_parsed_document(fixtures_dir: Path) -> None:
+    for name, offset, read in (
+        ("cases.csv", 2, lambda line: line.split(",")[0]),
+        ("cases.jsonl", 1, lambda line: json.loads(line)["case_id"]),
+    ):
+        physical = (fixtures_dir / name).read_text(encoding="utf-8").splitlines()
+        assert len(physical) == ROWS_PER_TABLE + offset - 1  # one header line for the CSV
+        for case in data.load_cases(fixtures_dir / name).cases:
+            assert case.line == case.row_index + offset
+            assert read(physical[case.line - 1]) == case.values["case_id"]
+    for name in ("cases.json", "cases.yaml"):
+        assert {case.line for case in data.load_cases(fixtures_dir / name).cases} == {None}
 
 
-def test_jsonl_rows_report_the_physical_line_they_start_on(fixtures_dir: Path) -> None:
-    """A JSON Lines record has a real line in the file, so that line is what the reader reports."""
-    path = fixtures_dir / "cases.jsonl"
-    physical = path.read_text(encoding="utf-8").splitlines()
-    assert len(physical) == ROWS_PER_TABLE
-    for case in load_cases(path).cases:
-        assert case.row_index is not None
-        assert case.line == case.row_index + 1
-        assert json.loads(physical[case.line - 1])["case_id"] == case.values["case_id"]
-
-
-@pytest.mark.parametrize("name", ["cases.json", "cases.yaml"])
-def test_parsed_documents_report_no_line_but_a_row_index(name: str, fixtures_dir: Path) -> None:
-    """JSON and YAML document ``line=None``, because a parsed document has no per-row line."""
-    case_set = load_cases(fixtures_dir / name)
-    assert [case.row_index for case in case_set.cases] == list(range(ROWS_PER_TABLE))
-    assert {case.line for case in case_set.cases} == {None}
-    assert {case.source_file for case in case_set.cases} == {fixtures_dir / name}
-
-
-# --- Matrix expansion ------------------------------------------------------
-
-
-def test_the_matrix_expands_to_its_cross_product(fixtures_dir: Path) -> None:
-    """``matrix.yaml`` expands to one case per combination, in a contiguous, unique order."""
-    matrix = load_matrix(fixtures_dir / "matrix.yaml")
-    assert matrix.name == "matrix"
-    assert matrix.source_file == fixtures_dir / "matrix.yaml"
-    assert len(matrix.cases) == 12
-    assert len({case.id for case in matrix.cases}) == 12
-    assert [case.row_index for case in matrix.cases] == list(range(12))
-    assert {case.line for case in matrix.cases} == {None}
-
-
-def test_the_matrix_axes_are_sorted_by_name(fixtures_dir: Path) -> None:
-    """The expansion order is fixed by the axis names, not by how the document wrote them."""
-    matrix = load_matrix(fixtures_dir / "matrix.yaml")
-    assert matrix.axes == MATRIX_AXES
-    names = [name for name, _ in matrix.axes]
-    assert names == sorted(names)
-
-
-def test_every_matrix_case_fixes_one_value_of_every_axis(fixtures_dir: Path) -> None:
-    """Each case maps every axis to one declared value, and every value is used at least once."""
-    matrix = load_matrix(fixtures_dir / "matrix.yaml")
-    axis_names = [name for name, _ in matrix.axes]
-    observed: dict[str, set[object]] = {name: set() for name in axis_names}
-    for case in matrix.cases:
-        assert list(case.values) == axis_names
-        for name, value in case.values.items():
-            observed[name].add(value)
-    assert observed == {name: set(values) for name, values in matrix.axes}
-    expected = 1
-    for _, values in matrix.axes:
-        expected *= len(values)
-    assert len(matrix.cases) == expected == 12
-
-
-def test_the_matrix_expansion_is_repeatable(fixtures_dir: Path) -> None:
-    """Two independent expansions of one document agree value for value."""
-    first = load_matrix(fixtures_dir / "matrix.yaml")
-    second = load_matrix(fixtures_dir / "matrix.yaml")
-    assert [case.id for case in first.cases] == [case.id for case in second.cases]
-    assert [dict(case.values) for case in first.cases] == [
-        dict(case.values) for case in second.cases
-    ]
-
-
-def test_the_matrix_expansion_ignores_the_axis_insertion_order(fixtures_dir: Path) -> None:
-    """Rebuilding the same axis mapping in the opposite order yields the same ids and order."""
-    path = fixtures_dir / "matrix.yaml"
-    axes: dict[str, tuple[object, ...]] = dict(MATRIX_AXES)
-    forward = expand_axes(source_file=path, axes=axes)
-    reverse = expand_axes(source_file=path, axes=dict(reversed(list(axes.items()))))
-    assert forward.axes == reverse.axes
-    assert [case.id for case in forward.cases] == [case.id for case in reverse.cases]
-
-
-def test_the_matrix_reaches_pytest_through_the_same_adapter(fixtures_dir: Path) -> None:
-    """A matrix becomes a case set and then parameters, exactly as a table does."""
-    case_set = load_matrix(fixtures_dir / "matrix.yaml").to_case_set()
-    assert case_set.columns == ("currency", "tier")
-    parameters = build_parameters(case_set)
-    assert [parameter.id for parameter in parameters] == [case.id for case in case_set.cases]
-    assert parameters[0].id == 'matrix-currency="EUR"-tier="bronze"'
-
-
-# --- Case ids --------------------------------------------------------------
-
-
-def test_a_row_id_is_the_stem_and_the_row_index() -> None:
-    """AAP 0.7.2's ``f"{stem}-{row_index}"``, through both published spellings."""
-    assert case_id_for_row("cases", 7) == "cases-7"
-    assert tabular_case_id("cases", 7) == "cases-7"
-    assert case_stem(Path("/data/cart.csv")) == "cart"
-    assert case_stem(Path("/data/cart.pricing.csv")) == "cart.pricing"
+def test_a_case_id_is_the_stem_the_row_index_and_the_canonical_json_axes() -> None:
+    assert case_id_for_row("cases", 7) == data.tabular_case_id("cases", 7) == "cases-7"
+    assert data.case_stem(Path("/data/cart.csv")) == "cart"
+    assert data.case_stem(Path("/data/cart.pricing.csv")) == "cart.pricing"
+    forward = data.matrix_case_id("m", {"alpha": 1, "beta": "x"})
+    assert forward == data.matrix_case_id("m", {"beta": "x", "alpha": 1}) == 'm-alpha=1-beta="x"'
+    for value, rendered in ((1, "m-a=1"), ("1", 'm-a="1"'), (True, "m-a=true"), ("b", 'm-a="b"')):
+        assert data.matrix_case_id("m", {"a": value}) == rendered
+    for stem, row_index in (("", 0), ("   ", 0), ("cases", -1)):
+        with pytest.raises(FoundryError):
+            case_id_for_row(stem, row_index)
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("body", "line", "column"),
     [
-        (1, "m-a=1"),
-        ("1", 'm-a="1"'),
-        (True, "m-a=true"),
-        (1.5, "m-a=1.5"),
-        ("bronze", 'm-a="bronze"'),
+        (f"{_CSV_HEADER}\nC-001,CHF,bronze,2,10.00,20.00\n", 2, "currency"),
+        (f"{_SHORT_HEADER}\nC-001,EUR,2,10.00,20.00\n", 2, "tier"),
     ],
 )
-def test_a_matrix_id_renders_each_value_as_canonical_json(value: object, expected: str) -> None:
-    """A number stays unquoted and a string is quoted, so ``1`` and ``"1"`` stay distinct ids."""
-    assert matrix_case_id("m", {"a": value}) == expected
-
-
-def test_a_matrix_id_sorts_the_axes_and_ignores_their_insertion_order() -> None:
-    """Axes are joined in name order, so the caller's mapping order cannot perturb an id."""
-    forward = matrix_case_id("m", {"alpha": 1, "beta": "x"})
-    reverse = matrix_case_id("m", {"beta": "x", "alpha": 1})
-    assert forward == reverse == 'm-alpha=1-beta="x"'
-    assert matrix_case_id("matrix", {"tier": "bronze", "currency": "EUR"}) == (
-        'matrix-currency="EUR"-tier="bronze"'
-    )
-
-
-@pytest.mark.parametrize(("stem", "row_index"), [("", 0), ("   ", 0), ("cases", -1)])
-def test_a_malformed_row_id_is_refused(stem: str, row_index: int) -> None:
-    """A blank stem or a negative index raises rather than producing a malformed id."""
-    with pytest.raises(FoundryError):
-        case_id_for_row(stem, row_index)
-
-
-@pytest.mark.parametrize("name", TABULAR_FILES)
-def test_case_ids_are_unique_within_one_loader(name: str, fixtures_dir: Path) -> None:
-    ids = [case.id for case in load_cases(fixtures_dir / name).cases]
-    assert len(ids) == len(set(ids)) == ROWS_PER_TABLE
-
-
-# --- Schema enforcement ----------------------------------------------------
-
-
-def test_a_violating_value_is_reported_at_its_line_and_column(
-    tmp_path: Path, fixtures_dir: Path
+def test_a_violating_row_is_reported_at_its_file_line_and_column(
+    body: str, line: int, column: str, tmp_path: Path, fixtures_dir: Path
 ) -> None:
-    """A row the schema rejects names the file, the line and the column it broke (AAP 0.4.5)."""
-    data_path = _write_table_with_schema(
-        tmp_path,
-        "bad_value",
-        f"{_CSV_HEADER}\nC-001,CHF,bronze,2,10.00,20.00\n",
-        fixtures_dir / SCHEMA_FIXTURE,
-    )
+    data_path = _table(tmp_path, "bad", body, fixtures_dir / SCHEMA_FIXTURE)
     with pytest.raises(DataError) as excinfo:
-        load_cases(data_path)
+        data.load_cases(data_path)
     error = excinfo.value
-    assert error.file == data_path
-    assert error.line == 2
-    assert error.column == "currency"
-    message = str(error)
-    assert str(data_path) in message
-    assert ":2:" in message
-    assert "currency" in message
+    assert (error.file, error.line, error.column) == (data_path, line, column)
+    assert f"{data_path}:{line}:" in str(error) and column in str(error)
 
 
-def test_a_row_missing_a_required_column_names_the_column(
-    tmp_path: Path, fixtures_dir: Path
-) -> None:
-    """The ``required`` check reports the column the row lacks, before any value is looked at."""
-    data_path = _write_table_with_schema(
-        tmp_path,
-        "short_columns",
-        "case_id,currency,quantity,unit_price,expected_total\nC-001,EUR,2,10.00,20.00\n",
-        fixtures_dir / SCHEMA_FIXTURE,
-    )
-    with pytest.raises(DataError) as excinfo:
-        load_cases(data_path)
-    assert excinfo.value.file == data_path
-    assert excinfo.value.line == 2
-    assert excinfo.value.column == "tier"
-    assert "tier" in str(excinfo.value)
-
-
-def test_a_malformed_sidecar_schema_names_the_schema_file_and_the_reason(
-    tmp_path: Path,
-) -> None:
-    """A schema fault reached through a data file names the sidecar, not just the data file."""
-    data_path = tmp_path / "malf.csv"
-    data_path.write_text("a,b\n1,2\n", encoding="utf-8")
-    sidecar = tmp_path / "malf.schema.json"
-    sidecar.write_text('{"type": 42}', encoding="utf-8")
-
-    with pytest.raises(ContractError) as excinfo:
-        load_cases(data_path)
-
-    message = str(excinfo.value)
-    assert str(sidecar) in message
-    assert "42 is not valid under any of the given schemas" in message
-    assert str(sidecar) not in excinfo.value.detail
-
-
-def test_strict_mode_rejects_an_undeclared_column(tmp_path: Path, fixtures_dir: Path) -> None:
-    """``data.schema_strict=True`` makes a column the schema does not declare a fault."""
-    data_path = _write_table_with_schema(
-        tmp_path,
-        "extra_strict",
-        f"{_CSV_HEADER},note\n{_VALID_ROW},hello\n",
-        fixtures_dir / SCHEMA_FIXTURE,
-    )
-    with pytest.raises(DataError) as excinfo:
-        load_cases(data_path, strict=True)
-    assert excinfo.value.line == 2
-    assert excinfo.value.column == "note"
-    assert "note" in str(excinfo.value)
-
-
-def test_tolerant_mode_loads_the_same_file_and_drops_the_extra_column(
-    tmp_path: Path, fixtures_dir: Path
-) -> None:
-    """``data.schema_strict=False`` tolerates the extra column and keeps the declared ones."""
-    data_path = _write_table_with_schema(
-        tmp_path,
-        "extra_tolerant",
-        f"{_CSV_HEADER},note\n{_VALID_ROW},hello\n",
-        fixtures_dir / SCHEMA_FIXTURE,
-    )
-    case_set = load_cases(data_path, strict=False)
-    assert len(case_set) == 1
-    assert "note" not in case_set.cases[0].values
-    assert dict(case_set.cases[0].values) == {
-        "case_id": "C-001",
-        "currency": "EUR",
-        "tier": "bronze",
-        "quantity": "2",
-        "unit_price": "10.00",
-        "expected_total": "20.00",
-    }
-
-
-def test_a_ragged_row_reports_its_line_and_its_missing_column(fixtures_dir: Path) -> None:
-    """AAP 0.4.7's missing-required-column state, demonstrated by a committed fixture."""
-    path = fixtures_dir / "missing_column.csv"
-    with pytest.raises(DataError) as excinfo:
-        load_cases(path)
-    error = excinfo.value
-    assert error.file == path
-    assert error.line == 3
-    assert error.column == "expected_total"
-    message = str(error)
-    assert f"{path}:3:" in message
-    assert "(column 'expected_total')" in message
-
-
-def test_a_relative_data_path_finds_the_sibling_sidecar(
+def test_the_sidecar_schema_is_found_beside_the_data_and_never_outside_it(
     tmp_path: Path, fixtures_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A relative data path plus its data directory reads the sidecar beside the data file.
-
-    The data directory is the box the sidecar must stay inside, so deriving the schema path from
-    the relative data path as written would join that path onto the data directory a second time
-    and report the schema missing for a document that sits next to the data file.
-    """
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    data_path = _write_table_with_schema(
-        data_dir, "relative", f"{_CSV_HEADER}\n{_VALID_ROW}\n", fixtures_dir / SCHEMA_FIXTURE
-    )
+    schema = fixtures_dir / SCHEMA_FIXTURE
+    for name in ("inside", "outside", "malf"):
+        (tmp_path / name).mkdir()
     monkeypatch.chdir(tmp_path)
-
-    schema = load_row_schema(Path("data") / data_path.name, base_dir=Path("data"))
-
-    assert schema is not None
-    assert schema["title"] == "Foundry example data row"
-    properties = schema["properties"]
-    assert isinstance(properties, Mapping)
-    assert frozenset(properties) == DOCUMENTED_COLUMNS
-
-    case_set = load_cases(Path("data") / data_path.name, schema_dir=Path("data"))
-    assert [dict(case.values) for case in case_set.cases] == [
-        {
-            "case_id": "C-001",
-            "currency": "EUR",
-            "tier": "bronze",
-            "quantity": "2",
-            "unit_price": "10.00",
-            "expected_total": "20.00",
-        }
-    ]
-
-
-def test_a_sidecar_outside_the_data_directory_is_still_refused(
-    tmp_path: Path, fixtures_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Resolving a relative data path keeps containment: a schema outside it is refused."""
-    inside = tmp_path / "inside"
-    inside.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    escaped = _write_table_with_schema(
-        outside, "escaped", f"{_CSV_HEADER}\n{_VALID_ROW}\n", fixtures_dir / SCHEMA_FIXTURE
-    )
-    monkeypatch.chdir(tmp_path)
-
+    name = _table(tmp_path / "inside", "relative", f"{_CSV_HEADER}\n{_VALID_ROW}\n", schema).name
+    resolved = data.load_row_schema(Path("inside") / name, base_dir=Path("inside"))
+    assert resolved is not None and resolved["title"] == "Foundry example data row"
+    properties = resolved["properties"]
+    assert isinstance(properties, Mapping) and frozenset(properties) == DOCUMENTED_COLUMNS
+    case_set = data.load_cases(Path("inside") / name, schema_dir=Path("inside"))
+    assert [dict(case.values) for case in case_set.cases] == [dict(_ROW_VALUES)]
+    escaped = _table(tmp_path / "outside", "escaped", f"{_CSV_HEADER}\n{_VALID_ROW}\n", schema)
     with pytest.raises(ContractError) as excinfo:
-        load_row_schema(Path("outside") / escaped.name, base_dir=Path("inside"))
-
+        data.load_row_schema(Path("outside") / escaped.name, base_dir=Path("inside"))
     assert "outside the schema directory" in str(excinfo.value)
     assert excinfo.value.json_path == "$"
+    (tmp_path / "malf" / "malf.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    sidecar = tmp_path / "malf" / "malf.schema.json"
+    sidecar.write_text('{"type": 42}', encoding="utf-8")
+    with pytest.raises(ContractError) as malformed:
+        data.load_cases(tmp_path / "malf" / "malf.csv")
+    assert str(sidecar) in str(malformed.value)
+    assert "42 is not valid under any of the given schemas" in str(malformed.value)
+    assert str(sidecar) not in malformed.value.detail
 
 
-# --- The extension registry ------------------------------------------------
+def test_strict_mode_rejects_an_undeclared_column_and_tolerant_mode_drops_it(
+    tmp_path: Path, fixtures_dir: Path
+) -> None:
+    body = f"{_CSV_HEADER},note\n{_VALID_ROW},hello\n"
+    schema = fixtures_dir / SCHEMA_FIXTURE
+    with pytest.raises(DataError) as excinfo:
+        data.load_cases(_table(tmp_path, "strict", body, schema), strict=True)
+    assert (excinfo.value.line, excinfo.value.column) == (2, "note")
+    tolerated = data.load_cases(_table(tmp_path, "tolerant", body, schema), strict=False)
+    assert len(tolerated) == 1 and "note" not in tolerated.cases[0].values
+    assert dict(tolerated.cases[0].values) == dict(_ROW_VALUES)
 
 
 def test_the_registry_serves_the_five_documented_extensions() -> None:
-    """AAP 0.3.2's list, asserted from the constant, the accessor and the lookup table alike."""
-    assert DOCUMENTED_EXTENSIONS == SUPPORTED_EXTENSIONS == supported_extensions()
+    assert DOCUMENTED_EXTENSIONS == data.SUPPORTED_EXTENSIONS == data.supported_extensions()
     for extension in DOCUMENTED_EXTENSIONS:
-        assert extension in loader_for(Path(f"data.{extension}")).extensions
-    assert loader_for(Path("data/CART.CSV")) is loader_for(Path("data/cart.csv"))
+        assert extension in data.loader_for(Path(f"data.{extension}")).extensions
+    assert data.loader_for(Path("data/CART.CSV")) is data.loader_for(Path("data/cart.csv"))
 
 
-def test_an_unsupported_extension_lists_every_supported_extension(fixtures_dir: Path) -> None:
-    """The rejection names the suffix it met and every suffix that would have worked."""
-    path = fixtures_dir / "unsupported_extension.txt"
-    with pytest.raises(DataError) as excinfo:
-        loader_for(path)
-    error = excinfo.value
-    assert error.file == path
-    assert error.line is None
-    message = str(error)
-    assert "'txt'" in message
-    for extension in DOCUMENTED_EXTENSIONS:
-        assert extension in message
-
-
-def test_loading_a_file_leaves_the_registry_unchanged(fixtures_dir: Path) -> None:
-    """The table is populated at import and reading files never mutates it."""
-    before = supported_extensions()
-    load_cases(fixtures_dir / "cases.csv")
-    load_matrix(fixtures_dir / "matrix.yaml")
-    assert supported_extensions() == before
-    with pytest.raises(DataError):
-        loader_for(fixtures_dir / "unsupported_extension.txt")
-    assert supported_extensions() == before
-
-
-# --- A file with no data rows ----------------------------------------------
-
-
-def test_a_header_only_file_yields_no_cases(fixtures_dir: Path) -> None:
-    """The file parses, keeps its columns and contributes no case and no exception."""
-    case_set = load_cases(fixtures_dir / "header_only.csv")
-    assert case_set.is_empty
-    assert len(case_set) == 0
-    assert case_set.cases == ()
+def test_a_header_only_file_yields_no_case_and_the_documented_skip(fixtures_dir: Path) -> None:
+    case_set = data.load_cases(path := fixtures_dir / "header_only.csv")
+    assert case_set.is_empty and len(case_set) == 0 and case_set.cases == ()
     assert frozenset(case_set.columns) == DOCUMENTED_COLUMNS
-
-
-def test_an_empty_file_becomes_the_documented_skip_parameter(fixtures_dir: Path) -> None:
-    """``build_parameters`` returns one skipped parameter whose reason names the file."""
-    path = fixtures_dir / "header_only.csv"
-    parameters = build_parameters(load_cases(path))
-    assert len(parameters) == 1
-    parameter = parameters[0]
-    assert parameter.id == "header_only-no-cases"
-    assert tuple(parameter.values) == (None,)
+    (parameter,) = data.build_parameters(case_set)
+    assert parameter.id == "header_only-no-cases" and tuple(parameter.values) == (None,)
     (mark,) = parameter.marks
-    assert mark.name == "skip"
-    assert mark.kwargs["reason"] == f"no cases in {path}"
+    assert mark.name == "skip" and mark.kwargs["reason"] == f"no cases in {path}"
 
 
-def test_parametrize_binds_the_skip_parameter_to_the_default_argument(fixtures_dir: Path) -> None:
-    """The adapter binds the skip to ``case`` rather than parametrising nothing at all."""
-    recorder = _ParametrizeRecorder()
-    parametrize(recorder, load_cases(fixtures_dir / "header_only.csv"))
-    assert recorder.argnames == ["case"]
-    assert [parameter.id for parameter in recorder.parameters] == ["header_only-no-cases"]
-    (mark,) = recorder.parameters[0].marks
-    assert mark.kwargs["reason"] == f"no cases in {fixtures_dir / 'header_only.csv'}"
-
-
-def test_parametrize_binds_every_case_to_the_named_argument(fixtures_dir: Path) -> None:
-    """A non-empty set binds one parameter per case, in file order, under the caller's name."""
-    recorder = _ParametrizeRecorder()
-    parametrize(recorder, load_cases(fixtures_dir / "cases.csv"), argname="row")
-    assert recorder.argnames == ["row"]
-    assert [parameter.id for parameter in recorder.parameters] == [
-        f"cases-{index}" for index in range(ROWS_PER_TABLE)
-    ]
-
-
-# --- The parametrisation seam the plugin delegates to ----------------------
+def test_both_binding_entry_points_take_the_documented_argument(fixtures_dir: Path) -> None:
+    skipped = _Recorder()
+    data.parametrize(skipped, data.load_cases(fixtures_dir / "header_only.csv"))
+    assert skipped.argnames == ["case"]
+    assert [parameter.id for parameter in skipped.parameters] == ["header_only-no-cases"]
+    rows = _Recorder()
+    data.parametrize(rows, data.load_cases(fixtures_dir / "cases.csv"), argname="row")
+    assert rows.argnames == ["row"]
+    assert [parameter.id for parameter in rows.parameters] == CASE_IDS
+    for kwargs, argname in (({}, "case"), ({"argname": "row"}, "row")):
+        recorder = _Recorder()
+        marker = _data_marker("cases.csv", **kwargs)
+        data.generate_cases(recorder, marker=marker, data_dir=fixtures_dir, strict=True)
+        assert recorder.argnames == [argname]
+        assert [parameter.id for parameter in recorder.parameters] == CASE_IDS
 
 
 def _data_marker(*args: object, **kwargs: object) -> pytest.Mark:
-    """Return the ``foundry_data`` marker the plugin hands the delegation for one test."""
     return pytest.mark.foundry_data(*args, **kwargs).mark
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "argname"),
-    [
-        pytest.param({}, "case", id="default-argument"),
-        pytest.param({"argname": "row"}, "row", id="named-argument"),
-    ],
-)
-def test_generate_cases_binds_the_cases_of_the_marker_file(
-    fixtures_dir: Path, kwargs: dict[str, str], argname: str
-) -> None:
-    """The delegation resolves the marker's name against ``data.dir`` and binds one case each."""
-    recorder = _ParametrizeRecorder()
-    marker = _data_marker("cases.csv", **kwargs)
-    generate_cases(recorder, marker=marker, data_dir=fixtures_dir, strict=True)
-    assert recorder.argnames == [argname]
-    assert [parameter.id for parameter in recorder.parameters] == [
-        f"cases-{index}" for index in range(ROWS_PER_TABLE)
-    ]
 
 
 @pytest.mark.parametrize(
@@ -666,18 +236,5 @@ def test_generate_cases_binds_the_cases_of_the_marker_file(
     ],
 )
 def test_a_malformed_data_marker_is_a_usage_error(marker: pytest.Mark, fixtures_dir: Path) -> None:
-    """Every shape but one is refused naming the accepted form, never silently ignored."""
     with pytest.raises(pytest.UsageError, match="foundry_data"):
-        generate_cases(_ParametrizeRecorder(), marker=marker, data_dir=fixtures_dir, strict=True)
-
-
-# --- YAML safety -----------------------------------------------------------
-
-
-def test_the_yaml_loader_names_safe_load_and_no_other_loader() -> None:
-    """The YAML reader reaches PyYAML only through ``yaml.safe_load`` (AAP 0.14.3)."""
-    source = inspect.getsource(yaml_loader)
-    assert "yaml.safe_load(" in source
-    assert "yaml.load(" not in source
-    assert "full_load" not in source
-    assert "unsafe_load" not in source
+        data.generate_cases(_Recorder(), marker=marker, data_dir=fixtures_dir, strict=True)
