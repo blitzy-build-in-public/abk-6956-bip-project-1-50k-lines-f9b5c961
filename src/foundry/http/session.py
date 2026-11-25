@@ -32,7 +32,7 @@ from foundry.http.transport import (
     select_transport,
     timeout_extension,
 )
-from foundry.http.url import join_url, require_base_url
+from foundry.http.url import join_url, require_base_url, require_same_origin
 from foundry.obs.artifacts import active_writer
 from foundry.obs.events import emit_cassette_mode, emit_plumbing_failure
 from foundry.obs.redaction import Redactor, default_redactor
@@ -372,9 +372,9 @@ class FoundrySession:
         ``path`` is resolved against ``http.base_url``, so ``foundry_http`` can issue absolute URLs
         while ``foundry_api`` takes relative paths, and ``params`` is not sorted here because
         order-insensitive comparison belongs to the cassette matcher. A closed session raises
-        ``FoundryError``, an unusable argument or a timeout outside its range raises
-        :class:`ConfigError`, a fault the policy does not retry raises ``TransportError``, and an
-        exhausted retry raises ``RetryExhaustedError``.
+        ``FoundryError``, an unusable argument, a timeout outside its range or an absolute target
+        outside ``http.base_url``'s origin raises :class:`ConfigError`, a fault the policy does not
+        retry raises ``TransportError``, and an exhausted retry raises ``RetryExhaustedError``.
         """
         # 1. A closed session has no transport left and no cassette left to save.
         if self._closed:
@@ -390,6 +390,11 @@ class FoundrySession:
             url = httpx.URL(join_url(self._base_url, path))
         except _ARGUMENT_FAULTS as exc:
             raise _argument_fault("path", "cannot be used as a request target", exc) from None
+        # Defence in depth: no request carrying the session's credential is built for a target off
+        # http.base_url's origin; the guard sits outside the try above so its ConfigError is not
+        # rewritten as a path fault (AAP 0.3.2).
+        if self._auth is not None and self._base_url is not None:
+            require_same_origin(self._base_url, str(url))
         try:
             merged_headers = self._merged_headers(headers)
         except _ARGUMENT_FAULTS as exc:

@@ -227,12 +227,11 @@ def flatten(
     except where the registry declares the key itself table-valued: ``[http.headers]`` arrives as
     the one key ``http.headers``, whose value is the header table.
 
-    That exception keeps a payload's keys the keys of the configuration surface: ``foundry config
-    show`` prints one row per registry key and a source record attributes one key to one layer, so a
-    header table split into ``http.headers.accept`` and friends would be attributed in fragments and
-    then rejected as an unknown key. Keeping it whole also resolves a header table the way every
-    other value resolves: the later layer replaces it. Keys are visited in sorted order, so the key
-    a shape fault names is the same on every run.
+    Keeping a table whole is what keeps a payload's keys the keys of the configuration surface:
+    ``config show`` prints one row per registry key, and a header table split into
+    ``http.headers.accept`` and friends would be attributed in fragments and then rejected as an
+    unknown key. Keys are visited in sorted order, so the key a shape fault names is the same on
+    every run.
 
     Args: values: The nested mapping to flatten. prefix: The dotted path it sits under, joined to
         each key with a dot; empty at the top level. layer: The layer it came from, so a shape fault
@@ -258,17 +257,14 @@ def unflatten(
 ) -> dict[str, object]:
     """Rebuild the nested mapping that a set of dotted keys came from.
 
-    The inverse of :func:`flatten`, with two consumers and no more: :mod:`foundry.config.merge`,
-    immediately before it constructs the settings model, and :mod:`foundry.config.render`, which
-    builds the nested ``resolved`` document. Both work from the merged flat map, so the nesting
-    exists only where a model or a document needs it. A leaf value that is itself a mapping --
-    ``http.headers`` is a table of header names -- is stored whole, exactly as it was given, and
-    never merged with a dotted key below it.
+    The inverse of :func:`flatten`, consumed by :mod:`foundry.config.merge` just before it
+    constructs the settings model and by :mod:`foundry.config.render` for the ``resolved`` document;
+    both work from the merged flat map, so the nesting exists only where a model or a document needs
+    it. A leaf value that is itself a mapping -- ``http.headers`` is a table of header names -- is
+    stored whole and never merged with a dotted key below it.
 
-    Args:
-        values: The flat dotted keys to nest.
-        layer: The layer whose values these are, so a conflict names it, or ``None`` when the caller
-            does not know.
+    Args: values: The flat dotted keys to nest. layer: The layer whose values these are, so a
+        conflict names it, or ``None`` when the caller does not know.
 
     Returns:
         The nesting, with the keys of every table in sorted order.

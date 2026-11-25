@@ -37,6 +37,31 @@ _LONG_VALUE: Final[str] = "n" * 1_200
 _JSON: Final[dict[str, str]] = {"Content-Type": "application/json"}
 _Mock = tuple[httpx.MockTransport, list[httpx.Request]]
 _BAD_BASES = ("", "   ", "peer.test/api", "ftp://peer.test/api", "http://a:hunter2@peer.test")
+_FOREIGN_BASE: Final[str] = "http://elsewhere.test"  # a different origin from ``_BASE``
+
+#: Pairs that differ only in the origin one side names, so one parameterised test covers every
+#: route out of the configured origin: another host, another port, a scheme swap either way, a base
+#: URL that carries a path of its own, and the two loopback ports the QA probe used.
+_OFF_ORIGIN_CASES: Final[tuple[tuple[str, str], ...]] = (
+    ("http://peer.test", "http://elsewhere.test/steal"),
+    ("http://peer.test:8080/api", "http://peer.test:8081/steal"),
+    ("http://peer.test", "http://peer.test:81/steal"),
+    ("http://peer.test:8080", "http://peer.test/steal"),
+    ("http://peer.test", "https://peer.test/steal"),
+    ("https://peer.test", "http://peer.test/steal"),
+    ("http://127.0.0.1:45381", "http://127.0.0.1:39327/steal"),
+)
+
+#: Pairs that share one origin, the third to fifth writing the scheme's default port on one side
+#: only (RFC 6454 folds it away), and the last differing in the host's case alone.
+_SAME_ORIGIN_CASES: Final[tuple[tuple[str, str, str], ...]] = (
+    ("http://peer.test", "http://peer.test/echo", "http://peer.test/echo"),
+    ("http://peer.test/api", "http://peer.test/echo?page=2#frag", "http://peer.test/echo?page=2"),
+    ("http://peer.test", "http://peer.test:80/echo", "http://peer.test:80/echo"),
+    ("http://peer.test:80", "http://peer.test/echo", "http://peer.test/echo"),
+    ("https://peer.test", "https://peer.test:443/echo", "https://peer.test:443/echo"),
+    ("http://PEER.test", "http://peer.TEST/echo", "http://peer.TEST/echo"),
+)
 
 
 def _mock(respond: Callable[[httpx.Request], httpx.Response]) -> _Mock:
@@ -251,3 +276,62 @@ def test_each_strategy_resolves_its_header_once(monkeypatch: pytest.MonkeyPatch)
         session.get("/echo")
     sent = [request.headers.get_list("authorization") for request in received]
     assert sent == [[f"Bearer {_SENTINEL}"]] * 2
+
+
+@pytest.mark.parametrize(("base_url", "target"), _OFF_ORIGIN_CASES)
+def test_an_absolute_target_off_the_base_origin_is_refused_and_quotes_no_value(
+    base_url: str, target: str
+) -> None:
+    with pytest.raises(ConfigError) as raised:
+        join_url(base_url, target)
+    error = raised.value
+    assert error.key == "http.base_url"
+    assert str(error) == "request URL must share http.base_url's origin"
+    hint = error.hint
+    assert hint is not None and "relative path" in hint and "change http.base_url" in hint
+    surfaces = (str(error), error.format_message(), repr(error))
+    assert [text for text in surfaces if target in text or _SENTINEL in text] == []
+
+
+@pytest.mark.parametrize(("base_url", "target", "expected"), _SAME_ORIGIN_CASES)
+def test_an_absolute_target_on_the_base_origin_is_returned_unchanged(
+    base_url: str, target: str, expected: str
+) -> None:
+    assert join_url(base_url, target) == expected
+
+
+@pytest.mark.parametrize("base_url", (None, "", "   "))
+@pytest.mark.parametrize(
+    "target", ("http://peer.test/echo?page=2", "https://elsewhere.test:8443/steal")
+)
+def test_a_session_without_a_base_url_still_issues_an_absolute_target(
+    base_url: str | None, target: str
+) -> None:
+    assert join_url(base_url, target) == target
+
+
+def test_a_foreign_target_carrying_userinfo_is_refused_and_never_echoed() -> None:
+    target = "http://alice:hunter2@elsewhere.test/steal"
+    with pytest.raises(ConfigError) as raised:
+        join_url(_BASE, target)
+    error = raised.value
+    assert error.key == "http.base_url"
+    surfaces = (str(error), error.format_message(), repr(error))
+    assert [word for word in ("alice", "hunter2", target) if word in " ".join(surfaces)] == []
+
+
+def test_the_session_refuses_an_off_origin_target_even_when_the_join_is_bypassed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport, received = _recorder()
+    settings = SessionSettings(base_url=_BASE, auth=_BEARER)
+
+    def bypass(base_url: str | None, path: str) -> str:
+        return path
+
+    monkeypatch.setattr("foundry.http.session.join_url", bypass)
+    with _session(settings, transport=transport) as session, pytest.raises(ConfigError) as raised:
+        session.get(f"{_FOREIGN_BASE}/steal")
+    assert raised.value.key == "http.base_url"
+    assert str(raised.value) == "request URL must share http.base_url's origin"
+    assert received == []

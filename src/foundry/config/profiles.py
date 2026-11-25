@@ -53,17 +53,15 @@ def select_profile(*, cli: CliInput, env: EnvPayload, base: Mapping[str, object]
 
     The four-layer ladder applied to the one key that has to be resolved ahead of the merge, highest
     priority first: ``--foundry-profile``, ``FOUNDRY_PROFILE``, the base file, then
-    :data:`DEFAULT_PROFILE`, which is the whole of the zero-configuration state.
-
-    The first layer that names a profile decides and the layers below it are not consulted: a
-    ``profile`` in a profile table is rejected rather than read, so there is no fifth source. A file
-    value is matched case-insensitively, so ``profile = "CI"`` selects the same profile ``ci`` does.
+    :data:`DEFAULT_PROFILE`, the whole of the zero-configuration state. The first layer that names a
+    profile decides and the layers below it are not consulted: a ``profile`` in a profile table is
+    rejected rather than read, so there is no fifth source. A file value is matched
+    case-insensitively, so ``profile = "CI"`` selects the same profile ``ci`` does.
 
     Raises:
         foundry.core.exceptions.ConfigError: if the highest layer that names a profile names one
-            outside the four, ``errors.profile_invalid`` reporting the ``profile`` key and the
-            accepted values (exit code 2). A value of another type is reported the same way rather
-            than with a ``TypeError``.
+            outside the four, ``errors.profile_invalid`` naming the ``profile`` key and the accepted
+            values (exit code 2), rather than a ``TypeError`` for a value of another type.
     """
     for value in (
         cli.overrides.get(PROFILE_KEY),
@@ -160,26 +158,24 @@ def apply_profile(
 ) -> ProfileApplication:
     """Merge the ``[profiles.<name>]`` table over the base file's values.
 
-    The second half of the profile rule, and the only place the two are combined: the table's values
-    win for every key it carries, every key only the base carries survives untouched, and the
-    table's keys are reported through :attr:`ProfileApplication.contributed` so they can be
-    attributed to ``profile:<name>``. The environment and the command line are never consulted: they
-    sit above the file-plus-profile layer in :data:`foundry.config.layers.LAYER_ORDER`, which makes
-    "a profile never overrides an operator" structurally true rather than a convention.
+    The only place the two are combined: the table's values win for every key it carries, every key
+    only the base carries survives untouched, and the table's keys are reported through
+    :attr:`ProfileApplication.contributed` so they are attributed to ``profile:<name>``. The
+    environment and the command line are never consulted -- they sit above this layer in
+    :data:`foundry.config.layers.LAYER_ORDER`, which makes "a profile never overrides an operator"
+    structurally true rather than a convention. A profile the tables do not contain returns ``base``
+    unchanged with ``applied`` false, the zero-configuration state, and an empty table changes
+    nothing.
 
-    A profile the tables do not contain returns ``base`` unchanged with ``applied`` false, which is
-    the zero-configuration state, and an empty table is applied, contributes nothing and changes
-    nothing. Two faults are refused here: a ``profile`` key inside the table would reselect the
-    profile while its own table is being applied, and an unknown key inside the table is reported
-    against ``profile:<name>`` rather than against the file. :mod:`foundry.config.files` rejects the
-    first when it reads the file; the check is repeated here because :mod:`foundry.config.merge`
-    can also be handed a payload a caller built itself.
+    A ``profile`` key inside the table is refused, since it would reselect the profile while its own
+    table is applied, as is an undeclared key, reported against ``profile:<name>``.
+    :mod:`foundry.config.files` rejects the first when it reads the file; the check is repeated here
+    because :mod:`foundry.config.merge` can also be handed a payload a caller built itself.
 
     Raises:
         foundry.core.exceptions.ConfigError: ``errors.profile_override_attempt`` when the table sets
-            ``profile``, ``errors.unknown_key`` with the closest valid spelling when it sets a key
-            the registry does not declare, and ``errors.invalid_shape`` when the entry is not a
-            table or not keyed by text.
+            ``profile``, ``errors.unknown_key`` with the closest valid spelling for an undeclared
+            key, and ``errors.invalid_shape`` when the entry is not a table or not keyed by text.
     """
     table = profile_tables.get(name.value)
     if table is None:

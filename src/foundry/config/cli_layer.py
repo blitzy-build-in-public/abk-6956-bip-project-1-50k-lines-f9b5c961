@@ -300,17 +300,15 @@ def from_mapping(raw: Mapping[str, object], *, cwd: Path | None = None) -> CliIn
     The entry point both surfaces share -- click's mapping and the one :func:`collect_from_pytest`
     reads from a :class:`pytest.Config` -- so the spelling rules, the coercions and the error
     wording exist once. An entry is keyed by an option spelling, optionally carrying its value
-    inline, or by a dotted key, and entries are visited in sorted order.
+    inline, or by a dotted key, and entries are visited in sorted order. An entry whose value is
+    ``None`` is skipped, as is a path option given as an empty string.
 
-    An entry whose value is ``None`` is skipped, as is a path option given as an empty string.
     ``--foundry-config`` and ``--foundry-json-report`` are recorded exactly as typed, ``cwd``
     changing nothing that is recorded; ``--foundry-record`` with ``--foundry-replay`` is a usage
-    error, and either alone sets ``cassette.mode``, winning over a mode in the same mapping.
-
-    Every value is coerced by :func:`foundry.config.validation.coerce_cli_value` and the spelling
-    that supplied it is recorded beside it. A table- or list-valued key raises instead, because the
-    generic option is registered for the scalar keys only, and
-    :func:`foundry.config.errors.option_not_settable` names the file layer that can carry it.
+    error, and either alone sets ``cassette.mode``, winning over a mode in the same mapping. Every
+    value is coerced by :func:`foundry.config.validation.coerce_cli_value`, with the spelling that
+    supplied it recorded beside it, and a table- or list-valued key raises because the generic
+    option is registered for the scalar keys only.
 
     Returns:
         The overrides, the spelling behind each of them and the two path options.
@@ -547,11 +545,11 @@ def restore_preparse_state(config: pytest.Config, args: list[str]) -> bool:
     unknown to ``argparse`` there and falls through to the ``file_or_dir`` positional. An existing
     directory named that way moves the root directory to its common ancestor with the invocation
     directory and loses the configuration file, ``testpaths`` with it, so collection falls back to
-    the invocation directory -- where AAP 0.2.1 requires a worker's collection to be the serial
-    one. Called from :func:`foundry.plugin.pytest_load_initial_conftests`, when the option group is
+    the invocation directory -- where AAP 0.2.1 requires a worker's collection to be the serial one.
+    Called from :func:`foundry.plugin.pytest_load_initial_conftests`, when the option group is
     registered and collection is not decided yet: the values are folded, the state is derived again
-    through pytest's own ``_initini``, and what pytest had already read from it -- the conftest
-    cutoff, ``addopts``, ``pythonpath`` and the two ini checks -- is restored.
+    through pytest's own ``_initini``, and the conftest cutoff, ``addopts``, ``pythonpath`` and the
+    two ini checks are restored.
 
     Returns:
         ``True`` when the state was re-derived, ``False`` when the command line needed no repair.

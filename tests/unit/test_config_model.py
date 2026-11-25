@@ -1,6 +1,7 @@
 """The settings model of ``src/foundry/config/models.py``: its 28 published defaults, the ends of
-every numeric range with one value beyond each, the ``http.auth`` cross-field rules and the
-read-only ``sources`` provenance. The numbers stay literals: the model must match them."""
+every numeric range with one value beyond each, the ``http.auth`` cross-field rules, the URL and
+header faults the HTTP layer would otherwise refuse at request time, and the read-only ``sources``
+provenance. The numbers stay literals: the model must match them."""
 
 from __future__ import annotations
 
@@ -20,6 +21,15 @@ from foundry.core.exceptions import ConfigError
 
 _FOUNDRY_TOML: Final[str] = "foundry.toml"
 _USER, _PASSWORD, _HEADER, _TOKEN = "T_USER", "T_PASSWORD", "T_HEADER", "T_TOKEN"
+_URL_USER: Final[str] = "QAURLUSER_2b7d"
+_URL_PASSWORD: Final[str] = "QAURLPASS_9c4e"
+_HEADER_SECRET: Final[str] = "QAHEADER_3e8a7f1b6c2d94a0"
+_BASE_URL_CONSTRAINT: Final[str] = "an absolute http or https URL with no userinfo"
+_HEADERS_CONSTRAINT: Final[str] = "a table of header names to values without control characters"
+_HEADER_NAME_CONSTRAINT: Final[str] = "a header name"
+# The URL is assembled from parts so no literal scheme://user:password@host is committed.
+_USERINFO_URL: Final[str] = f"http://{_URL_USER}:{_URL_PASSWORD}@127.0.0.1:1"
+_USERINFO_TOML: Final[str] = f'[http]\nbase_url = "{_USERINFO_URL}"\n'
 _EXPECTED_DEFAULTS: Final[Mapping[str, object]] = json.loads(
     '{"profile": "default", "http.base_url": null, "http.timeout": 10.0, "http.headers": {}, '
     '"http.retries.max_attempts": 3, "http.retries.backoff_base": 0.2, '
@@ -69,6 +79,48 @@ _AUTH_CASES: Final[tuple[tuple[str, Mapping[str, str], str | None], ...]] = (
     ("header", {"header_name": "X-Api-Key"}, "http.auth.header_value_env"),
     ("header", {"header_name": "X-Api-Key", "header_value_env": _HEADER}, None),
     ("header", {"header_value_env": _HEADER}, "http.auth.header_name"),
+)
+# One row per fault the HTTP layer would otherwise refuse at request time: the file text, the key
+# the message names, the exact message, and the credentials that must not appear beside it.
+_HTTP_VALUE_FAULTS: Final[tuple[tuple[str, str, str, tuple[str, ...]], ...]] = (
+    (
+        _USERINFO_TOML,
+        "http.base_url",
+        f"invalid value for http.base_url: http://127.0.0.1:1 (expected {_BASE_URL_CONSTRAINT})",
+        (_URL_USER, _URL_PASSWORD),
+    ),
+    (
+        '[http]\nbase_url = "http://127.0.0.1:1/x\\r\\nInjected: yes"\n',
+        "http.base_url",
+        "invalid value for http.base_url: http://127.0.0.1:1/x\\x0d\\x0aInjected: yes "
+        f"(expected {_BASE_URL_CONSTRAINT})",
+        (),
+    ),
+    (
+        '[http]\nbase_url = "http://127.0.0.1:1"\n\n'
+        f'[http.headers]\n"X-Inject" = "{_HEADER_SECRET}\\r\\nSet-Cookie: pwned=1"\n',
+        "http.headers",
+        f"invalid shape for http.headers: expected {_HEADERS_CONSTRAINT}",
+        (_HEADER_SECRET,),
+    ),
+    (
+        '[http.headers]\n"X-Bad\\nName" = "value"\n',
+        "http.headers",
+        f"invalid shape for http.headers: expected {_HEADERS_CONSTRAINT}",
+        (),
+    ),
+    (
+        '[http.auth]\nstrategy = "header"\nheader_name = "X-Bad\\nName"\n'
+        f'header_value_env = "{_HEADER}"\n',
+        "http.auth.header_name",
+        f"invalid value for http.auth.header_name: X-Bad\\x0aName "
+        f"(expected {_HEADER_NAME_CONSTRAINT})",
+        (),
+    ),
+)
+_ACCEPTED_TOML: Final[str] = (
+    '[http]\nbase_url = "http://127.0.0.1:1/v1"\n\n'
+    '[http.headers]\n"X-Plain" = "a\\tb"\nAccept = "application/json"\n'
 )
 
 
@@ -124,6 +176,36 @@ def test_a_value_outside_its_range_names_the_key_the_value_and_the_range(
     assert "ConfigLayer" not in repr(error) and "input_value" not in error.message
     assert "pydantic" not in error.message.lower() and "https://" not in error.message
     assert error.hint is not None and str((tmp_path / _FOUNDRY_TOML).resolve()) in error.hint
+
+
+@pytest.mark.parametrize(("foundry_toml", "dotted", "message", "credentials"), _HTTP_VALUE_FAULTS)
+def test_a_url_or_header_value_the_http_layer_refuses_is_a_configuration_fault(
+    foundry_toml: str,
+    dotted: str,
+    message: str,
+    credentials: tuple[str, ...],
+    tmp_path: Path,
+    clean_foundry_env: None,
+) -> None:
+    _write(tmp_path, foundry_toml)
+    with pytest.raises(ConfigError) as caught:
+        _resolve(tmp_path)
+    error = caught.value
+    assert (error.key, error.layer) == (dotted, "file")
+    assert error.message == message
+    assert dotted in error.message
+    rendered = f"{error.message}{error.hint or ''}{error!r}"
+    assert not [value for value in credentials if value in rendered], rendered
+    assert "\r" not in rendered and "\n" not in rendered, "a control character may not reach stderr"
+
+
+def test_a_url_without_userinfo_and_an_ordinary_header_table_still_resolve(
+    tmp_path: Path, clean_foundry_env: None
+) -> None:
+    _write(tmp_path, _ACCEPTED_TOML)
+    config = _resolve(tmp_path)
+    assert config.http.base_url == "http://127.0.0.1:1/v1"
+    assert config.http.headers == {"X-Plain": "a\tb", "Accept": "application/json"}
 
 
 @pytest.mark.parametrize(("strategy", "companions", "missing"), _AUTH_CASES)

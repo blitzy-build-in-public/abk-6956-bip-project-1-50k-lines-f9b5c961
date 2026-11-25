@@ -158,16 +158,14 @@ def _environ(environ: Mapping[str, str] | None) -> Mapping[str, str]:
 def _require_setting(value: str | None, key: str, strategy: str, expectation: str) -> str:
     """Return a setting the strategy needs, or raise naming the key that must be set.
 
-    This is the first of the two failure shapes this module reports: the strategy is selected,
-    but the configuration that tells it where its credential comes from is absent. The message
-    names the dotted configuration key and the strategy, and the hint says what to put there.
-    Neither mentions a value, because none has been read at this point.
+    This is the first of the two failure shapes this module reports: the strategy is selected, but
+    the configuration telling it where its credential comes from is absent. The message names the
+    dotted configuration key and the strategy, and the hint says what to put there; neither mentions
+    a value, because none has been read at this point.
 
-    Args:
-        value: The configured value, or ``None``.
-        key: The dotted configuration key the value came from.
-        strategy: The normalised strategy that requires it.
-        expectation: What the key should hold, phrased to follow ``set <key> to``.
+    Args: value: The configured value, or ``None``. key: The dotted configuration key it came from.
+        strategy: The normalised strategy that requires it. expectation: What the key should hold,
+        phrased to follow ``set <key> to``.
 
     Returns:
         The configured value with surrounding whitespace removed.
@@ -187,15 +185,10 @@ def _require_setting(value: str | None, key: str, strategy: str, expectation: st
 def _credential_error(message: str, key: str) -> ConfigError:
     """Build the error for a credential variable the environment does not supply.
 
-    The second failure shape: configuration named the variable and the environment does not
-    hold a usable value for it. The message names the variable alone -- never a value, not even
-    a partial one -- and the attribution is the ``http.auth.*`` key that named it with
-    ``layer="env"``, the same layer ``config show --resolved`` reports for a value read from the
-    environment.
-
-    Args:
-        message: The complete message, naming the variable and its state.
-        key: The dotted configuration key that named the variable.
+    The second failure shape: configuration named the variable and the environment holds no usable
+    value for it. The message names the variable alone -- never a value, not even a partial one --
+    and the attribution is the ``http.auth.*`` key that named it with ``layer="env"``, the layer
+    ``config show --resolved`` reports for a value read from the environment.
 
     Returns:
         The error to raise, carrying its key and layer.
@@ -212,19 +205,13 @@ def _credential_error(message: str, key: str) -> ConfigError:
 def _read_secret(environ: Mapping[str, str], variable: str, key: str) -> str:
     """Return the value ``variable`` holds, or raise without revealing any value.
 
-    The lookup is one mapping read -- cheap enough for ``foundry_api``'s per-test resolution --
-    and no value is cached anywhere: a test may change the environment between tests with
+    The lookup is one mapping read -- cheap enough for ``foundry_api``'s per-test resolution -- and
+    no value is cached anywhere: a test may change the environment between tests with
     ``monkeypatch``, so the next resolution must observe the change.
 
-    Three states are reported separately and none of them quotes the variable's content: the
-    variable is absent (``not set``), the value it holds is not text (defensive, because a test
-    may inject a mapping of anything), or it holds the empty string (``empty``), which no
-    credential strategy can use.
-
-    Args:
-        environ: The environment to read.
-        variable: Name of the variable holding the credential.
-        key: The dotted configuration key that named the variable.
+    Three states are reported separately and none quotes the variable's content: absent
+    (``not set``), not text (defensive, because a test may inject a mapping of anything) and empty
+    (``empty``), which no credential strategy can use.
 
     Returns:
         The variable's value, unchanged: a credential is never stripped or transformed.
@@ -245,16 +232,11 @@ def _read_secret(environ: Mapping[str, str], variable: str, key: str) -> str:
 def _basic_credential(user: str, password: str, variable: str) -> str:
     """Return the base64 ``user:password`` token RFC 7617 defines, from UTF-8 bytes.
 
-    ``str.encode`` with no argument produces the UTF-8 bytes RFC 7617 expects, which is what
-    makes the header identical on every host the suite runs on. RFC 7617 section 2 forbids a
-    colon inside the user id, because the credential is decoded at the first colon; such a user
-    id is rejected here instead of producing a credential the server reads as a different user,
-    and the message names the variable that held it, never the value.
-
-    Args:
-        user: The user id read from the environment.
-        password: The password read from the environment.
-        variable: Name of the environment variable the user id came from, for the error.
+    ``str.encode`` with no argument produces the UTF-8 bytes RFC 7617 expects, so the header is
+    identical on every host. RFC 7617 section 2 forbids a colon inside the user id, because the
+    credential is decoded at the first colon; such a user id is rejected here rather than producing
+    a credential the server reads as a different user, and the message names the variable that held
+    it, never the value.
 
     Returns:
         The base64 token as ASCII text, ready to follow ``Basic ``.

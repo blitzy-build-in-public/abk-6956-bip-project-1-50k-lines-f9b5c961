@@ -150,22 +150,18 @@ class FoundryResponse:
 
     A test receives this object for a ``200``, a ``404``, a ``503`` or a replay served from a
     cassette, and decides what to assert about it (AAP 0.4.3). Nothing here raises a status:
-    :func:`assert_status`, :func:`assert_json_subset` and :func:`assert_json_schema` are the helpers
-    that turn a status or a body into an assertion failure, and a caller that wants a fault below
-    the protocol gets it from :mod:`foundry.http.retries` rather than from this class. Construction
-    goes through :func:`from_httpx`, the seam :mod:`foundry.http.session` uses, so the private
-    members that carry the request and the redaction engine are filled in one place and cannot be
-    forgotten.
+    :func:`assert_status`, :func:`assert_json_subset` and :func:`assert_json_schema` turn a status
+    or a body into an assertion failure, and a caller that wants a fault below the protocol gets it
+    from :mod:`foundry.http.retries`. Construction goes through :func:`from_httpx`, so the private
+    members carrying the request and the redaction engine are filled in one place.
 
     Attributes: status_code: The numeric status, ``4xx`` and ``5xx`` included (AAP 0.4.3). headers:
-        The response headers, case-insensitive and read-only. A name the configuration lists in
-        ``secrets.redact_keys`` is still readable here; every route that persists or displays a
-        header value passes it through the redaction engine first (AAP 0.3.2). text: The body
-        decoded as text, using the charset the response declared. elapsed_ms: Wall-clock
-        milliseconds for the whole logical request, every attempt and its backoff included. The
-        session measures it with :func:`time.monotonic` around the retry loop and passes it in, so
-        it is no per-attempt timer and no clock is read here. source: ``"live"`` or ``"cassette"``,
-        taken from the tag :mod:`foundry.cassette.transport` puts on every reply it returns.
+        The response headers, case-insensitive and read-only; a name ``secrets.redact_keys`` lists
+        is still readable here, and every route that persists or displays a header value redacts it
+        first (AAP 0.3.2). text: The body decoded with the charset the response declared.
+        elapsed_ms: Wall-clock milliseconds for the whole request, every attempt and backoff
+        included, measured by the session around the retry loop. source: ``"live"`` or
+        ``"cassette"``, from the tag :mod:`foundry.cassette.transport` puts on each reply.
     """
 
     status_code: int
@@ -374,20 +370,18 @@ def from_httpx(
 ) -> FoundryResponse:
     """Build the Foundry response for one completed ``httpx`` exchange.
 
-    This is the construction seam :mod:`foundry.http.session` uses: the retry loop hands back an
+    The construction seam :mod:`foundry.http.session` uses: the retry loop hands back an
     :class:`httpx.Response` for every status, and this function turns it into the object a test
     asserts against, capturing the request it answered so the two dumps can be produced later (AAP
     0.4.6). Nothing here reads a clock, so the elapsed measurement is the caller's.
 
     Args: response: The reply ``httpx`` produced, or the one a cassette transport served.
-        elapsed_ms: Wall-clock milliseconds the whole logical request took, retries and their
-        backoff included, as measured by the session with :func:`time.monotonic`. A negative
-        measurement cannot arise from a monotonic clock; it is clamped to zero rather than raised,
-        because only :class:`~foundry.core.exceptions.ContractError` may cross this module's
-        boundary (AAP 0.14.3) and an artefact of the caller's timing must never fail a test (AAP
-        0.1.2). redactor: The run's redaction engine, built from ``secrets.redact_keys``. Both dumps
-        and every representation of this response take their redaction from it. request: The request
-        ``response`` answers, whose method, target, query, headers and body
+        elapsed_ms: Wall-clock milliseconds the whole logical request took, retries and backoff
+        included; a negative measurement is clamped to zero rather than raised, because only
+        :class:`~foundry.core.exceptions.ContractError` may cross this module's boundary (AAP
+        0.14.3) and an artefact of the caller's timing must never fail a test (AAP 0.1.2). redactor:
+        The run's redaction engine, from which both dumps and every representation take their
+        redaction. request: The request ``response`` answers, which
         :meth:`FoundryResponse.request_dump` reports.
 
     Returns: The response, with case-insensitive headers, the body decoded once, the status

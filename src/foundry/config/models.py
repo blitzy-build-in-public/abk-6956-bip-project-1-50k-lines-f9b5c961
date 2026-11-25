@@ -91,9 +91,16 @@ _BASE_URL_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 
 _BASE_URL_EXPECTED: Final[str] = "http.base_url must be an absolute http or https URL"
 
+_BASE_URL_CONTROL_CHARACTER: Final[str] = "http.base_url must not contain a control character"
+
+_BASE_URL_USERINFO: Final[str] = "http.base_url must not contain userinfo"
+
 _REDACT_KEYS_EXPECTED: Final[str] = "expected a list of header or JSON key names"
 
 _CONTROL_CHARACTER: Final[re.Pattern[str]] = re.compile(r"[\x00-\x1f\x7f]")
+
+_HEADER_VALUE_CONTROL_CHARACTER: Final[re.Pattern[str]] = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
+"""Every control character a header value may not hold: all of them but the horizontal tab."""
 
 _NESTED_DELIMITER: Final[str] = "__"
 
@@ -194,6 +201,23 @@ class HttpAuthConfig(BaseModel):
             return None
         return value.strip() or None
 
+    @field_validator("header_name", mode="after")
+    @classmethod
+    def _header_name_has_no_control_character(cls, value: str | None) -> str | None:
+        """Reject a ``header_name`` holding a control character.
+
+        Declared after :meth:`_blank_name_is_no_name`, so a blank name is already ``None`` here and
+        :meth:`_require_companion_keys` reports it. The message names the key alone, never the name.
+
+        Raises:
+            ValueError: If the name holds a control character.
+        """
+        if value is None:
+            return None
+        if _CONTROL_CHARACTER.search(value) is not None:
+            raise ValueError("http.auth.header_name rejects a control character")
+        return value
+
     @model_validator(mode="after")
     def _require_companion_keys(self) -> HttpAuthConfig:
         """Reject a strategy missing the key naming its credential, returning the model unchanged.
@@ -237,14 +261,17 @@ class HttpConfig(BaseModel):
     @field_validator("base_url", mode="before")
     @classmethod
     def _check_base_url(cls, value: object) -> str | None:
-        """Validate that ``base_url`` is an absolute ``http`` or ``https`` URL.
+        """Validate that ``base_url`` is an absolute ``http`` or ``https`` URL without userinfo.
 
-        The authored string is kept verbatim -- no trailing-slash normalisation, no lower-casing of
-        the host, which ``HttpUrl`` would rewrite -- because ``config show`` echoes what the
-        operator wrote; it comes back stripped of surrounding whitespace, or ``None`` when unset.
+        The authored string is kept verbatim -- no trailing-slash normalisation, no lower-cased
+        host, which ``HttpUrl`` would rewrite -- because ``config show`` echoes what was written; it
+        comes back stripped, or ``None`` when unset. A control character and userinfo are refused
+        here rather than at request time, so ``config validate`` and ``doctor`` report a value the
+        HTTP layer refuses, and ``urlsplit`` hides userinfo in ``netloc`` and drops tabs and CR/LF.
 
         Raises:
-            ValueError: If the value is not text, is empty, or has no host or another scheme.
+            ValueError: If the value is not text, is empty, holds a control character, has no host
+                or another scheme, or carries userinfo. No message quotes the value.
         """
         if value is None:
             return None
@@ -253,9 +280,13 @@ class HttpConfig(BaseModel):
         candidate = value.strip()
         if not candidate:
             raise ValueError(_BASE_URL_EXPECTED)
+        if _CONTROL_CHARACTER.search(candidate) is not None:
+            raise ValueError(_BASE_URL_CONTROL_CHARACTER)
         split = urlsplit(candidate)
         if split.scheme.lower() not in _BASE_URL_SCHEMES or not split.netloc:
             raise ValueError(_BASE_URL_EXPECTED)
+        if split.username is not None or split.password is not None:
+            raise ValueError(_BASE_URL_USERINFO)
         return candidate
 
     @field_validator("headers", mode="after")
@@ -263,8 +294,8 @@ class HttpConfig(BaseModel):
     def _check_header_names(cls, value: dict[str, str]) -> dict[str, str]:
         """Reject an empty header name and a name holding a control character.
 
-        Only names are checked: a value may be a credential, and redaction rather than validation
-        keeps it out of every artefact, so a faulty name is not echoed either.
+        A name is never echoed: the message names the key alone, and a value may be a credential.
+        Values are checked separately, for the control characters that split one header into two.
 
         Raises:
             ValueError: If a header name is empty or contains a control character.
@@ -274,6 +305,26 @@ class HttpConfig(BaseModel):
                 raise ValueError("http.headers rejects an empty header name")
             if _CONTROL_CHARACTER.search(name) is not None:
                 raise ValueError("http.headers rejects a header name with a control character")
+        return value
+
+    @field_validator("headers", mode="after")
+    @classmethod
+    def _check_header_values(cls, value: dict[str, str]) -> dict[str, str]:
+        """Reject a header value holding a control character other than a horizontal tab.
+
+        Only the tab is allowed: RFC 9110 accepts it as field content, while CR and LF end a header
+        line and start another. httpx refuses such a value at request time, so refusing it here
+        makes ``config validate`` and ``doctor`` agree with the request path; a value may be a
+        credential, so it is never echoed.
+
+        Raises:
+            ValueError: If a header value holds such a control character.
+        """
+        for header_value in value.values():
+            if _HEADER_VALUE_CONTROL_CHARACTER.search(header_value) is not None:
+                raise ValueError(
+                    "http.headers rejects a header value with a control character other than a tab"
+                )
         return value
 
 

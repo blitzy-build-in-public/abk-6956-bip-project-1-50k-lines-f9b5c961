@@ -88,20 +88,14 @@ def resolve(
 
     The single entry point of the configuration package: a pytest session calls it once at boot and
     the ``run``, ``config`` and ``doctor`` commands once per invocation, so its arguments are the
-    whole input of a resolution and nothing is read from the process the caller cannot see. The
-    layers apply in the order :data:`foundry.config.layers.LAYER_ORDER` states, so the precedence
-    rule holds by construction, and :meth:`foundry.config.models.FoundryConfig.source_of` reports
-    which layer won each key.
+    whole input of a resolution. The layers apply in the order
+    :data:`foundry.config.layers.LAYER_ORDER` states, so precedence holds by construction, and
+    :meth:`foundry.config.models.FoundryConfig.source_of` reports which layer won each key.
 
-    Args:
-        cli_overrides: What the command line supplied, already coerced by
-            :mod:`foundry.config.cli_layer`, or ``None`` when the caller has no command line -- the
-            zero-configuration state.
-        environ: The environment to read ``FOUNDRY_*`` variables from, or ``None`` to read the
-            process environment. A supplied mapping *is* the environment for this resolution, so a
-            test never depends on the ambient one.
-        cwd: The invocation directory that file discovery and a relative ``--foundry-config``
-            resolve against, or ``None`` for the process working directory.
+    Args: cli_overrides: What the command line supplied, already coerced by
+        :mod:`foundry.config.cli_layer`, or ``None`` when the caller has no command line. environ:
+        The environment to read ``FOUNDRY_*`` variables from, or ``None`` for the process one. cwd:
+        The invocation directory file discovery and a relative ``--foundry-config`` resolve against.
 
     Returns:
         The resolved, frozen configuration carrying one
@@ -111,11 +105,10 @@ def resolve(
     Raises:
         foundry.core.exceptions.ConfigError: For the first fatal fault, each naming the key and the
             layer that supplied it: a named file absent or unreadable, an unknown key in the file,
-            the profile table, the environment or the command line, a file value of a type its key
-            does not declare, an unparseable environment value, a value outside its accepted range,
-            a profile outside the four names, and a configured auth variable the environment does
-            not set. A resolution either returns a configuration or raises this one type, which a
-            caller maps to exit code 2.
+            the profile table, the environment or the command line, a value of a type its key does
+            not declare or outside its accepted range, an unparseable environment value, a profile
+            outside the four names, and a configured auth variable the environment does not set. A
+            caller maps it to exit code 2.
     """
     cli = cli_layer.EMPTY_CLI_INPUT if cli_overrides is None else cli_overrides
     environment = env.effective_environ(environ)
@@ -221,16 +214,7 @@ def _contributions(
     selected ``[profiles.<name>]`` table supplied, so attribution is exact: a value the table
     overrode reports ``profile:<name>`` rather than ``file:<path>``, a value it left alone keeps the
     file's path although the two arrived in one document, and the ``default`` layer contributes
-    nothing, which is why a key with no entry in the source map reports as ``default`` rather than
-    absent.
-
-    Args:
-        cli: The command line's coerced overrides, with the option spelling behind each one.
-        environment: The environment layer's values, with the variable spelling behind each one.
-        application: The base file's values with the selected profile table applied over them, and
-            the set of keys that table supplied.
-        file_payload: The file the values were read from, whose label the file layer records.
-        selected: The profile :func:`foundry.config.profiles.select_profile` chose.
+    nothing, so a key with no entry in the source map reports as ``default``.
 
     Returns:
         One entry per layer, keyed by :class:`foundry.config.layers.ConfigLayer`; reading them in
@@ -363,9 +347,7 @@ def _attributed_failure(exc: ValidationError, recorded: Mapping[str, ConfigSourc
     reading of pydantic's report, so it is asked once without a layer to learn which key failed, and
     the recorder -- which knows that key's origin -- supplies the layer for the second call, so
     pydantic's location format is never parsed here. A fault the recorder cannot place is returned
-    as the first call built it, which is the cross-field rule case: ``bearer`` without
-    ``http.auth.token_env`` names a companion key that no layer may have set, so the message it
-    already carries is complete.
+    as the first call built it: the cross-field rule case, whose message is already complete.
 
     Returns: The :class:`foundry.core.exceptions.ConfigError` the caller raises, with ``from None``
         so the pydantic error -- which echoes the offending input -- is not chained into a
@@ -428,15 +410,13 @@ def _complete_sources(config: FoundryConfig, recorded: Mapping[str, ConfigSource
     """Return a provenance record for every key the resolved configuration publishes.
 
     Total, so :meth:`foundry.config.models.FoundryConfig.source_of` has an answer for any published
-    key and ``foundry config show`` prints one row per key rather than one per key some layer set.
-    The key set comes from the configuration itself -- the keys a reader can ask about -- and is
-    ordered by sorted key, so two resolutions of the same inputs hand over mappings that compare and
-    iterate identically (AAP 0.4.5, AAP 0.13.1). ``recorded`` holds only the keys some layer
-    supplied.
+    key and ``config show`` prints one row per key rather than one per key some layer set. The key
+    set comes from the configuration itself and is ordered by sorted key, so two resolutions of the
+    same inputs compare and iterate identically (AAP 0.4.5, AAP 0.13.1). ``recorded`` holds only the
+    keys some layer supplied.
 
     Returns: One :class:`foundry.config.sources.ConfigSource` per published key: the recorded origin
-        for a key a layer supplied, and the ``default`` record for every other key, which is the
-        field default it kept.
+        for a key a layer supplied, and the ``default`` record for every other key.
 
     Raises:
         foundry.core.exceptions.ConfigError: For a recorded key the registry does not declare, as

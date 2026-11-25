@@ -194,9 +194,9 @@ Every model sets `extra="forbid"`, so a key outside this table is an error in ev
 | Key | Type | Default | Accepted |
 |---|---|---|---|
 | `profile` | enum | `default` | `default`, `local`, `ci`, `staging` |
-| `http.base_url` | URL or null | `null` | absolute `http`/`https` URL; required by `foundry_api`, unused by `foundry_http` |
+| `http.base_url` | URL or null | `null` | absolute `http`/`https` URL with no userinfo; required by `foundry_api`, unused by `foundry_http` |
 | `http.timeout` | float | `10.0` | `0 < t <= 300` seconds |
-| `http.headers` | map of str to str | `{}` | any header names and values; a name in `secrets.redact_keys` is redacted at every sink |
+| `http.headers` | map of str to str | `{}` | header names and values holding no control character, a tab allowed in a value; a name in `secrets.redact_keys` is redacted at every sink |
 | `http.retries.max_attempts` | int | `3` | `1..10`, the first attempt included |
 | `http.retries.backoff_base` | float | `0.2` | `0..10` seconds |
 | `http.retries.backoff_max` | float | `2.0` | `0..60` seconds, a cap on any single backoff |

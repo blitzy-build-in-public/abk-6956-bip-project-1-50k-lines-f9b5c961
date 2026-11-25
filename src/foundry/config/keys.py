@@ -106,14 +106,14 @@ KEY_SPECS: tuple[KeySpec, ...] = (
     KeySpec(
         dotted="http.base_url",
         kind="str",
-        constraint="an absolute http or https URL",
+        constraint="an absolute http or https URL with no userinfo",
         nullable=True,
     ),
     KeySpec(dotted="http.timeout", kind="float", constraint="0 < t <= 300"),
     KeySpec(
         dotted="http.headers",
         kind="mapping",
-        constraint="a table of header names to values",
+        constraint="a table of header names to values without control characters",
     ),
     KeySpec(dotted="http.retries.max_attempts", kind="int", constraint="1..10"),
     KeySpec(dotted="http.retries.backoff_base", kind="float", constraint="0..10"),

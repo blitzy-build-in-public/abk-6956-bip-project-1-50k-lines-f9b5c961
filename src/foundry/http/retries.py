@@ -450,19 +450,17 @@ class RetryRunner:
     ) -> RetriedResponse:
         """Issue the request until an attempt produces a response or the policy gives up.
 
-        Args:
-            send: A zero-argument callable performing one attempt and returning its response.
-                It is called exactly once per attempt, the last one included.
-            method: The request method, named in every message this call raises.
-            path: The request path, named in every message this call raises.
+        Args: send: A zero-argument callable performing one attempt and returning its response,
+            called once per attempt, the last one included. method: The request method, named in
+            every message this call raises. path: The request path, likewise named.
 
         Returns:
             The final response with one attempt record per attempt, including the response of a
             retried status when the attempts ran out.
 
         Raises:
-            TransportError: When a transport fault is a kind the policy does not retry, or is one
-                it does and no attempt remains; the message is redacted.
+            TransportError: When a transport fault is a kind the policy does not retry, or is one it
+                does and no attempt remains; the message is redacted.
         """
         started = time.monotonic()
         records: list[AttemptRecord] = []

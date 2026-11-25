@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from foundry.core.exceptions import ConfigError
@@ -19,12 +21,12 @@ __all__: Final[tuple[str, ...]] = (
     "path_and_query",
     "redact_url",
     "require_base_url",
+    "require_same_origin",
     "split_url",
     "strip_userinfo",
 )
 
-#: The dotted configuration key every :class:`ConfigError` this module raises names
-#: (AAP 0.4.5).
+#: The dotted key every :class:`ConfigError` this module raises names (AAP 0.4.5).
 _BASE_URL_KEY: Final[str] = "http.base_url"
 
 #: Characters that end a URL's authority, as RFC 3986 orders them.
@@ -34,39 +36,48 @@ _AUTHORITY_DELIMITERS: Final[tuple[str, ...]] = ("/", "?", "#")
 #: :data:`ABSOLUTE_URL_PATTERN` cannot disagree about it.
 _SCHEME_SEPARATOR: Final[str] = "://"
 
-#: Longest port a URL can carry, and the shortest. A value outside the range is not a port,
-#: so the caller keeps the authority text instead of inventing a number.
+#: Ports a URL may carry, and the digits one can be written in: five, since 65535 has five. A value
+#: outside the range is not a port, so the caller keeps the authority text instead of inventing one.
 _MIN_PORT: Final[int] = 0
 _MAX_PORT: Final[int] = 65535
-
-#: Digits a port can be written in: five, since 65535 has five. The bound keeps
-#: :func:`int` off a pathological digit string before the range check runs.
 _PORT_DIGITS: Final[int] = 5
 
-#: Hint attached when a relative request is issued with no base URL configured. It names the
-#: three layers a value can arrive through rather than guessing which one the operator uses.
+#: The port each supported scheme implies when a URL leaves it out (RFC 3986 6.2.3). RFC 6454
+#: makes an explicitly written default port the same origin as an absent one, so :func:`origin`
+#: folds it away and ``http://h:80/x`` compares equal to ``http://h/x``.
+_DEFAULT_PORTS: Final[Mapping[str, int]] = MappingProxyType({"http": 80, "https": 443})
+
+#: Hint for a relative request with no base URL: it names the three layers a value arrives through.
 _HINT_SET_BASE_URL: Final[str] = (
     "set http.base_url in foundry.toml, in FOUNDRY_HTTP__BASE_URL, or with --foundry-http.base_url"
 )
 
-#: Hint attached when ``http.base_url`` carries userinfo: the value would reach
-#: ``foundry config show``, a result record and ``report.html``, so the credential is moved
-#: to the environment variable indirection the auth strategies read (implicit requirement I9).
+#: Hint for a base URL carrying userinfo: the value would reach ``config show``, every result
+#: record and ``report.html``, so the credential moves to the ``http.auth.*_env`` indirection (I9).
 _HINT_MOVE_CREDENTIALS: Final[str] = (
     "remove the credentials from http.base_url and name the environment variable that holds them "
     "in http.auth.token_env, http.auth.user_env or http.auth.password_env"
 )
 
-#: The prefix that marks a string as an absolute URL: a scheme per RFC 3986 followed by
-#: ``://``. ``http`` and ``https`` are validated separately against :data:`SUPPORTED_SCHEMES`,
-#: so a target carrying another scheme is recognised as absolute and then rejected, rather
-#: than being silently appended to a base URL as if it were a path.
+#: Message for an absolute target off ``http.base_url``'s origin: it names the key that fixes the
+#: request and never quotes the target, which may embed a credential (AAP 0.3.2, requirement I9).
+_MESSAGE_OFF_ORIGIN: Final[str] = "request URL must share http.base_url's origin"
+
+#: Hint for that target: both corrections -- issue a path, or move the base URL to the host the
+#: target names -- and, like the message, no part of the target itself.
+_HINT_OFF_ORIGIN: Final[str] = (
+    "issue a relative path such as /health against http.base_url, or change http.base_url to the "
+    "host you mean to reach"
+)
+
+#: The prefix marking a string absolute: a scheme per RFC 3986 followed by ``://``. ``http`` and
+#: ``https`` are validated against :data:`SUPPORTED_SCHEMES`, so a target carrying another scheme is
+#: recognised as absolute and rejected rather than appended to a base URL as if it were a path.
 ABSOLUTE_URL_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*)" + re.escape(_SCHEME_SEPARATOR)
 )
 
-#: The schemes Foundry issues requests over. A base URL or an absolute target naming anything
-#: else is rejected by :func:`require_base_url` and :func:`join_url`.
+#: The schemes Foundry issues requests over; any other is rejected by the two requirements below.
 SUPPORTED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 
 
@@ -74,9 +85,8 @@ SUPPORTED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 class UrlParts:
     """The pieces of a URL that Foundry acts on, with any fragment already dropped.
 
-    Splitting is total: a string that carries no scheme, an empty authority or a non-numeric port
-    still yields parts instead of raising, because a caller composing a ``TransportError`` or a log
-    line must be able to describe whatever it was handed.
+    Splitting is total: a string with no scheme, an empty authority or a non-numeric port still
+    yields parts rather than raising, so a caller can describe whatever it was handed.
     """
 
     scheme: str
@@ -90,14 +100,8 @@ class UrlParts:
 def _as_port(text: str) -> int | None:
     """Return ``text`` as a port number, or ``None`` when it is not one.
 
-    Args:
-        text: The characters following the ``:`` in an authority.
-
-    Returns:
-        The integer port for a run of ASCII digits that denotes a value in
-        ``0..65535`` inclusive, and ``None`` for anything else -- an empty string, a service
-        name such as ``:http``, a digit string long enough to overflow, or a non-ASCII digit
-        that :func:`int` would reject.
+    Only a run of ASCII digits denoting ``0..65535`` is a port; an empty string, a service name such
+    as ``:http``, a digit string long enough to overflow and a non-ASCII digit all yield ``None``.
     """
     if not text or len(text) > _PORT_DIGITS or not text.isascii() or not text.isdigit():
         return None
@@ -110,14 +114,9 @@ def _as_port(text: str) -> int | None:
 def _split_authority(authority: str) -> tuple[str | None, str, int | None]:
     """Split an authority into its userinfo, host and port.
 
-    Args:
-        authority: The text between ``://`` and the first ``/``, ``?`` or ``#``.
-
-    Returns:
-        The userinfo (or ``None``), the host and the port (or ``None``). An IPv6 literal keeps
-        its brackets, so the host can be placed back into a URL unchanged. An authority whose
-        port is not a number keeps the whole ``host:port`` text as the host and reports no
-        port, so no part of the input is lost.
+    An IPv6 literal keeps its brackets so the host goes back into a URL unchanged, and an authority
+    whose port is not a number keeps the ``host:port`` text as the host with no port, so no part of
+    the input is lost.
     """
     userinfo: str | None = None
     hostport = authority
@@ -147,13 +146,8 @@ def _split_authority(authority: str) -> tuple[str | None, str, int | None]:
 def _authority(parts: UrlParts) -> str:
     """Return the ``host[:port]`` authority of ``parts``, never including userinfo.
 
-    Args:
-        parts: The parsed URL.
-
-    Returns:
-        The host alone when the URL carries no port, otherwise ``host:port``. Leaving
-        userinfo out here is what makes :func:`origin` and the result of :func:`join_url`
-        credential-free by construction rather than by a later scrub.
+    Leaving userinfo out here is what makes :func:`origin` and the result of :func:`join_url`
+    credential-free by construction rather than by a later scrub.
     """
     if parts.port is None:
         return parts.host
@@ -161,11 +155,7 @@ def _authority(parts: UrlParts) -> str:
 
 
 def _base_url_not_set() -> ConfigError:
-    """Build the error for a relative request issued with no base URL configured.
-
-    Returns:
-        The :class:`ConfigError` naming ``http.base_url`` and the layers that can set it.
-    """
+    """Build the error for a relative request issued with no base URL configured."""
     return ConfigError(
         "http.base_url is not set",
         key=_BASE_URL_KEY,
@@ -178,12 +168,9 @@ def _base_url_not_set() -> ConfigError:
 def _base_url_invalid() -> ConfigError:
     """Build the error for a base URL that is not an absolute ``http``/``https`` URL.
 
-    One message covers every shape of the fault -- a relative value, an unsupported scheme and
-    a missing host -- because the correction is the same in each case and a test can assert on
-    one text.
-
-    Returns:
-        The :class:`ConfigError` naming ``http.base_url`` and the accepted form.
+    One message covers every shape of the fault -- a relative value, an unsupported scheme and a
+    missing host -- because the correction is the same in each case and a test can assert on one
+    text.
     """
     return ConfigError(
         "http.base_url must be an absolute http or https URL",
@@ -197,11 +184,8 @@ def _base_url_invalid() -> ConfigError:
 def _base_url_has_userinfo() -> ConfigError:
     """Build the error for a base URL that carries userinfo.
 
-    Returns:
-        The :class:`ConfigError` naming ``http.base_url`` and stating that credentials belong
-        in the ``http.auth.*_env`` variables. The message never quotes the value, which is the
-        reason the check exists: the value would be echoed by ``foundry config show`` and
-        stored in every result record of the run.
+    The message never quotes the value, which is why the check exists: ``foundry config show`` would
+    echo it and every result record of the run would store it.
     """
     return ConfigError(
         "http.base_url must not contain userinfo; credentials belong in http.auth.*_env",
@@ -212,18 +196,27 @@ def _base_url_has_userinfo() -> ConfigError:
     )
 
 
+def _request_url_off_origin() -> ConfigError:
+    """Build the error for an absolute target that is not on ``http.base_url``'s origin.
+
+    Neither the message nor the hint quotes the target, which a data row can fill with a credential
+    or a query value; the fault is described by the key that resolves it.
+    """
+    return ConfigError(
+        _MESSAGE_OFF_ORIGIN,
+        key=_BASE_URL_KEY,
+        layer=None,
+        path=None,
+        hint=_HINT_OFF_ORIGIN,
+    )
+
+
 def has_scheme(path: str) -> bool:
     """Report whether ``path`` begins with a ``scheme://`` prefix.
 
-    Args:
-        path: A request target: an absolute URL or a path relative to ``http.base_url``.
-
-    Returns:
-        True when the string starts with a scheme followed by ``://`` -- ``https://x``,
-        ``ftp://x`` and ``HTTP://x`` alike, the last because a scheme is case-insensitive.
-        False for every relative form, including ``//host/path`` and a bare ``mailto:`` style
-        prefix, both of which are treated as paths: Foundry's request targets are either
-        absolute URLs or paths, and nothing else.
+    True for ``https://x``, ``ftp://x`` and ``HTTP://x`` alike, a scheme being case-insensitive, and
+    False for every relative form -- ``//host/path`` and a bare ``mailto:`` prefix included, both of
+    which are treated as paths: Foundry's request targets are absolute URLs or paths, nothing else.
     """
     return ABSOLUTE_URL_PATTERN.match(path) is not None
 
@@ -235,11 +228,8 @@ def split_url(url: str) -> UrlParts:
         url: An absolute URL or a relative reference.
 
     Returns:
-        The :class:`UrlParts` for ``url``. A relative reference yields an empty scheme and
-        host with the whole string as its path. A string that cannot be read as a URL still
-        yields parts rather than raising, because callers build error messages from the
-        result: an empty authority gives an empty host, and a non-numeric port gives the
-        ``host:port`` text as the host with no port.
+        The :class:`UrlParts` for ``url``, and nothing raises: a relative reference gives an empty
+        scheme and host with the whole string as its path, which callers can put into error text.
     """
     without_fragment = url.partition("#")[0]
     head, _, query = without_fragment.partition("?")
@@ -269,17 +259,16 @@ def split_url(url: str) -> UrlParts:
 def origin(url: str) -> str:
     """Return ``scheme://host[:port]`` for ``url``, with no userinfo, path or query.
 
-    Args:
-        url: An absolute URL or a relative reference.
-
-    Returns:
-        The origin, which is stable across requests and safe to log: the session reports it
-        instead of the full URL, so no query value reaches a log line. ``""`` is returned
-        for a relative reference, which has no origin at all.
+    The origin is stable across requests and safe to log, because the session reports it instead of
+    the full URL. A port the scheme implies is left out, so ``http://h:80/x`` and ``http://h/x`` --
+    one origin under RFC 6454 -- yield the same text, which is what :func:`require_same_origin`
+    compares; a relative reference has no origin and yields ``""``.
     """
     parts = split_url(url)
     if not parts.scheme or not parts.host:
         return ""
+    if parts.port is None or parts.port == _DEFAULT_PORTS.get(parts.scheme):
+        return f"{parts.scheme}{_SCHEME_SEPARATOR}{parts.host}"
     return f"{parts.scheme}{_SCHEME_SEPARATOR}{_authority(parts)}"
 
 
@@ -302,19 +291,17 @@ def require_base_url(base_url: str | None) -> str:
     """Return ``base_url`` when a session can resolve relative paths against it, raising otherwise.
 
     This is the check ``foundry_api`` performs; ``foundry_http`` carries no base URL and never calls
-    it. A base URL may not carry userinfo: credentials belong in the environment variables that
-    ``http.auth.*_env`` names, because ``http.base_url`` is echoed by ``foundry config show``,
-    stored in every result record and shown in ``report.html`` (AAP 0.4.8; implicit requirement I9).
+    it. Credentials belong in the environment variables ``http.auth.*_env`` names rather than in
+    ``http.base_url``, which ``config show`` echoes, every result record stores and ``report.html``
+    shows (AAP 0.4.8; implicit requirement I9).
 
     Returns:
-        ``base_url`` unchanged when it is an absolute ``http`` or ``https`` URL with a host and no
-        userinfo.
+        ``base_url`` unchanged for an absolute ``http``/``https`` URL with a host and no userinfo.
 
     Raises:
         ConfigError: With ``key="http.base_url"`` when the value is absent or blank, is not an
-        absolute
-            ``http``/``https`` URL, has no host, or carries userinfo. No message quotes a
-            credential.
+            absolute ``http``/``https`` URL, has no host, or carries userinfo. No credential is
+            quoted.
     """
     if base_url is None or not base_url.strip():
         raise _base_url_not_set()
@@ -326,14 +313,55 @@ def require_base_url(base_url: str | None) -> str:
     return base_url
 
 
+def require_same_origin(base_url: str | None, target: str) -> None:
+    """Refuse an absolute ``target`` that is not on ``base_url``'s own origin.
+
+    A configured base URL contains every request to its own origin: an absolute target naming
+    another scheme, host or port would carry the session's credential to a host the configuration
+    never named, and the target can arrive from a data row or any helper forwarding user input
+    (AAP 0.3.2; implicit requirement I9). The rule lives here once so :func:`join_url` and the
+    session's own guard cannot disagree about it, and its error quotes neither the target nor any
+    credential.
+
+    Returns:
+        ``None``, and the caller sends ``target`` as given, when no base URL is configured or the
+        target already shares its origin.
+
+    Raises:
+        ConfigError: With ``key="http.base_url"`` when a base URL is set but is not an absolute
+            ``http``/``https`` URL without userinfo, and when the target's scheme, host or port
+            differs from the base URL's.
+    """
+    if base_url is None or not base_url.strip():
+        return
+    base = require_base_url(base_url)
+    if origin(target) != origin(base):
+        raise _request_url_off_origin()
+
+
 def join_url(base_url: str | None, path: str) -> str:
     """Resolve a request target against ``http.base_url``.
 
-    An absolute ``http``/``https`` target is returned unchanged, an absolute path replaces the base
-    URL's path, and a relative path is appended with exactly one ``/`` between the two, its query
-    travelling with it. A fragment is dropped from either side, the base URL's own query is never
-    inherited, and ``"//host/path"`` is treated as a path. A relative target with no usable base URL
-    raises :class:`ConfigError`.
+    An absolute ``http``/``https`` target on the base URL's own origin is returned unchanged, an
+    absolute path replaces the base URL's path, and a relative path is appended with exactly one
+    ``/`` between the two, its query travelling with it. A fragment is dropped from either side, the
+    base URL's own query is never inherited, and ``"//host/path"`` is treated as a path.
+
+    A configured base URL contains every request to its own origin, so an absolute target naming
+    another scheme, host or port is refused rather than sent with the session's credential: a path
+    forwarded from a data row cannot move the request, or the secret, to a host the configuration
+    never named (AAP 0.3.2; implicit requirement I9). A session with no base URL, which is what
+    ``foundry_http`` carries, keeps issuing absolute targets unchanged.
+
+    Returns:
+        The URL to send: ``path`` unchanged when it is an absolute target on the base URL's origin,
+        otherwise the target resolved against ``base_url``.
+
+    Raises:
+        ConfigError: For an absolute target that uses another scheme or carries no host, and with
+            ``key="http.base_url"`` for a relative target with no usable base URL, a base URL that
+            is not an absolute ``http``/``https`` URL without userinfo, or an absolute target
+            outside the base URL's origin. No message quotes a target or a credential.
     """
     target = path.partition("#")[0]
     if has_scheme(target):
@@ -354,6 +382,7 @@ def join_url(base_url: str | None, path: str) -> str:
                 path=None,
                 hint=f"issue the request against {_BASE_URL_KEY} with a relative path instead",
             )
+        require_same_origin(base_url, target)
         return target
     base = require_base_url(base_url)
     if not target:

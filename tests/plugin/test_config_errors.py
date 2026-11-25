@@ -24,6 +24,13 @@ _TRIVIAL_TEST: Final[str] = """def test_smoke():
 """
 
 _VALID_TOML: Final[str] = "[http]\ntimeout = 2.0\n"
+_BASE_URL_KEY: Final[str] = "http.base_url"
+_BASE_URL_OPTION: Final[str] = f"--foundry-{_BASE_URL_KEY}"
+_NO_USERINFO: Final[str] = "no userinfo"
+_URL_USER: Final[str] = "QAURLUSER_2b7d"
+_URL_PASSWORD: Final[str] = "QAURLPASS_9c4e"
+# Assembled from parts so no literal scheme://user:password@host is committed.
+_USERINFO_URL: Final[str] = "http://" + _URL_USER + ":" + _URL_PASSWORD + "@127.0.0.1:1"
 _TIMEOUT_KEY: Final[str] = "http.timeout"
 _TOPT: Final[str] = f"--foundry-{_TIMEOUT_KEY}"
 _TIMEOUT_RANGE: Final[str] = "0 < t <= 300"
@@ -109,6 +116,16 @@ def test_configuration_faults_exit_2_without_reports(
     output = _assert_exit_2_without_reports(pytester.runpytest_subprocess(*argv), directory, case)
     for fragment in fragments:
         assert fragment in output, f"{case}: the message must quote {fragment!r}\n{output}"
+
+
+def test_userinfo_in_a_base_url_override_exits_2_without_reports(
+    pytester: pytest.Pytester, clean_foundry_env: None
+) -> None:
+    directory = _prepare(pytester)
+    result = pytester.runpytest_subprocess(f"{_BASE_URL_OPTION}={_USERINFO_URL}")
+    output = _assert_exit_2_without_reports(result, directory, "userinfo in a base URL override")
+    assert _BASE_URL_KEY in output and _NO_USERINFO in output, output
+    assert _URL_USER not in output and _URL_PASSWORD not in output, "no credential may be printed"
 
 
 def test_missing_explicit_configuration_file_names_the_path(

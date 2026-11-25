@@ -89,6 +89,9 @@ _BOUNDS_INTERVAL_RE: Final[re.Pattern[str]] = re.compile(r"^(\d+(?:\.\d+)?)\.\.(
 
 _BOUNDS_LIMIT_RE: Final[re.Pattern[str]] = re.compile(r"^(\d+(?:\.\d+)?) < t <= (\d+(?:\.\d+)?)$")
 
+_CONTROL_CHARACTER_RE: Final[re.Pattern[str]] = re.compile(r"[\x00-\x1f\x7f]")
+"""Every C0 control character and DEL, which a message must never emit raw."""
+
 
 def accepted_range(spec: KeySpec) -> str:
     """Return the accepted values or range of ``spec`` as a message quotes it (AAP 0.4.5)."""
@@ -453,16 +456,23 @@ def _render_value(value: object) -> str:
     return _UNRENDERABLE_VALUE
 
 
-def _redacted_text(value: str) -> str:
-    """Return ``value`` as the single redaction engine renders it.
+def _spell_control_character(match: re.Match[str]) -> str:
+    r"""Return one control character spelled ``\xNN``, so it cannot act on a terminal."""
+    return f"\\x{ord(match.group()):02x}"
 
-    A rejected value reaches stderr at exit 2 and therefore a CI log, so it goes through
+
+def _redacted_text(value: str) -> str:
+    r"""Return ``value`` as the single redaction engine renders it, control characters spelled.
+
+    A rejected value reaches stderr at exit 2 and so a CI log, so it goes through
     :mod:`foundry.obs.redaction`, the only engine, whose ``Redactor.text`` is total; the import
-    stays inside the function to keep the engine off the plugin's startup path.
+    stays inside the function to keep the engine off the plugin's startup path. The engine leaves
+    control characters alone, so each is spelled ``\xNN`` afterwards: a raw CR or LF would end the
+    message early and start a line of the value's choosing.
     """
     from foundry.obs.redaction import default_redactor
 
-    return default_redactor().text(value)
+    return _CONTROL_CHARACTER_RE.sub(_spell_control_character, default_redactor().text(value))
 
 
 def _nested_under_mapping_key(dotted: str) -> bool:
