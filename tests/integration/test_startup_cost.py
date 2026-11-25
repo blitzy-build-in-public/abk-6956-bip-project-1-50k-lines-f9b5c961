@@ -1,7 +1,11 @@
 """Plugin startup: 150 ms median of 5 interleaved pairs, the budget AAP 0.14.2 sets.
 
 Each sample is two ``--collect-only`` boots of a one-test project -- with the plugin loaded and with
-it disabled -- read from the CPU time each child consumed; a starved pair is retaken, never excused.
+it disabled -- and a starved pair is retaken, never excused. The budget is read from the wall clock:
+the median ``elapsed_ms`` of the with-plugin arm minus the median of the without-plugin arm. The CPU
+time of the same pairs carries a second assertion of the same ceiling, because only the wall clock
+shows a regression that waits rather than computes and only the CPU time stays honest on a host that
+deschedules a child; neither substitutes for the other.
 """
 
 from __future__ import annotations
@@ -154,21 +158,30 @@ def test_plugin_startup_stays_inside_the_budget(run_pytest: RunPytest, tmp_path:
     delta = median_a - median_b
     wall_a = statistics.median([pair[0].elapsed_ms for pair in measured])
     wall_b = statistics.median([pair[1].elapsed_ms for pair in measured])
+    wall_delta = wall_a - wall_b
     substituted = len(measured) - len(honest)
     throttling = describe_quota_throttling(
         [run.throttled for pair in attempts for run in pair if run.throttled is not None]
     )
     print(
-        f"plugin startup: with plugin {median_a:.1f} ms CPU, without {median_b:.1f} ms CPU, "
-        f"delta {delta:.1f} ms (budget {STARTUP_BUDGET_MS:.0f} ms, {SAMPLE_COUNT} pairs); wall "
-        f"clock {wall_a:.1f} vs {wall_b:.1f} ms; {len(starved)} starved pairs set aside, "
-        f"{substituted} measured in their place; {throttling}"
+        f"plugin startup: wall clock with plugin {wall_a:.1f} ms, without {wall_b:.1f} ms, delta "
+        f"{wall_delta:.1f} ms (AAP 0.14.2 budget {STARTUP_BUDGET_MS:.0f} ms, {SAMPLE_COUNT} "
+        f"pairs); CPU time with plugin {median_a:.1f} ms, without {median_b:.1f} ms, delta "
+        f"{delta:.1f} ms; {len(starved)} starved pairs set aside, {substituted} measured in "
+        f"their place; {throttling}"
     )
-    # Only the ceiling is asserted: both arms share pytest's boot, so the delta carries noise.
+    assert wall_delta <= STARTUP_BUDGET_MS, (
+        f"plugin startup overhead {wall_delta:.2f} ms of wall clock exceeds the "
+        f"{STARTUP_BUDGET_MS:.0f} ms budget AAP 0.14.2 sets (with plugin {wall_a:.2f} ms, "
+        f"without {wall_b:.2f} ms, delta {wall_delta:.2f} ms; CPU time {median_a:.2f} vs "
+        f"{median_b:.2f} ms, delta {delta:.2f} ms; {len(starved)} starved pairs set aside, "
+        f"{substituted} measured in their place; {throttling})"
+    )
     assert delta <= STARTUP_BUDGET_MS, (
-        f"plugin startup overhead {delta:.2f} ms exceeds the {STARTUP_BUDGET_MS:.0f} ms budget "
-        f"(with {median_a:.2f} ms, without {median_b:.2f} ms; wall clock {wall_a:.2f} vs "
-        f"{wall_b:.2f} ms; {len(starved)} starved pairs set aside; {throttling})"
+        f"the plugin's CPU time, {delta:.2f} ms, exceeds the {STARTUP_BUDGET_MS:.0f} ms budget "
+        f"AAP 0.14.2 sets (with plugin {median_a:.2f} ms, without {median_b:.2f} ms, delta "
+        f"{delta:.2f} ms); wall clock {wall_a:.2f} vs {wall_b:.2f} ms, delta "
+        f"{wall_delta:.2f} ms; {len(starved)} starved pairs set aside; {throttling})"
     )
 
 
