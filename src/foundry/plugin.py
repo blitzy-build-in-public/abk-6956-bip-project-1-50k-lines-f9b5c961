@@ -549,11 +549,11 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     if exitstatus == _USAGE_EXIT:
         return
-    # AAP 0.4.6 reserves the empty document for a run that collected nothing, so a run whose every
-    # test --deselect removed leaves no report behind, and a collection-only run reports on nothing.
-    if not config.stash.get(_RUN_RECORDS, None) and (
-        config.option.collectonly or getattr(config.option, "deselect", None)
-    ):
+    # AAP 0.4.6 reserves the empty document for a run that collected nothing, so a run a deselecting
+    # filter (-k, -m or --deselect) emptied writes no file, nor does a --collect-only run.
+    filters = config.option.keyword or config.option.markexpr or config.option.deselect
+    emptied = exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and bool(filters)
+    if not config.stash.get(_RUN_RECORDS, None) and (config.option.collectonly or emptied):
         return
     state = config.stash.get(exec_state.SESSION_STATE, None)
     if state is None:

@@ -94,6 +94,16 @@ _OPTION_SPELLINGS: Final[tuple[str, ...]] = (
 _REPORT_FILES: Final[tuple[str, ...]] = ("junit.xml", "report.html", "results.json")
 """The three report files AAP 0.4.6 places in the invocation directory, sorted."""
 
+_NO_MATCH_KEYWORD: Final[str] = "no_such_test"
+"""A ``-k`` expression no inner test matches, which empties a run of AAP 0.4.7 row 12's kind."""
+
+_NO_TESTS_EXIT: Final[int] = 5
+"""pytest 8.4.2's own no-tests-collected code, which is the value row 12's ``4`` is read as.
+
+The row's number is not a code Foundry forces: AAP 0.4.4 forbids rewriting pytest's 3, 4 and 5, and
+pytest answers a run emptied by a filter with 5, so the preserved code is the one asserted here.
+"""
+
 _DEFAULTS_MODULE: Final[str] = '''"""Assert the field defaults with nothing configured."""
 
 import pathlib
@@ -292,6 +302,57 @@ def test_three_report_files_are_written_by_default(
     report = (pytester.path / "report.html").read_text(encoding="utf-8")
     assert report.strip()
     assert run_id in report
+
+
+def test_all_tests_deselected_writes_no_report(
+    pytester: pytest.Pytester, clean_foundry_env: None
+) -> None:
+    """A run whose only test is deselected writes no report file at all (AAP 0.4.7 row 12).
+
+    The code the run ends with is pytest's own: AAP 0.4.4 forbids rewriting pytest's 3, 4 and 5, and
+    pytest 8.4.2 answers a whole-run deselection with its no-tests-collected code 5, so row 12's "4"
+    is read as pytest's own code rather than a number Foundry forces. AAP 0.4.6 reserves the empty
+    document for a run that collected nothing, which is why no file of the three appears here.
+    """
+    pytester.makepyfile(**{_NODEID_MODULE: _DEFAULTS_MODULE})
+    result = pytester.runpytest("-k", _NO_MATCH_KEYWORD)
+    assert result.ret == _NO_TESTS_EXIT
+    result.assert_outcomes(deselected=1)
+    result.stdout.fnmatch_lines(["*1 deselected*"])
+    written = sorted(name for name in _REPORT_FILES if (pytester.path / name).exists())
+    assert not written, f"an all-deselected run writes no report, but {written} exist"
+
+
+def test_matching_keyword_still_writes_every_report(
+    pytester: pytest.Pytester, clean_foundry_env: None
+) -> None:
+    """A ``-k`` filter that keeps the test still writes all three report files (AAP 0.4.6).
+
+    The control for the case above: a guard that suppressed every filtered run would satisfy that
+    case vacuously and fails this one.
+    """
+    pytester.makepyfile(**{_NODEID_MODULE: _DEFAULTS_MODULE})
+    result = pytester.runpytest("-k", _NODEID_FUNCTION)
+    assert result.ret == 0
+    result.assert_outcomes(passed=1)
+    missing = sorted(name for name in _REPORT_FILES if not (pytester.path / name).is_file())
+    assert not missing, f"{missing} are missing from {pytester.path}"
+
+
+def test_collection_only_run_writes_no_report(
+    pytester: pytest.Pytester, clean_foundry_env: None
+) -> None:
+    """A ``--collect-only`` session runs no test and writes no report file (AAP 0.4.6).
+
+    The other report-less state of the session-finish guard: the run has no result to record, and
+    pytest's own 0 for a collection-only session is preserved as AAP 0.4.4 requires.
+    """
+    pytester.makepyfile(**{_NODEID_MODULE: _DEFAULTS_MODULE})
+    result = pytester.runpytest("--collect-only", "-q")
+    assert result.ret == 0
+    result.stdout.fnmatch_lines([f"*{_NODEID}*"])
+    written = sorted(name for name in _REPORT_FILES if (pytester.path / name).exists())
+    assert not written, f"a collection-only run writes no report, but {written} exist"
 
 
 def test_option_group_is_registered(pytester: pytest.Pytester, clean_foundry_env: None) -> None:
