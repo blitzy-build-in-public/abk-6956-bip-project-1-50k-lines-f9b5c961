@@ -1,28 +1,22 @@
 """The per-item timeout policy, and the one seam ``execution.timeout`` is enforced through.
 
 ``execution.timeout`` -- ``60.0`` by default, accepted range ``0 < t <= 3600`` -- is enforced
-exactly once, through pytest-timeout's own per-item timer hookspec (AAP 0.3.2, AAP 0.7.1).
-Foundry starts no thread, arms no signal alarm and keeps no watchdog, because a second timer
-beside the peer's would fire twice on one item and leave ``SIGALRM`` in a state neither plugin
-expects. A worker that dies outright belongs to :mod:`foundry.execution.sharding`, which reports
-it as a ``run_error``.
+exactly once, through pytest-timeout's own per-item timer hookspec (AAP 0.3.2, AAP 0.7.1). Foundry
+starts no thread, arms no signal alarm and keeps no watchdog, because a second timer beside the
+peer's would fire twice on one item; a worker that dies outright belongs to
+:mod:`foundry.execution.sharding`, which reports it as a ``run_error``.
 
 The plugin registers ``pytest_timeout_set_timer`` and ``pytest_timeout_cancel_timer``, both
-``firstresult`` hookspecs, as one-line delegations to :func:`apply_timer` and
-:func:`cancel_timer` while ``config.pluginmanager.hasplugin("timeout")`` holds (AAP 0.2.1,
-AAP 0.4.2). Returning ``False`` lets the chain fall through to the peer's own ``trylast``
-implementation, which is what a disabled policy or a Foundry fault must do. The resolved
-:class:`TimeoutPolicy` is authoritative rather than the settings the peer passes into the hook,
-and the plugin seeds the peer's timeout from ``execution.timeout`` during session configuration
-so that a project which set no ``--timeout`` of its own still reaches the substitution.
+``firstresult`` hookspecs, as one-line delegations to :func:`apply_timer` and :func:`cancel_timer`.
+Returning ``False`` lets the chain fall through to the peer's own ``trylast`` implementation, which
+is what a disabled policy or a Foundry fault must do, and the resolved :class:`TimeoutPolicy` is
+authoritative rather than the settings the peer passes into the hook.
 
-pytest-timeout is an optional peer, so nothing here imports it until a hook runs, which keeps it
-out of ``sys.modules`` for the 150 ms startup budget (implicit requirement I5); it is looked up
-by name because the distribution has shipped both ``pytest_timeout`` and ``_pytest_timeout``.
-A peer that cannot be imported, or that refuses the derived settings, is reported as one
-``WARNING`` per process through :func:`_announce_once`, and the call returns ``False``, so
-Foundry's own plumbing never changes a test's outcome or the exit code (AAP 0.1.2, AAP 0.13.1).
-Importing this module performs no I/O and arms no timer.
+pytest-timeout is an optional peer, so nothing here imports it until a hook runs, which keeps it out
+of ``sys.modules`` for the 150 ms startup budget (implicit requirement I5). A peer that cannot be
+imported, or that refuses the derived settings, is reported as one ``WARNING`` per process through
+:func:`_announce_once`, and the call returns ``False``, so Foundry's own plumbing never changes a
+test's outcome or the exit code (AAP 0.1.2, AAP 0.13.1).
 """
 
 from __future__ import annotations
@@ -71,28 +65,20 @@ FUNC_ONLY: Final[bool] = True
 """Whether the timer covers the test's call phase only.
 
 ``True`` makes a timeout a ``call``-phase failure, the ``execution.timeout`` row of AAP 0.4.7, and
-leaves fixture setup and teardown unbounded so a slow fixture is reported by the fixture.
+leaves fixture setup and teardown unbounded.
 """
 
 MIN_TIMEOUT_SECONDS: Final[float] = TIMEOUT_MIN
-"""Exclusive lower bound of ``execution.timeout``; a limit of zero would arm no timer at all.
-
-Defined once, in :data:`foundry.core.limits.TIMEOUT_MIN`, because this package may not import the
-configuration model that publishes the bound (AAP 0.4.8).
-"""
+"""Exclusive lower bound of ``execution.timeout``; a limit of zero would arm no timer at all."""
 
 MAX_TIMEOUT_SECONDS: Final[float] = TIMEOUT_MAX
-"""Inclusive upper bound of ``execution.timeout``: one hour for a single test (AAP 0.4.5).
-
-Defined once, in :data:`foundry.core.limits.TIMEOUT_MAX`.
-"""
+"""Inclusive upper bound of ``execution.timeout``: one hour for a single test (AAP 0.4.5)."""
 
 TIMEOUT_RANGE_TEXT: Final[str] = TIMEOUT_RANGE
 """The accepted range as the message states it: ``0 < t <= 3600``.
 
-Quoted from :data:`foundry.core.limits.TIMEOUT_RANGE`, the one spelling of the range, and it
-matches the constraint :class:`foundry.config.keys.KeySpec` declares for ``execution.timeout``, so
-the same sentence appears whichever surface reports the fault.
+Quoted from :data:`foundry.core.limits.TIMEOUT_RANGE`, the one spelling of the range, so the same
+sentence appears whichever surface reports the fault.
 """
 
 TIMEOUT_KEY: Final[str] = "execution.timeout"
@@ -101,9 +87,9 @@ TIMEOUT_KEY: Final[str] = "execution.timeout"
 TIMEOUT_MARKER: Final[str] = "Timeout ("
 """The literal prefix pytest-timeout puts in its own failure message.
 
-It reports a timed-out test as ``Timeout (>60.0s) from pytest-timeout.``, and the prefix is the
-stable part of that text across the releases in the declared range. It is only evidence for
-labelling an attempt; the outcome itself still comes from pytest's own report.
+It reports a timed-out test as ``Timeout (>60.0s) from pytest-timeout.``, and this prefix is the
+stable part of that text. It is only evidence for labelling an attempt; the outcome itself still
+comes from pytest's own report.
 """
 
 TIMEOUT_METHODS: Final[frozenset[str]] = frozenset({TIMEOUT_METHOD_SIGNAL, TIMEOUT_METHOD_THREAD})
@@ -127,24 +113,13 @@ _REFUSED_SETTINGS_MESSAGE: Final[str] = (
 def _announce_once(fault: str, error_name: str = "") -> None:
     """Report one distinct pytest-timeout peer fault, once for the run's process.
 
-    Both hook bodies run once per item, so an unlatched announcement floods the log: a peer whose
-    hookspec is registered while its module cannot be imported, or which refuses the derived
-    settings, would write a ``WARNING`` for every item's set call and again for every item's cancel
-    call. ``WARNING`` is the level AAP 0.13.1 reserves for the failure-isolation cases, and a peer
-    fault is one, so the level stays and the announcement is latched instead: the memo makes this
-    body run on the first call for a given fault and never again, which is the once-per-run latch
-    :meth:`foundry.obs.artifacts.ArtifactWriter._warn_once` implements with an instance flag. This
-    module owns no instance to hang that flag on, and a bare module-level flag would be mutable
-    state of the kind AAP 0.4.8 restricts, so the memo is keyed by the fault itself.
-
-    ``error_name`` rides the message rather than travelling as ``exc=``, because a memo key cannot
-    carry a fresh exception instance and the class name is the only part of an exception ever
-    logged anyway: :func:`foundry.obs.events.emit_plumbing_failure` records
-    ``type(exc).__name__`` and never the message, the arguments or the traceback.
-
-    The memo holds no configuration, no path, no node id and no outcome, and nothing reads it to
-    decide behaviour -- it exists only to keep a diagnostic from repeating. A test that needs a
-    fresh announcement calls ``_announce_once.cache_clear()``.
+    Both hook bodies run once per item, so an unlatched announcement would write a ``WARNING`` for
+    every item's set call and again for every item's cancel call. The memo makes this body run on
+    the first call for a given fault and never again, which is the once-per-run latch
+    :meth:`foundry.obs.artifacts.ArtifactWriter._warn_once` implements with an instance flag; a bare
+    module-level flag would be mutable state of the kind AAP 0.4.8 restricts. Nothing reads the memo
+    to decide behaviour, and a test that needs a fresh announcement calls
+    ``_announce_once.cache_clear()``.
 
     Args:
         fault: The static message naming what the peer could not do. It carries no path, no node
@@ -176,10 +151,10 @@ plumbing fault to warn about and fall back from rather than a reason to fail a t
 class _SettingsFactory(Protocol):
     """The call surface of pytest-timeout's ``Settings`` namedtuple class.
 
-    A protocol rather than the real class, because the class belongs to an optionally imported
-    peer and must not leak into a signature. It states the four keyword arguments
-    :func:`_build_settings` passes, so a release that renames one fails at that single
-    construction site and is reported as one warning instead of a traceback in a test.
+    A protocol rather than the real class, because the class belongs to an optionally imported peer
+    and must not leak into a signature. It states the four keyword arguments
+    :func:`_build_settings` passes, so a release that renames one fails at that single construction
+    site.
     """
 
     def __call__(
@@ -214,19 +189,11 @@ class TimeoutPolicy:
     """One resolved per-test time limit, and the pytest-timeout settings derived from it.
 
     Frozen and slotted: a policy is read by the plugin's hook, by the execution coordinator and by
-    diagnostics, and none of them may change the limit another depends on. The invariant holds for
-    every construction route, because :meth:`__post_init__` validates the limit rather than leaving
-    validation to :meth:`from_config`.
-
-    Attributes:
-        seconds: The limit for one test, in seconds. Whenever the policy is enabled it lies inside
-            ``0 < seconds <= 3600``; a disabled policy may carry ``MIN_TIMEOUT_SECONDS``, since it
-            arms nothing.
-        enabled: Whether the limit is enforced. ``False`` models ``-p no:timeout`` and a test that
-            needs the timer off without editing the project's configuration.
-        method: The timer method to ask pytest-timeout for. pytest-timeout falls back to
-            ``thread`` when ``signal`` cannot be used on the calling thread, so this is a
-            preference the peer is free to overrule.
+    diagnostics, and none of them may change the limit another depends on. :meth:`__post_init__`
+    validates the limit rather than leaving validation to :meth:`from_config`, so the invariant
+    holds for every construction route. Whenever the policy is enabled the limit lies inside
+    ``0 < seconds <= 3600``; a disabled policy may carry ``MIN_TIMEOUT_SECONDS``, since it arms
+    nothing, and a ``method`` the peer cannot honour is a preference it is free to overrule.
     """
 
     seconds: float
@@ -237,14 +204,12 @@ class TimeoutPolicy:
         """Coerce the limit to a validated ``float`` and settle the method.
 
         A limit outside ``0 < t <= 3600`` raises :class:`ConfigError` naming ``execution.timeout``
-        and the accepted range, whether the instance came from :meth:`from_config` or from a
-        direct constructor call. A disabled policy carries no timer, so its limit is stored as
-        given instead of being rejected.
+        and the accepted range, whether the instance came from :meth:`from_config` or from a direct
+        constructor call. A disabled policy carries no timer, so its limit is stored as given.
 
-        An unrecognised method falls back to :data:`DEFAULT_TIMEOUT_METHOD` rather than raising:
-        Foundry derives the method itself and AAP 0.4.5 fixes no key for one, so a value it does
-        not understand is a defect in Foundry's own wiring, which must never fail a test over a
-        cosmetic setting.
+        An unrecognised method falls back to :data:`DEFAULT_TIMEOUT_METHOD` rather than raising: a
+        value Foundry does not understand is a defect in its own wiring, which must never fail a
+        test over a cosmetic setting.
         """
         if self.enabled:
             object.__setattr__(self, "seconds", _validated_seconds(self.seconds))
@@ -262,10 +227,9 @@ class TimeoutPolicy:
             An enabled policy enforcing exactly ``seconds``.
 
         Raises:
-            ConfigError: When ``seconds`` is not a finite number inside
-                ``0 < t <= 3600``. The message names ``execution.timeout`` and the accepted range,
-                and the error carries that key as its ``key`` attribute, so the command line maps
-                it to exit code 2 without parsing prose.
+            ConfigError: When ``seconds`` is not a finite number inside ``0 < t <= 3600``. The error
+                carries ``execution.timeout`` as its ``key`` attribute, so the command line maps it
+                to exit code 2 without parsing prose.
         """
         return cls(seconds=seconds)
 
@@ -275,8 +239,7 @@ class TimeoutPolicy:
 
         Used for ``-p no:timeout`` and for a test that needs the time limit switched off. An item
         run under this policy keeps whatever timer pytest-timeout itself would have set, because
-        :func:`apply_timer` returns ``False`` and the ``firstresult`` chain falls through to the
-        peer's own implementation.
+        :func:`apply_timer` returns ``False`` and the ``firstresult`` chain falls through.
 
         Returns:
             A disabled policy carrying ``MIN_TIMEOUT_SECONDS``.
@@ -288,8 +251,7 @@ class TimeoutPolicy:
         """Whether a timer would be armed for an item under this policy.
 
         Returns:
-            ``True`` only when the policy is enabled and carries a positive limit, which is the
-            exact condition :func:`apply_timer` needs before it imports the optional peer.
+            ``True`` only when the policy is enabled and carries a positive limit.
         """
         return self.enabled and self.seconds > MIN_TIMEOUT_SECONDS
 
@@ -297,45 +259,35 @@ class TimeoutPolicy:
         """Return the limit that applies to ``nodeid``, in seconds.
 
         The configuration schema of AAP 0.4.5 declares no per-test override key, so every item gets
-        the session limit and this method always returns :attr:`seconds`. It takes the node id
-        anyway so that an additive per-item override, which AAP 0.4.9 allows a later release to
-        introduce, needs no change at any call site.
+        the session limit; it takes the node id anyway so that an additive per-item override, which
+        AAP 0.4.9 allows a later release to introduce, needs no change at any call site.
 
         Args:
             nodeid: The pytest node id of the item being timed.
-
-        Returns:
-            The limit for that item, in seconds.
         """
         return self.seconds
 
     def message(self, nodeid: str) -> str:
         """Return the deterministic message naming the limit ``nodeid`` exceeded.
 
-        AAP 0.4.7 requires the timeout to be reported in the failure message, so the text names
-        the key and the limit:
-        ``foundry: test exceeded execution.timeout of 60.0s``. It is identical for every item and
-        carries no node id, because a parameterised node id can be built from data values and a
-        failure message reaches the terminal, the JSON records and the HTML report.
+        AAP 0.4.7 requires the timeout to be reported in the failure message, so the text names the
+        key and the limit: ``foundry: test exceeded execution.timeout of 60.0s``. It carries no node
+        id, because a parameterised node id can be built from data values and the message reaches
+        the terminal, the JSON records and the HTML report.
 
         Args:
             nodeid: The node id of the item that timed out. It is deliberately not interpolated.
-
-        Returns:
-            The message, without a trailing newline.
         """
         return f"foundry: test exceeded {TIMEOUT_KEY} of {self.seconds}s"
 
     def settings(self) -> Mapping[str, object]:
         """Return the plain settings mapping the timer is derived from.
 
-        Exposed so diagnostics and tests can read the derived values without importing the
-        optional peer:
-        ``{"timeout": 60.0, "method": "signal", "func_only": True}``. A fresh mapping is returned on
-        every call, so a caller cannot alter the policy through it.
+        Exposed so diagnostics and tests can read the derived values without importing the optional
+        peer, and a fresh mapping is returned on every call, so a caller cannot alter the policy.
 
         Returns:
-            The timeout, method and ``func_only`` flag :func:`apply_timer` passes to pytest-timeout.
+            The timeout, method and ``func_only`` flag :func:`apply_timer` passes to the peer.
         """
         return {"timeout": self.seconds, "method": self.method, "func_only": FUNC_ONLY}
 
@@ -344,13 +296,12 @@ def apply_timer(config: object, item: object, policy: TimeoutPolicy) -> bool:
     """Arm pytest-timeout's per-item timer for ``item`` from ``policy``.
 
     The body the plugin hook ``pytest_timeout_set_timer`` delegates to, called once per timed item,
-    and it must never raise: Foundry's own plumbing cannot change a test's outcome or the run's
-    exit code (AAP 0.1.2). A disabled policy returns ``False`` before the optional peer is looked
-    up; otherwise its own ``pytest_timeout_set_timer`` is called directly with the settings built at
+    and it must never raise: Foundry's own plumbing cannot change a test's outcome or the run's exit
+    code (AAP 0.1.2). A disabled policy returns ``False`` before the optional peer is looked up;
+    otherwise its own ``pytest_timeout_set_timer`` is called directly with the settings built at
     :func:`_build_settings` -- never through ``config.pluginmanager.hook``, which would re-enter
-    Foundry's implementation of the same ``firstresult`` hookspec and recurse. ``True`` means the
-    timer is armed and ``False`` that nothing was armed, which lets the chain fall through to
-    pytest-timeout's own implementation and leaves the project's timer as the peer set it.
+    Foundry's implementation of the same ``firstresult`` hookspec and recurse. ``False`` lets the
+    chain fall through to pytest-timeout's own implementation.
     """
     if not policy.is_enabled:
         return False
@@ -372,16 +323,14 @@ def cancel_timer(item: object) -> bool:
 
     The counterpart of :func:`apply_timer`, used when the execution coordinator discards an attempt
     before starting the next one and by the plugin's ``pytest_timeout_cancel_timer`` delegation at
-    teardown. pytest-timeout keeps the cancel callable on the item, so a cancel for an item that
-    was never armed is a no-op in the peer rather than an error here.
+    teardown. A cancel for an item that was never armed is a no-op in the peer.
 
     Args:
         item: The pytest ``Item`` whose timer is being cancelled.
 
     Returns:
         ``True`` when the peer cancelled the timer, ``False`` when the peer is not importable or
-        refused the call. Nothing is raised either way: a cancellation fault is announced once for
-        the run's process, as :func:`apply_timer`'s is, and the test's own outcome stands.
+        refused the call. Nothing is raised either way.
     """
     module = _load_timeout_module()
     if module is None:
@@ -402,12 +351,8 @@ def is_timeout_failure(excinfo: BaseException | None) -> bool:
     failed attempt as a timeout and to record its phase as ``call``, which is the state the
     ``execution.timeout`` row of AAP 0.4.7 describes. The check is advisory: the outcome of a test
     always comes from pytest's own report, so a missed or extra match changes a label, never a
-    verdict or an exit code.
-
-    Evidence is the :data:`TIMEOUT_MARKER` prefix in the rendered message plus, when pytest is
-    importable, that the exception really is pytest's ``Failed`` outcome exception. Anything it
-    cannot recognise -- ``None``, a non-exception, an exception whose ``__str__`` raises -- yields
-    ``False`` rather than an error.
+    verdict or an exit code. Evidence is the :data:`TIMEOUT_MARKER` prefix in the rendered message
+    plus, when pytest is importable, that the exception really is pytest's ``Failed``.
 
     Args:
         excinfo: The exception to inspect. A pytest ``ExceptionInfo`` is accepted too, and its
@@ -427,10 +372,9 @@ def is_timeout_failure(excinfo: BaseException | None) -> bool:
 def _validated_seconds(seconds: object) -> float:
     """Return ``seconds`` as a finite ``float`` inside the accepted range, or raise.
 
-    A value that is not a number at all raises the same :class:`ConfigError` as an out-of-range
-    one, so the module keeps the exception boundary its contract states: ``ConfigError`` is the
-    only type this module constructs, and a caller never sees a bare ``TypeError`` from a
-    comparison. ``float`` also rejects ``nan`` and ``inf`` through the range comparison itself,
+    A value that is not a number at all raises the same :class:`ConfigError` as an out-of-range one,
+    so ``ConfigError`` is the only type this module constructs and a caller never sees a bare
+    ``TypeError``. ``float`` also rejects ``nan`` and ``inf`` through the range comparison itself,
     since both fail ``MIN_TIMEOUT_SECONDS < value <= MAX_TIMEOUT_SECONDS``.
 
     Args:
@@ -457,11 +401,9 @@ def _range_error(seconds: object) -> ConfigError:
     """Return the :class:`ConfigError` that reports an unusable ``execution.timeout`` value.
 
     The message is :func:`foundry.core.limits.range_fault_message`'s one wording, which names the
-    key and the accepted range -- what the behaviour contract pins for an out-of-range value
-    (``http.timeout = -1`` reports ``http.timeout`` and ``0 < t <= 300``); the offending value is
-    echoed because it came from the project's own configuration and a timeout is never a secret.
-    The hint repeats the range as the next step to take, and the key travels as the error's
-    ``key`` attribute so the command line maps the fault to exit code 2 without parsing prose.
+    key and the accepted range; the offending value is echoed because it came from the project's own
+    configuration and a timeout is never a secret. The key travels as the error's ``key`` attribute,
+    so the command line maps the fault to exit code 2 without parsing prose.
     """
     message = range_fault_message(TIMEOUT_KEY, seconds, TIMEOUT_RANGE_TEXT)
     hint = f"set {TIMEOUT_KEY} to a value in {TIMEOUT_RANGE_TEXT} seconds"
@@ -474,12 +416,8 @@ def _build_settings(factory: _SettingsFactory, policy: TimeoutPolicy, method: st
     The single construction site for the peer's settings type, which is the point: a release that
     renames ``timeout``, ``method``, ``func_only`` or ``disable_debugger_detection`` raises
     ``TypeError`` here, and :func:`apply_timer` turns that one ``TypeError`` into one warning and a
-    fallback instead of a traceback inside a test.
-
-    ``func_only`` comes from :data:`FUNC_ONLY`, so the timer covers the call phase -- the phase the
-    state table reports a timeout against -- and leaves fixture setup and teardown alone. Debugger
-    detection is left enabled, which is the peer's safe default: a debugger that stops the test
-    must not be killed by the timer.
+    fallback instead of a traceback inside a test. ``func_only`` comes from :data:`FUNC_ONLY`, so
+    the timer covers the call phase, and debugger detection stays enabled, the peer's safe default.
 
     Args:
         factory: The installed release's ``Settings`` class.
@@ -502,9 +440,9 @@ def _load_timeout_module() -> _TimeoutModule | None:
     """Return the installed pytest-timeout module, or ``None`` when none can be imported.
 
     Called from inside the hook bodies only, never at import time, which is what keeps the optional
-    peer out of ``sys.modules`` until a timer is actually armed. ``ImportError`` is the only fault
-    caught: a peer that is installed but broken raises through, because that is the host project's
-    dependency problem to see rather than something Foundry should hide.
+    peer out of ``sys.modules`` until a timer is armed. ``ImportError`` is the only fault caught: a
+    peer that is installed but broken raises through, because that is the host project's own
+    dependency problem rather than something Foundry should hide.
     """
     for name in _TIMEOUT_MODULE_NAMES:
         try:
@@ -518,11 +456,9 @@ def _load_timeout_module() -> _TimeoutModule | None:
 def _configured_method(config: object) -> str | None:
     """Return the timer method the project configured on pytest-timeout, if it chose one.
 
-    pytest-timeout exposes ``--timeout-method`` and the ``timeout_method`` ini key, and a project
-    that set either expects that choice to hold. Foundry substitutes the timer strategy, not the
-    method, so an explicit ``thread`` survives. Nothing set yields ``None``, which leaves the
-    policy's default in place -- which is also the answer for a project that never mentions
-    pytest-timeout's options.
+    A project that set ``--timeout-method`` or the ``timeout_method`` ini key expects that choice to
+    hold, because Foundry substitutes the timer strategy and not the method, so an explicit
+    ``thread`` survives. Nothing set yields ``None``, which leaves the policy's default in place.
     """
     value = _config_value(config, "getoption", "timeout_method")
     if value is None:
@@ -534,9 +470,8 @@ def _config_value(config: object, accessor: str, name: str) -> object | None:
     """Read ``name`` from ``config`` through ``accessor``, and ``None`` when it is not readable.
 
     ``getoption`` raises ``ValueError`` for an option nobody registered and ``getini`` for an ini
-    name that is not declared, so a pytest-timeout that renamed its option -- or an item whose
-    config is not a pytest ``Config`` at all -- yields ``None`` and the default method instead of
-    an error.
+    name that is not declared, so a pytest-timeout that renamed its option yields ``None`` rather
+    than an error.
     """
     reader = getattr(config, accessor, None)
     if not callable(reader):
@@ -550,8 +485,8 @@ def _config_value(config: object, accessor: str, name: str) -> object | None:
 def _as_error(excinfo: object) -> BaseException | None:
     """Return the exception ``excinfo`` carries, unwrapping a pytest ``ExceptionInfo``.
 
-    A caller may hold either the exception or the info object that wraps it, and both mean "this
-    attempt failed with this". Anything else yields ``None``, so the timeout check stays total.
+    A caller may hold either the exception or the info object wrapping it; anything else yields
+    ``None``, so the timeout check stays total.
     """
     if isinstance(excinfo, BaseException):
         return excinfo
@@ -573,10 +508,9 @@ def _is_pytest_failure(error: BaseException) -> bool:
     """Return whether ``error`` is the outcome exception ``pytest.fail`` raises.
 
     The class compared against is pytest's public ``pytest.fail.Exception``, so no private pytest
-    namespace is imported. pytest is imported here rather than at module scope, and only on the
-    path that already has a matching message (AAP 0.13.1). When pytest cannot be imported at all
-    -- this module used from a script -- the marker alone decides, because outside a pytest run
-    there is no pytest failure type to compare against.
+    namespace is imported, and pytest is imported here rather than at module scope. When pytest
+    cannot be imported at all, the marker alone decides, because outside a pytest run there is no
+    pytest failure type to compare against.
     """
     try:
         from pytest import fail

@@ -105,8 +105,7 @@ class PhaseReport(Protocol):
     """The read-only part of a ``pytest.TestReport`` an outcome is derived from.
 
     ``pytest`` is imported for annotations only, so the report is described structurally: an outcome
-    is a function of the phases a report set carries, and nothing else is read. The members are
-    properties, so ``TestReport``'s attributes satisfy them and a hand-built stub does too.
+    is a function of the phases a report set carries, and nothing else is read.
     """
 
     @property
@@ -130,13 +129,10 @@ class SessionState:
     """Everything one run resolved once, shared by every hook, fixture and renderer.
 
     Frozen because the plugin holds it in stash and hands it to collaborators that must not alter
-    what another one sees. It carries the objects the run's behaviour is decided by -- artifact
-    writer, redaction engine, retry budget, quarantine registry, timeout policy -- so no consumer
-    rebuilds one from configuration and no two consumers can disagree (AAP 0.4.8).
-    ``run_id`` is also the artifact directory's name and ``artifacts_root`` is
-    ``<artifacts.dir>/<run_id>``; ``artifacts_enabled`` is false when that directory could not be
-    created; ``capture_lines`` and ``retries`` are the resolved ``logging.capture_lines`` and
-    ``execution.retries`` bounds.
+    what another one sees. It carries the objects the run's behaviour is decided by, so no consumer
+    rebuilds one from configuration (AAP 0.4.8). ``run_id`` is also the artifact directory's name
+    and ``artifacts_root`` is ``<artifacts.dir>/<run_id>``; ``artifacts_enabled`` is false when that
+    directory could not be created.
     """
 
     run_id: str
@@ -158,10 +154,7 @@ class SessionState:
 
         The first is the activation proof AAP 0.4.2 publishes: a run with no configuration at all
         prints ``foundry: profile=default``. The second names the run id and the artifact directory,
-        so an operator finds the run without opening a JSON document.
-
-        Returns:
-            Exactly two single-line strings holding no random value other than the run id.
+        and neither holds a random value other than the run id.
         """
         return (
             f"foundry: profile={self.profile}",
@@ -172,8 +165,8 @@ class SessionState:
         """Return which configuration layer supplied ``dotted_key``, for diagnostics.
 
         A delegate to ``foundry.config.models.FoundryConfig.source_of``, so ``foundry doctor`` and
-        the debug log read provenance from the run's own state instead of re-resolving the
-        configuration they describe (AAP 0.4.5). An unregistered key raises ``ConfigError``.
+        the debug log read provenance from the run's own state. An unregistered key raises
+        ``ConfigError``.
         """
         return self.config.source_of(dotted_key)
 
@@ -189,16 +182,15 @@ def create_state(
 
     The single constructor of :class:`SessionState`: the controller's bootstrap calls it, and so
     does every worker, with the controller's run id, start and invocation directory. Taking the
-    configuration as an argument is what keeps resolution single. The artifact directory is created
-    by :meth:`foundry.obs.artifacts.ArtifactWriter.ensure_run_dir`, whose one-warning failure
-    isolation is AAP 0.4.7's.
+    configuration as an argument is what keeps resolution single, and the artifact directory is
+    created by :meth:`foundry.obs.artifacts.ArtifactWriter.ensure_run_dir`, whose one-warning
+    failure isolation is AAP 0.4.7's.
 
-    ``run_id`` defaults to one minted from ``started_at``; a worker passes the controller's, which
-    is what makes one run share one artifact directory. ``invocation_dir`` defaults to the working
-    directory, and a relative ``artifacts.dir`` resolves against it rather than against a worker's
-    own directory. ``started_at`` is injected rather than read, so two runs differ only in the
-    values the determinism criterion normalises. A run id of the wrong shape raises
-    ``FoundryError``, and a budget outside its accepted range raises ``ConfigError``.
+    ``run_id`` defaults to one minted from ``started_at``, and a worker passes the controller's,
+    which is what makes one run share one artifact directory. ``invocation_dir`` defaults to the
+    working directory, and a relative ``artifacts.dir`` resolves against it. ``started_at`` is
+    injected rather than read. A run id of the wrong shape raises ``FoundryError``, and a budget
+    outside its accepted range raises ``ConfigError``.
     """
     moment = utc_now() if started_at is None else started_at
     identifier = new_run_id(now=moment) if run_id is None else _validated_run_id(run_id)
@@ -245,10 +237,8 @@ def bootstrap_session(
     ``None``, and nothing reads the working directory unless ``invocation_dir`` is ``None``.
 
     ``cli_input`` is what the command line supplied, or ``None`` for an invocation that typed no
-    ``--foundry-*`` option (AAP 0.4.7). ``invocation_dir`` is where pytest was invoked, or
-    ``None`` for the working directory. ``environ`` is the environment to read ``FOUNDRY_*`` from,
-    or ``None`` for the process environment. The first fatal configuration fault raises
-    ``ConfigError`` from ``foundry.config.merge.resolve``, and no state is built when it does.
+    ``--foundry-*`` option (AAP 0.4.7). The first fatal configuration fault raises ``ConfigError``
+    from ``foundry.config.merge.resolve``, and no state is built when it does.
     """
     directory = None if invocation_dir is None else Path(invocation_dir)
     config = resolve(cli_overrides=cli_input, environ=environ, cwd=directory)
@@ -325,11 +315,9 @@ def worker_payload(state: SessionState) -> dict[str, object]:
     """Return the payload a worker needs to reconstruct the controller's state.
 
     Every value is JSON-serialisable, because xdist ferries the payload between processes: the
-    scalars are text and numbers, and the configuration travels as the model's own JSON dump, which
-    :func:`state_from_worker_payload` validates back into a configuration.
-
-    The keys are the run id, profile, start, invocation directory, capture flag, capture bound and
-    the resolved configuration: exactly those :func:`state_from_worker_payload` reads.
+    scalars are text and numbers, and the configuration travels as the model's own JSON dump. The
+    keys are the run id, profile, start, invocation directory, capture flag, capture bound and the
+    resolved configuration: exactly those :func:`state_from_worker_payload` reads.
     """
     return {
         "run_id": state.run_id,
@@ -346,17 +334,14 @@ def state_from_worker_payload(payload: Mapping[str, object]) -> SessionState:
     """Rebuild a worker's state from the controller's payload, re-resolving nothing.
 
     The worker half of the handshake: it shares the controller's run id, start, artifact directory
-    and settings, so both sides write into one ``artifacts/<run_id>/`` tree and a record stamped
-    on a worker carries the timestamps the controller's own records carry.
+    and settings, so both sides write into one ``artifacts/<run_id>/`` tree and a record stamped on
+    a worker carries the timestamps the controller's own records carry.
 
-    A malformed payload raises rather than falling back to defaults: a worker that invented its own
-    run id would write its results into a second, unreachable run.
-
-    ``payload`` is the mapping stored in ``config.workerinput[WORKER_INPUT_KEY]``: every value is
-    JSON-serialisable, so a payload that crossed a process boundary decodes as it was sent. A
-    missing or mistyped field, a configuration dump that is not a resolved configuration, a scalar
-    mirror that disagrees with it, or a run id or timestamp of the wrong shape raises
-    ``FoundryError``.
+    ``payload`` is the mapping stored in ``config.workerinput[WORKER_INPUT_KEY]``. A malformed
+    payload raises rather than falling back to defaults: a worker that invented its own run id would
+    write its results into a second, unreachable run. A missing or mistyped field, a configuration
+    dump that is not a resolved configuration, a scalar mirror that disagrees with it, or a run id
+    or timestamp of the wrong shape raises ``FoundryError``.
     """
     if not isinstance(payload, Mapping):
         raise _payload_fault("payload", "a mapping of the controller's run state")
@@ -400,9 +385,9 @@ def assemble_payload(
     ``error`` when setup or teardown failed, ``failed`` for a failing call, else ``passed`` or
     ``skipped``, with ``xfailed``/``xpassed`` read from the call report's ``wasxfail`` marker; a
     quarantine verdict then replaces it, so the record, the report, the JUnit element and the exit
-    code agree (AAP 0.4.7). ``duration_ms`` sums the attempts' own elapsed times, artifacts carry
-    run-relative paths, and ``log_tail`` is cut to the newest ``logging.capture_lines`` lines here,
-    so a record crossing the worker boundary stays bounded (requirement I7).
+    code agree (AAP 0.4.7). ``duration_ms`` sums the attempts' own elapsed times, and ``log_tail``
+    is cut to the newest ``logging.capture_lines`` lines here, so a record crossing the worker
+    boundary stays bounded (requirement I7).
 
     Returns:
         The record, with its markers, failures and artifacts in canonical order.
@@ -435,9 +420,8 @@ def not_run_payload(state: SessionState, nodeid: str) -> TestPayload:
     Assumption A12: a worker lost mid-run leaves collected items with no report, and the document
     names them ``not_run`` instead of silently omitting them. Nothing was observed, so there are no
     failures, artifacts, markers or quarantine verdict. ``attempts`` is the record schema's floor of
-    one rather than the zero that happened: every element of the document carries at least one
-    attempt, and ``not_run`` is the field that tells a reader nothing executed. Timestamps run from
-    the run's start to now.
+    one rather than the zero that happened, and ``not_run`` is the field that tells a reader nothing
+    executed. Timestamps run from the run's start to now.
     """
     return TestPayload(
         run_id=state.run_id,
@@ -573,10 +557,9 @@ def _phase_of(when: str) -> Phase | None:
 def _outcome_from_reports(reports: Sequence[PhaseReport]) -> OutcomeValue:
     """Return the outcome one attempt's reports describe, before any quarantine verdict.
 
-    A setup failure is an ``error``, and so is a teardown failure after a passing call, because
-    both are failures outside the test body (AAP 0.4.6); a failing call is ``failed``.
-    ``wasxfail`` on the call report is what separates an xfail or xpass from an ordinary skip or
-    pass.
+    A setup failure is an ``error``, and so is a teardown failure after a passing call, because both
+    are failures outside the test body (AAP 0.4.6); a failing call is ``failed``. ``wasxfail`` on
+    the call report is what separates an xfail or xpass from an ordinary skip or pass.
     """
     by_phase = {report.when: report for report in reports}
     setup = by_phase.get("setup")

@@ -1,17 +1,14 @@
 """The quarantine registry: the marker vocabulary, the two modes and the run's exit-code rule.
 
 ``execution.quarantine_mode`` (AAP 0.4.5) selects what a marked test's failure does: ``report``, the
-default, records it as ``quarantined_failed``, lists it in the report, maps it to a JUnit
-``<skipped>`` and still exits 0, while ``strict`` counts the same record against the run; a marked
-test that passes is ``quarantine_passed`` with exit 0 and a removal note in either mode (AAP 0.4.7,
-assumption A11).
+default, records it as ``quarantined_failed``, lists it and still exits 0, while ``strict`` counts
+the same record against the run; a marked test that passes is ``quarantine_passed`` with exit 0 and
+a removal note in either mode (AAP 0.4.7, assumption A11).
 
 :meth:`QuarantineRegistry.run_failed` is the whole exit-code rule, so the terminal, the JSON
-document, the JUnit XML and the HTML report cannot disagree about whether a run passed.
-:func:`is_quarantined` takes marker *names*, never a ``pytest.Item``, because ``plugin.py`` alone
-reads pytest's marker machinery. The two fixed messages (AAP 0.4.6) are duplicated in
-``reporting/junit.py``, which this package may not import (AAP 0.4.8), and tests keep the copies
-identical. Importing defines names only and nothing here raises.
+document, the JUnit XML and the HTML report cannot disagree about whether a run passed. The two
+fixed messages (AAP 0.4.6) are duplicated in ``reporting/junit.py``, which this package may not
+import (AAP 0.4.8), and tests keep the copies identical.
 """
 
 from __future__ import annotations
@@ -40,15 +37,13 @@ __all__ = [
 MARKER_NAMESPACE_PREFIX: Final[str] = "foundry_"
 """The marker-name prefix Foundry owns, and the only prefix it may register names under.
 
-The plugin registers ``foundry_quarantine`` and nothing else, so an unregistered ``foundry_*``
-marker is a hard error under the project's ``--strict-markers`` setting rather than a silent no-op.
+An unregistered ``foundry_*`` marker is a hard error under ``--strict-markers`` rather than a no-op.
 """
 
 QUARANTINE_MARKER: Final[str] = "foundry_quarantine"
 """The marker's exact spelling (AAP 0.4.2), carried as ``@pytest.mark.foundry_quarantine``.
 
-The name is part of the published surface (AAP 0.4.9): a later release may add markers beside it,
-never rename or remove this one.
+The name is part of the published surface (AAP 0.4.9): never renamed or removed.
 """
 
 # --- The fixed message text (AAP 0.4.6) -----------------------------------
@@ -65,8 +60,8 @@ QUARANTINE_PASSED_NOTE: Final[str] = (
 )
 """The removal recommendation a ``quarantine_passed`` record carries (assumption A11).
 
-It reaches the report's Quarantined section and the JUnit ``<system-out>`` note, and it is the
-decision's ``note``; ``reporting/junit.py`` holds a copy that tests keep in step.
+It is the decision's ``note``, and it reaches the report's Quarantined section and the JUnit
+``<system-out>`` note.
 """
 
 
@@ -75,10 +70,9 @@ def is_quarantined(markers: Iterable[str]) -> bool:
 
     Args:
         markers: Marker *names* for one test, as the plugin hook module derives them from pytest's
-            marker machinery. Order is irrelevant and duplicates are harmless. A ``foundry_*``
-            marker other than :data:`QUARANTINE_MARKER` is ignored rather than treated as an error,
-            and an entry that is not a name at all is skipped: this function reports a fact about a
-            test's markers and never raises (AAP 0.1.2).
+            marker machinery. Order is irrelevant, a ``foundry_*`` marker other than
+            :data:`QUARANTINE_MARKER` is ignored, and an entry that is not a name is skipped: this
+            function reports a fact and never raises (AAP 0.1.2).
 
     Returns:
         ``True`` when :data:`QUARANTINE_MARKER` is among the names, ``False`` otherwise.
@@ -94,27 +88,13 @@ class QuarantineDecision:
     """What one test's quarantine marker does to that test's record and to the run.
 
     Frozen and slotted: the decision is taken once, stored in the item's stash and mirrored onto
-    ``user_properties`` so it survives a worker boundary, then read by the exit-code composition
-    and by every renderer. Nothing downstream may change it, and because one value produces the
-    JSON record, the JUnit element and the HTML row, those three cannot disagree about a test.
+    ``user_properties`` so it survives a worker boundary, then read by the exit-code composition and
+    by every renderer, which is why those cannot disagree about a test.
 
     Every decision this module builds keeps the published invariants: ``listed`` is ``True`` only
     for the two quarantined outcomes, ``note`` is set only for ``quarantine_passed``, ``state`` is
     ``none`` whenever ``listed`` is ``False``, and ``fails_run`` is ``True`` for a marked failure in
     ``strict`` mode and for any failure carrying no marker.
-
-    Attributes:
-        state: The verdict the record carries (AAP 0.7.2): ``none`` when quarantine decided
-            nothing, ``failed`` for a marked failure, ``passed`` for a marked test that passed.
-        outcome: The record's outcome value (AAP 0.4.6). The incoming value is kept except where
-            quarantine replaces a failure with ``quarantined_failed`` or a pass with
-            ``quarantine_passed``.
-        fails_run: Whether this record on its own makes the run fail.
-            :meth:`QuarantineRegistry.run_failed` aggregates it, and it is the only thing that
-            decides the exit code on quarantine's behalf.
-        listed: Whether the record belongs in the report's Quarantined section and in the JUnit
-            skip mapping, which is exactly the two quarantined outcomes.
-        note: The removal recommendation carried by a passing marked test, ``None`` otherwise.
     """
 
     state: QuarantineState
@@ -127,8 +107,7 @@ class QuarantineDecision:
         """Return the verdict in the wire shape a record and ``user_properties`` carry.
 
         Returns:
-            A :class:`foundry.execution.state.QuarantinePayload` holding :attr:`state`, which is the
-            ``{"state": ...}`` object ``results.json`` publishes for every record (AAP 0.4.6).
+            A :class:`foundry.execution.state.QuarantinePayload` holding :attr:`state`.
         """
         return QuarantinePayload(state=self.state)
 
@@ -136,8 +115,7 @@ class QuarantineDecision:
         """Return the whole decision as a JSON-ready mapping for diagnostics and terminal output.
 
         Distinct from :meth:`as_payload`, which is the narrow persisted form: this mapping also
-        carries the outcome, the two flags and the note, which is what the terminal summary counts
-        and what a test asserting a decision reads.
+        carries the outcome, the two flags and the note.
 
         Returns:
             The five fields in declaration order, every value a JSON scalar.
@@ -163,15 +141,11 @@ class QuarantineRegistry:
     so two items deciding on two workers share no state and a run's exit code never depends on the
     order its tests executed in (AAP 0.4.8).
 
-    Passing text rather than a member is tolerated: ``QuarantineRegistry(mode="strict")`` resolves
-    to :attr:`foundry.config.enums.QuarantineMode.STRICT`, so a value read from configuration or
-    written in a test needs no cast. A value outside the enum falls back to
-    :attr:`foundry.config.enums.QuarantineMode.REPORT`, the mode that fails the fewest runs, and
-    is never raised over: a defect in Foundry's own wiring may not change a run's exit code
+    Passing text rather than a member is tolerated, so ``QuarantineRegistry(mode="strict")``
+    resolves to :attr:`foundry.config.enums.QuarantineMode.STRICT`. A value outside the enum falls
+    back to :attr:`foundry.config.enums.QuarantineMode.REPORT`, the mode that fails the fewest runs,
+    and is never raised over: a defect in Foundry's own wiring may not change a run's exit code
     (AAP 0.1.2).
-
-    Attributes:
-        mode: The active mode, always one of :class:`foundry.config.enums.QuarantineMode`'s members.
     """
 
     mode: QuarantineMode = QuarantineMode.REPORT
@@ -182,11 +156,7 @@ class QuarantineRegistry:
 
     @property
     def is_strict(self) -> bool:
-        """Whether a marked failure counts against the run.
-
-        Returns:
-            ``True`` in ``strict`` mode, ``False`` in ``report`` mode.
-        """
+        """Whether a marked failure counts against the run."""
         return self.mode is QuarantineMode.STRICT
 
     @property
@@ -194,8 +164,8 @@ class QuarantineRegistry:
         """Return the registry's label for a terminal summary line.
 
         The session banner prints ``foundry: profile=<name>``, so the quarantine half of that line
-        is ``quarantine=report`` or ``quarantine=strict``: deterministic, free of any path or node
-        id, and identical on every worker.
+        is ``quarantine=report`` or ``quarantine=strict``: deterministic and identical on every
+        worker.
 
         Returns:
             The active mode as ``quarantine=<mode>``.
@@ -208,14 +178,11 @@ class QuarantineRegistry:
         The outcome and the flags follow one table (AAP 0.4.7). A failure carrying no marker keeps
         its outcome and fails the run; a marked failure becomes ``quarantined_failed`` and fails the
         run only in ``strict`` mode, the one difference between the modes; a marked pass becomes
-        ``quarantine_passed`` with :data:`QUARANTINE_PASSED_NOTE` and fails nothing
-        (assumption A11); a pass, skip, xfail, xpass or ``not_run`` that is no failure is listed
-        nowhere either way, because ``not_run`` is the absence of a result rather than a failure
-        (assumption A12). An outcome that already names a quarantine verdict keeps the decision it
-        records, which makes this method idempotent, and a value outside the published nine counts
-        as a failure.
-
-        The call depends on nothing but its arguments, so repeating it returns an equal decision.
+        ``quarantine_passed`` with :data:`QUARANTINE_PASSED_NOTE` and fails nothing (assumption
+        A11); a pass, skip, xfail, xpass or ``not_run`` is listed nowhere either way, because
+        ``not_run`` is the absence of a result rather than a failure (assumption A12). An outcome
+        that already names a quarantine verdict keeps the decision it records, which makes this
+        method idempotent, and a value outside the published nine counts as a failure.
         """
         if _is_quarantine_outcome(outcome):
             return _already_decided(outcome, strict=self.is_strict)
@@ -246,8 +213,8 @@ class QuarantineRegistry:
     def run_failed(self, decisions: Iterable[QuarantineDecision]) -> bool:
         """Report whether quarantine makes the run fail -- the single exit-code rule.
 
-        Each decision already carries its mode's verdict, so the run fails if and only if one has
-        ``fails_run`` (AAP 0.4.7). ``decisions`` is consumed once, so a generator is accepted.
+        The run fails if and only if one decision carries ``fails_run`` (AAP 0.4.7), and
+        ``decisions`` is consumed once, so a generator is accepted.
         """
         return any(decision.fails_run for decision in decisions)
 
@@ -274,7 +241,7 @@ def quarantined_outcomes() -> tuple[OutcomeValue, ...]:
     """Return the two outcome values a quarantine decision can produce.
 
     Exposed so the exit-code composition and the tests can name the quarantine outcomes without
-    retyping them, and so a membership test over them has one definition site.
+    retyping them.
 
     Returns:
         ``("quarantined_failed", "quarantine_passed")``, in the order AAP 0.4.6 lists them.
@@ -289,9 +256,8 @@ def _coerce_mode(mode: object) -> QuarantineMode:
     """Return ``mode`` as an enum member, falling back to ``report`` when it is not one.
 
     The text is matched the way the configuration layer matches an ``execution.quarantine_mode``
-    value -- case-insensitively, through :func:`foundry.config.enums.parse_enum` -- so a mode read
-    from an environment variable or written in a test resolves to the same member without a cast.
-    ``report`` is the fallback because it is the conservative default that fails the fewest runs.
+    value -- case-insensitively, through :func:`foundry.config.enums.parse_enum` -- and ``report``
+    is the fallback because it is the conservative default that fails the fewest runs.
     """
     if isinstance(mode, QuarantineMode):
         return mode
@@ -317,9 +283,8 @@ def _already_decided(outcome: OutcomeValue, *, strict: bool) -> QuarantineDecisi
     """Return the decision an outcome that already names a quarantine verdict keeps.
 
     Rebuilding the decision from the outcome alone is what makes
-    :meth:`QuarantineRegistry.decide` idempotent: a record decoded from the wire form and passed
-    through the registry again keeps its outcome, its listing and its note. ``strict`` decides
-    whether the marked failure fails the run.
+    :meth:`QuarantineRegistry.decide` idempotent. ``strict`` decides whether the marked failure
+    fails the run.
     """
     if outcome == "quarantine_passed":
         return QuarantineDecision(

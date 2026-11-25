@@ -1,12 +1,7 @@
 """The response object of Foundry's HTTP layer, and the record of the exchange it closes.
 
-``status_code``, ``headers``, ``text``, ``elapsed_ms``, ``source``, ``json()`` and
-``request_dump()`` are the published members, part of the compatibility promise (AAP 0.4.3,
-AAP 0.4.9). No member inspects ``status_code`` and raises: every status, 4xx and 5xx included,
-is returned. The two dumps are ``request.json`` and its additive counterpart (AAP 0.4.6),
-produced by the object that held the exchange and redacted before the mapping is built
-(AAP 0.3.2). ``source`` comes from the tag :mod:`foundry.cassette.transport` puts on a reply,
-and a reply carrying none is ``"live"``.
+Every status, 4xx and 5xx included, is returned rather than raised, and both dumps are redacted
+before their mapping is built.
 """
 
 from __future__ import annotations
@@ -150,24 +145,9 @@ class _FrozenHeaders(Mapping[str, str]):
 class _RequestSnapshot:
     """The parts of the outgoing request a dump reports, read once when the response is built.
 
-    A dump has to describe the request as it went on the wire, and the ``httpx`` request that
-    carried it may be dropped or re-used once the exchange is over, so the members a dump needs are
-    copied out at construction time. The body is kept as the raw bytes rather than as text: the
-    hash a dump reports is computed over exactly those bytes (implicit requirement I4), and the
-    redacted excerpt is derived from them per dump, so nothing redacted can ever be hashed.
-
-    Frozen, because a reported exchange that could change afterwards would let two dumps of one
-    response disagree. The query pairs are decoded and kept in the order the request carried them;
-    :meth:`FoundryResponse.request_dump` sorts them, which is the determinism AAP 0.13.1 requires.
-
-    Attributes:
-        method: The request method as ``httpx`` built it, in the casing the caller used.
-        path: The request path without its query string, which the dump reports in its own
-            ``query`` member -- the meaning the cassette document gives the same field name
-            (AAP 0.4.6).
-        query: The decoded query parameter pairs, repeats included.
-        headers: The request headers, as ``httpx`` holds them.
-        body: The raw request body, or ``b""`` when the request carried none.
+    The body is kept as the raw bytes rather than as text, because the hash a dump reports is
+    computed over exactly those bytes, and the query pairs stay in the order the request carried
+    them for :meth:`FoundryResponse.request_dump` to sort.
     """
 
     method: str
@@ -237,23 +217,12 @@ class FoundryResponse:
             ) from exc
 
     def request_dump(self) -> dict[str, object]:
-        """Return the redacted ``request.json`` payload of this exchange (AAP 0.4.6).
+        """Return the redacted ``request.json`` payload of this exchange.
 
-        Every value passes through the redaction engine before the mapping is built, so the dump
-        never holds a header, query or body value the configuration masks; a value under a name the
-        engine does not redact is free-text scrubbed as well, so a credential pasted into an
-        unlisted header or parameter is masked too (AAP 0.3.2, AAP 0.14.3). The ``body_sha256`` is
-        the exception and deliberately so: it is the digest of the *raw* bytes, which is what the
-        cassette matcher compares, and a redacted body would hash differently on every configuration
-        change (implicit requirement I4).
-
-        Returns:
-            A JSON-serialisable mapping with exactly the keys ``method`` (upper-case), ``path`` (the
-            request path without its query string, anything the engine masks scrubbed), ``query``
-            (the decoded pairs, sorted, as ``[name, value]`` lists), ``headers`` (ordered by name,
-            lower-cased, each value masked by name and scrubbed as free text), ``body_sha256`` (a
-            lower-case hex digest, or ``None`` without a body) and ``body`` (a redacted excerpt, or
-            ``None`` when empty).
+        Every value passes through the redaction engine, so no header, query or body value the
+        configuration masks survives, and the ``body_sha256`` is the digest of the raw bytes the
+        cassette matcher compares. The mapping holds exactly ``method``, ``path``, ``query``,
+        ``headers``, ``body_sha256`` and ``body``.
         """
         redactor = self._redactor
         snapshot = self._request
@@ -273,18 +242,10 @@ class FoundryResponse:
         }
 
     def response_dump(self) -> dict[str, object]:
-        """Return the redacted ``response.json`` payload of this exchange (AAP 0.4.6).
+        """Return the redacted ``response.json`` payload of this exchange.
 
-        The additive counterpart of :meth:`request_dump`, and the reason the artifact writer holds
-        no redaction rule of its own: a header value under a name the deny-lists do not carry is
-        scrubbed as free text exactly as the body is, so an echoed credential reaches neither
-        ``response.json`` nor the cassette document recorded from the same exchange (AAP 0.14.3).
-
-        Returns:
-            A JSON-serialisable mapping with exactly the keys ``status``, ``headers`` (ordered by
-            name, lower-cased, each value masked by name and scrubbed as free text), ``body`` (a
-            redacted excerpt, or ``None`` when empty) and ``source`` (``"live"`` or
-            ``"cassette"``).
+        The mapping holds exactly ``status``, ``headers``, ``body`` and ``source``, each header
+        value masked by name and scrubbed as free text.
         """
         return {
             "status": self.status_code,
@@ -349,20 +310,9 @@ def _request_body(request: httpx.Request) -> bytes:
 def _request_path(url: str) -> str:
     """Return the path of ``url`` alone, with no query string, as a request dump reports it.
 
-    A request dump reports the path and the query as two fields (AAP 0.4.6), and the query it
-    reports is decoded into the pairs of its own field, so the path it reports has to be the request
-    target without them. That is the meaning the cassette document gives its own ``path`` field,
-    which is what lets one reader of AAP 0.4.6 read the query once from either document. The
-    empty-path and leading-slash rules live in :func:`foundry.http.url.path_and_query`, so this cuts
-    that one rendering at the ``?`` that opens the query instead of restating them.
-
-    Args:
-        url: An absolute URL or a relative reference.
-
-    Returns:
-        A string starting with ``/``, such as ``"/api/orders"``: a bare origin renders as ``"/"``
-        rather than as an empty string, and a relative reference gains the ``/`` that makes it a
-        request target.
+    A request dump reports the query in its own field, so the path it reports has to be the request
+    target without one, which is the meaning the cassette document gives the same field name. The
+    empty-path and leading-slash rules stay in :func:`foundry.http.url.path_and_query`.
     """
     path, _, _ = path_and_query(url).partition("?")
     return path

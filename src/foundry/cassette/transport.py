@@ -1,12 +1,8 @@
 """The two ``httpx`` transports that make a cassette run possible: replay and record.
 
 :class:`ReplayTransport` answers from a document and holds no live transport, so replay never
-reaches ``httpcore`` (AAP 0.2.1); :class:`RecordingTransport` tags the live replies (AAP 0.4.3).
-A query parameter whose name the redaction engine redacts is carried as the marker here too,
-because the fingerprint this module builds is both what capture stores and what replay compares
-against: one rule, :func:`foundry.cassette.matcher.mask_query`, so the marker a document holds is
-the marker the arriving request carries, and the miss diagnostic renders neither the value nor the
-request's own URL (AAP 0.3.2, AAP 0.4.7).
+reaches ``httpcore`` (AAP 0.2.1), while :class:`RecordingTransport` sends live and tags the reply
+(AAP 0.4.3).
 """
 
 from __future__ import annotations
@@ -154,26 +150,12 @@ def fingerprint_from_request(
 ) -> RequestFingerprint:
     """Return the comparable part of ``request``, as a replay lookup decides a match.
 
-    The four fields are the whole matching rule (AAP 0.3.2, AAP 0.4.6): the method, the path, the
-    decoded query pairs and the body hash. The path is
-    :attr:`httpx.URL.path` alone, with no scheme, host or port, so a cassette recorded against one
-    port replays on another (assumption A7), and the query is passed through
-    :func:`~foundry.cassette.models.normalise_query` so parameter order and percent-encoding cannot
-    separate two identical requests. A parameter whose name the engine redacts then carries the
-    marker instead of its value, through :func:`~foundry.cassette.matcher.mask_query`, so the same
-    request fingerprints the same way when it is captured and when it is looked up while the value
-    itself reaches neither a document nor a miss message (AAP 0.2.1, AAP 0.3.2 "Security
-    architecture"). Headers are absent by design: a header the client sets for itself would make a
-    recording unplayable elsewhere.
-
-    Args:
-        request: The request about to be sent, as ``httpx`` built it.
-        redactor: The run's redaction engine, normally the one the store carries. Defaults to
-            :func:`~foundry.obs.redaction.default_redactor`, which holds the built-in deny-lists, so
-            a caller that passes nothing still masks every name those lists name.
-
-    Returns:
-        The fingerprint, normalised, masked, frozen and hashable, so it can key a replay cursor.
+    The four fields are the whole matching rule: the method, the path, the decoded query pairs and
+    the body hash. The path carries no scheme, host or port, so a cassette recorded against one port
+    replays on another, and the query goes through :func:`~foundry.cassette.models.normalise_query`,
+    so parameter order and percent-encoding cannot separate two identical requests. A parameter
+    whose name the engine redacts carries the marker here too, so a request fingerprints the same
+    way when it is captured and when it is looked up. Headers are absent by design.
     """
     engine = default_redactor() if redactor is None else redactor
     return RequestFingerprint(
@@ -266,19 +248,9 @@ def _tag(response: httpx.Response, source: str) -> None:
 class ReplayTransport(httpx.BaseTransport):
     """An ``httpx`` transport that answers from one cassette document and opens no socket.
 
-    The transport holds the document's interactions, its path for the miss diagnostic, the run's
-    redaction engine and a cursor per fingerprint, and nothing else: no client, no socket, no live
-    transport unless the caller supplies one for ``passthrough``. That is what makes a replay run's
-    offline behaviour a property of the design rather than of the request sequence (AAP 0.9.2,
-    AAP 0.14.3). The engine is held because the fingerprint this class looks up has to mask a query
-    value exactly as the recording did, and because the miss it reports is rendered from that
-    fingerprint (AAP 0.2.1).
-
-    The cursor is what serves a repeated request in recording order. A cassette holding two
-    interactions for one fingerprint hands them out on the first and second lookup, and a third
-    lookup replays the last one, because that is what
-    :func:`~foundry.cassette.matcher.match_interaction` answers for a count past the last match
-    (AAP 0.2.1, AAP 0.4.6).
+    It holds the interactions, the document's path, the run's redaction engine and a cursor per
+    fingerprint, and nothing else: no client and no socket unless the caller supplies a live
+    transport for ``passthrough``. The cursor is what serves a repeated request in recording order.
     """
 
     def __init__(

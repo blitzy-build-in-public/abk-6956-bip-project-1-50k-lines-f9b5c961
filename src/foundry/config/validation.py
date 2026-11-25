@@ -1,8 +1,8 @@
 """Unknown-key rejection, value coercion and error translation for the configuration layer.
 
 Each layer rejects an unknown key on its *flat* dotted payload **before** the settings model is
-built, because ``extra="forbid"`` alone reports it with no closest-key suggestion; every message
-belongs to :mod:`foundry.config.errors`, and no credential reaches one (AAP 0.4.5, AAP 0.3.2).
+built, because ``extra="forbid"`` alone reports it with no closest-key suggestion. Every message
+belongs to :mod:`foundry.config.errors`, and no credential reaches one.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ BOOL_FALSE: Final[frozenset[str]] = frozenset({"false", "0", "no", "off"})
 """The spellings an environment variable may use for ``False``."""
 
 CLI_BOOL_WORDS: Final[frozenset[str]] = frozenset({"true", "false"})
-"""The two words a ``--foundry-*`` option accepts for a boolean (AAP 0.4.4).
+"""The two words a ``--foundry-*`` option accepts for a boolean.
 
 Narrower than the environment form on purpose: ``1`` is accepted there and rejected here.
 """
@@ -103,7 +103,7 @@ def validate_unknown_keys(values: Mapping[str, object], *, layer: str, detail: s
     operator's header name and not a configuration key.
 
     Raises:
-        ConfigError: For that key, with the closest valid spelling as its hint (AAP 0.4.5).
+        ConfigError: For that key, with the closest valid spelling as its hint.
     """
     for key in values:
         if spec_for(key) is not None:
@@ -126,8 +126,8 @@ def validate_file_values(values: Mapping[str, object], *, layer: str, detail: st
     """Reject the first file-layer value whose Python type its key does not declare.
 
     TOML types a boolean, an integer and a float distinctly while the settings model runs in
-    pydantic's lax mode, so this check keeps a stray ``true`` from becoming a one-second timeout
-    (AAP 0.4.5); a whole-number float or numeric text for an ``int`` key still reaches the model.
+    pydantic's lax mode, so this check keeps a stray ``true`` from becoming a one-second timeout; a
+    whole-number float or numeric text for an ``int`` key still reaches the model.
 
     Raises:
         ConfigError: For the first such value, in sorted key order, worded like every value fault.
@@ -154,7 +154,7 @@ def parse_env_value(spec: KeySpec, raw: str, *, variable: str) -> object:
     """Turn one ``FOUNDRY_*`` variable's text into the value its key declares.
 
     A list's elements are comma separated and an empty value parses to an empty tuple; a
-    mapping-kind key has no single-variable form (AAP 0.4.5, assumption A3).
+    mapping-kind key has no single-variable form.
 
     Raises:
         ConfigError: When the key is not settable from one variable, or its text does not parse.
@@ -173,9 +173,9 @@ def parse_env_value(spec: KeySpec, raw: str, *, variable: str) -> object:
 def coerce_cli_value(spec: KeySpec, raw: object, *, option: str) -> object:
     """Turn one ``--foundry-*`` option's value into the value its key declares.
 
-    A value already of the target type passes through after a range probe and text is parsed by
-    the environment rules, except that a boolean accepts only ``true`` and ``false`` (AAP 0.4.4);
-    ``None``, an option not supplied, comes back as no override at all.
+    A value already of the target type passes through after a range probe, and text is parsed by
+    the environment rules, except that a boolean accepts only ``true`` and ``false``; ``None``,
+    an option not supplied, comes back as no override at all.
 
     Raises:
         ConfigError: When the value cannot be parsed or lies outside the accepted range.
@@ -322,7 +322,7 @@ def _without_trailing_newline(raw: str) -> str:
 def _bounds(spec: KeySpec) -> tuple[float, bool, float, bool] | None:
     """Return the numeric bounds the key's constraint text states, if it states any.
 
-    Reading the same constraint text the message quotes (AAP 0.4.9) keeps the two in agreement.
+    Reading the same constraint text the message quotes keeps the two in agreement.
     """
     text = spec.constraint.strip()
     interval = _BOUNDS_INTERVAL_RE.match(text)
@@ -338,7 +338,7 @@ def _probe_range(spec: KeySpec, value: float, *, option: str) -> None:
     """Raise when ``value`` lies outside the bounds the key's constraint states.
 
     Raises:
-        ConfigError: For a value outside the range, worded as AAP 0.4.5 works it through.
+        ConfigError: For a value outside the range, worded like every value fault.
     """
     bounds = _bounds(spec)
     if bounds is None:
@@ -362,7 +362,7 @@ def translate_validation_error(
     """Return the :class:`ConfigError` describing the first failure in ``exc``.
 
     The settings model reports one entry per rejected field in declaration order, so the first is
-    the first key a person should fix, in the wording AAP 0.4.5 documents rather than pydantic's.
+    the first key a person should fix, in Foundry's wording rather than pydantic's.
     """
     label = layer if layer is not None else _UNATTRIBUTED_LAYER
     reported = exc.errors()
@@ -433,8 +433,8 @@ def _is_strategy_key(key: str) -> bool:
 def _render_value(value: object) -> str:
     """Render a rejected value for a message without ever printing a table or a list.
 
-    Only a non-secret scalar is rendered: a table or a list is described rather than printed, so
-    no entry of it reaches a terminal, a CI log or a report (implicit requirement I9).
+    Only a non-secret scalar is rendered: a table or a list is described rather than printed, so no
+    entry of it reaches a terminal, a CI log or a report.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -457,8 +457,8 @@ def _redacted_text(value: str) -> str:
     """Return ``value`` as the single redaction engine renders it.
 
     A rejected value reaches stderr at exit 2 and therefore a CI log, so it goes through
-    :mod:`foundry.obs.redaction`, the only engine (AAP 0.3.2), whose ``Redactor.text`` is total;
-    the import stays inside the function to keep the engine off the plugin's startup path.
+    :mod:`foundry.obs.redaction`, the only engine, whose ``Redactor.text`` is total; the import
+    stays inside the function to keep the engine off the plugin's startup path.
     """
     from foundry.obs.redaction import default_redactor
 

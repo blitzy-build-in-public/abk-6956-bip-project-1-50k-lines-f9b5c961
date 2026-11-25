@@ -1,65 +1,34 @@
 """The public fixture surface of ``foundry``: twelve fixtures and the six types they return.
 
-``pytest-foundry`` publishes these names through its ``pytest11`` entry point, so an installed
-suite requests a fixture by name and imports nothing from Foundry itself (AAP 0.4.2). The names,
-their scopes and their return types are the contract of AAP 0.4.3, and AAP 0.4.9 makes them
-additive only: a later release may add a fixture or a facade type, and none of these may be renamed
-or removed.
-
-========================  ==========  ============================================================
-Fixture                   Scope       Returns
-========================  ==========  ============================================================
-``foundry_config``        session     ``FoundryConfig`` (resolved keys and their sources)
-``foundry_profile``       session     ``str`` (``default``, ``local``, ``ci``, ``staging``)
-``foundry_run_id``        session     ``str`` (the ``YYYYmmddTHHMMSS-<6 hex>`` run id)
-``foundry_artifacts``     session     ``FoundryArtifacts`` (``dir_for``, ``write``, ``manifest``)
-``foundry_http``          function    ``FoundrySession`` (unauthenticated; retries from config)
-``foundry_api``           function    ``FoundrySession`` (base URL, auth, headers, cassettes)
-``foundry_data``          function    ``FoundryDataLoader`` (``cases``, ``matrix``)
-``foundry_db``            function    ``sqlalchemy.orm.Session`` (in-memory sqlite, rolled back)
-``foundry_factory``       function    ``FoundryFactory`` (Faker seeded from run id and node id)
-``foundry_clock``         function    ``FoundryClock`` (frozen; ``now``, ``advance``, ``set``)
-``foundry_log_capture``   function    ``FoundryLogCapture`` (``tail`` over a bounded ring)
-``foundry_poll``          function    ``FoundryPoll`` (``eventually`` with an injected sleep)
-========================  ==========  ============================================================
+``pytest-foundry`` publishes these names through its ``pytest11`` entry point, so an installed suite
+requests a fixture by name and imports nothing from Foundry itself. ``foundry.fixtures.plugin``
+lists each fixture with the scope and return type published for it and registers the family with
+pytest; the names are additive only, so a later release may add a fixture or a facade type and none
+of these may be renamed or removed.
 
 The six facade types are re-exported beside the fixtures, so a test annotates its parameter without
-reaching into the capability package that defines it:
-
-* ``FoundryArtifacts`` -- the artifact writer ``foundry_artifacts`` returns: ``dir_for``, ``write``
-  and ``manifest`` over ``artifacts/<run_id>/``.
-* ``FoundryDataLoader`` -- the loader ``foundry_data`` returns: ``cases`` and ``matrix``.
-* ``FoundryFactory`` -- the Faker-backed factory ``foundry_factory`` returns.
-* ``FoundryClock`` -- the frozen clock ``foundry_clock`` returns: ``now``, ``advance``, ``set``.
-* ``FoundryLogCapture`` -- the bounded log ring ``foundry_log_capture`` returns: ``tail`` and
-  ``records``.
-* ``FoundryPoll`` -- the poller ``foundry_poll`` returns: ``eventually``.
-
-Each is defined in the module named beside its fixture above, as a protocol or a frozen dataclass,
+reaching into the capability package that defines it: ``FoundryArtifacts``,
+``FoundryDataLoader``, ``FoundryFactory``, ``FoundryClock``, ``FoundryLogCapture`` and
+``FoundryPoll``. Each is a protocol or a frozen dataclass in the module named beside its fixture,
 and the object its fixture returns satisfies it structurally.
 
 **Registration is not this module's job.** ``foundry.fixtures.plugin`` registers the twelve fixtures
-with pytest during ``pytest_configure`` (AAP 0.4.2), and this barrel deliberately does not import
-it: a package is initialised before any of its submodules finishes importing, so an import of the
-registration module from here would be the package's one cycle. Importing this module defines names
-only -- no ``pytest_plugins`` declaration, no ``pytest.fixture`` call, no I/O, no logger
-configuration and no module state -- so ``import foundry.fixtures`` never changes a session.
+with pytest during ``pytest_configure``, and this barrel deliberately does not import it: a package
+is initialised before any of its submodules finishes importing, so that import would be the
+package's one cycle. Importing this module defines names only -- no ``pytest_plugins`` declaration,
+no ``pytest.fixture`` call, no I/O, no logger configuration and no module state.
 
 **Import form.** Every name below is imported as ``X as X``: that spelling is the explicit
 re-export ``mypy --strict``'s no-implicit-reexport requires, and with this isort configuration a
 single block of aliased names is reported as unsorted (I001), so each name keeps its own statement.
 
-**Import cost.** The re-exports are eager on purpose. The nine sibling modules defer every
-third-party import (``httpx``, ``SQLAlchemy``, ``Faker``, ``pydantic``, ``jsonschema``) into the
-fixture bodies that need them, so the barrel adds no distribution to the ``pytest_configure`` path,
-which is where the registration module pulls the whole package in (AAP 0.14.2, implicit requirement
-I5).
-
-**Layering** (AAP 0.4.8). The nine fixture modules below are this file's only Foundry imports. The
-package may import :mod:`foundry.core`, :mod:`foundry.obs`, the capability rung beneath it and
-:mod:`foundry.config` -- the single upward edge AAP 0.4.8 grants it, exercised inside
-``foundry.fixtures.config`` rather than here -- and never :mod:`foundry.execution`,
-:mod:`foundry.reporting`, :mod:`foundry.cli` or :mod:`foundry.plugin`.
+**Import cost and layering.** The re-exports are eager on purpose: the nine sibling modules defer
+every third-party import (``httpx``, ``SQLAlchemy``, ``Faker``, ``pydantic``, ``jsonschema``) into
+the fixture bodies that need them, so the barrel adds no distribution to the
+``pytest_configure`` path. Those nine modules are this file's only Foundry imports;
+``foundry.config``, the single upward edge this package is granted, is exercised inside
+``foundry.fixtures.config`` rather than here, and :mod:`foundry.execution`,
+:mod:`foundry.reporting`, :mod:`foundry.cli` and :mod:`foundry.plugin` stay unreachable.
 """
 
 from __future__ import annotations

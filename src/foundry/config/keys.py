@@ -1,8 +1,8 @@
 """The immutable registry of Foundry's configuration keys.
 
 Every key is described once -- dotted name, value shape, accepted values, option spelling and alias
-(AAP 0.4.4, AAP 0.4.5) -- and ``plugin``, ``cli_layer`` and ``validation`` derive from it. A pure
-table of standard library and :mod:`foundry.config.enums` only, with no default value here.
+-- and ``plugin``, ``cli_layer`` and ``validation`` derive from it. A pure table over the standard
+library and :mod:`foundry.config.enums`, with no default value here.
 """
 
 from __future__ import annotations
@@ -58,8 +58,7 @@ ENV_SETTABLE_KINDS: Final[frozenset[KeyKind]] = frozenset(
 )
 """Kinds :mod:`foundry.config.env` can read from a ``FOUNDRY_*`` variable.
 
-:data:`SCALAR_KINDS` plus ``list``, comma separated (assumption A3); ``mapping`` is excluded
-because a header table cannot be expressed as one variable.
+:data:`SCALAR_KINDS` plus ``list``, comma separated; ``mapping`` has no single-variable form.
 """
 
 GENERIC_OPTION_PREFIX: Final[str] = "--foundry-"
@@ -81,9 +80,8 @@ class KeySpec:
         kind: The shape of this key's value.
         constraint: The accepted values or range, quoted by :mod:`foundry.config.validation`.
         aliases: Named option spellings besides the generic one.
-        enum_type: The enumeration an ``enum`` key accepts, or the one a ``list`` key parses its
-            elements with; ``None`` for every other key.
-        nullable: Whether ``None`` is accepted -- ``http.base_url`` and the five credential names.
+        enum_type: The enumeration an ``enum`` key accepts, or that a ``list`` key parses with.
+        nullable: Whether ``None`` is accepted -- ``http.base_url`` and the credential names.
     """
 
     dotted: str
@@ -96,7 +94,7 @@ class KeySpec:
 
 # AAP 0.4.5 table order: profile, http.*, artifacts.*, reporting.*, data.*, cassette.*,
 # execution.*, secrets.redact_keys, logging.*. Adding, renaming or removing an entry breaks a
-# published surface (AAP 0.4.9); --foundry-json-report and --foundry-config are not keys here.
+# published surface; --foundry-json-report and --foundry-config are not keys here.
 KEY_SPECS: tuple[KeySpec, ...] = (
     KeySpec(
         dotted="profile",
@@ -211,11 +209,7 @@ KEY_SPECS: tuple[KeySpec, ...] = (
 KEY_REGISTRY: Mapping[str, KeySpec] = types.MappingProxyType(
     {spec.dotted: spec for spec in KEY_SPECS}
 )
-"""Every key by its dotted spelling, in a read-only view of the table.
-
-The proxy keeps :data:`KEY_SPECS` and this index mutually consistent without exposing a dict a
-caller could mutate.
-"""
+"""Every key by its dotted spelling, in a read-only view of :data:`KEY_SPECS`."""
 
 _ENV_TO_KEY: Mapping[str, str] = types.MappingProxyType(
     {(ENV_PREFIX + spec.dotted.replace(".", "__")).upper(): spec.dotted for spec in KEY_SPECS}
@@ -239,9 +233,8 @@ def spec_for(dotted: str) -> KeySpec | None:
 def closest_key(dotted: str) -> str | None:
     """Return the registered key closest to a misspelt one, or ``None`` below a similarity of 0.6.
 
-    The single implementation of the suggestion AAP 0.4.5 requires an unknown-key error to carry.
-    ``Http.Timeout`` is suggested for ``http.timeout`` while ``HTTP.TIMEOUT`` scores too low: the
-    case-insensitive reading of a variable name is :func:`key_from_env_variable`'s job.
+    The single implementation of the suggestion an unknown-key error carries. Reading a variable
+    name case-insensitively is :func:`key_from_env_variable`'s job.
     """
     matches = difflib.get_close_matches(dotted, leaf_keys(), n=1, cutoff=0.6)
     return matches[0] if matches else None
@@ -250,8 +243,7 @@ def closest_key(dotted: str) -> str | None:
 def cli_option(dotted: str) -> str:
     """Return the generic command-line spelling of ``dotted``, such as ``--foundry-http.timeout``.
 
-    Derived for every key, not only the registered ones, so a caller can quote the option an
-    operator would have had to write.
+    Derived for every key, not only the registered ones.
     """
     return GENERIC_OPTION_PREFIX + dotted
 
@@ -259,9 +251,8 @@ def cli_option(dotted: str) -> str:
 def option_dest(dotted: str) -> str:
     """Return the pytest ``dest`` the generic option for ``dotted`` stores to.
 
-    A cross-folder contract: :mod:`foundry.plugin` registers each option with
-    ``dest=option_dest(dotted)`` and :mod:`foundry.config.cli_layer` reads it back with
-    ``config.getoption(option_dest(dotted), default=None)``, so the two cannot disagree.
+    A cross-folder contract: :mod:`foundry.plugin` registers each option with this ``dest`` and
+    :mod:`foundry.config.cli_layer` reads it back with the same call, so the two cannot disagree.
     """
     return _OPTION_DEST_PREFIX + dotted.replace(".", "__")
 
@@ -290,9 +281,8 @@ def key_alias_options(dotted: str) -> tuple[str, ...]:
     Empty for a key with no alias and for an unregistered key.
 
     Note:
-        ``profile``'s alias is the generic spelling itself, because the key has no dotted name to
-        lengthen it. A registrar that hands both the generic option and the aliases to one
-        ``parser.addoption`` call must therefore drop the duplicate.
+        ``profile``'s alias is the generic spelling itself, having no dotted name to lengthen it,
+        so a registrar handing both to one ``parser.addoption`` call must drop the duplicate.
     """
     spec = KEY_REGISTRY.get(dotted)
     return spec.aliases if spec is not None else ()
@@ -307,8 +297,7 @@ def constraint_for(dotted: str) -> str | None:
 def env_variable(dotted: str) -> str:
     """Return the canonical environment variable that sets ``dotted``.
 
-    The upper-cased name with ``__`` in place of each ``.``, for example
-    ``FOUNDRY_HTTP__RETRIES__RETRY_ON``; names are read case-insensitively (AAP 0.4.5).
+    The upper-cased name with ``__`` in place of each ``.``; names are read case-insensitively.
     """
     return (ENV_PREFIX + dotted.replace(".", "__")).upper()
 
@@ -316,24 +305,17 @@ def env_variable(dotted: str) -> str:
 def key_from_env_variable(variable: str) -> str | None:
     """Return the key a ``FOUNDRY_*`` variable sets, whichever case it arrives in.
 
-    ``None`` when the name maps to no registered key, ``FOUNDRY_CONFIG`` among them; returning
-    ``None`` rather than raising lets :mod:`foundry.config.validation` name the variable in its
-    unknown-key error.
+    ``None`` when the name maps to no registered key, ``FOUNDRY_CONFIG`` among them, so
+    :mod:`foundry.config.validation` can name the variable in its unknown-key error.
     """
     return _ENV_TO_KEY.get(variable.strip().upper())
 
 
 def is_scalar(spec: KeySpec) -> bool:
-    """Report whether ``spec`` can be carried by one ``--foundry-*`` option (AAP 0.4.4).
-
-    ``False`` for the list and mapping kinds.
-    """
+    """Report whether ``spec`` can be carried by one ``--foundry-*`` option, so never a list."""
     return spec.kind in SCALAR_KINDS
 
 
 def is_env_settable(spec: KeySpec) -> bool:
-    """Report whether ``spec`` can be read from a ``FOUNDRY_*`` variable.
-
-    ``False`` only for ``mapping``, whose header table has no single-variable form.
-    """
+    """Report whether ``spec`` can be read from a ``FOUNDRY_*`` variable, so never a mapping."""
     return spec.kind in ENV_SETTABLE_KINDS

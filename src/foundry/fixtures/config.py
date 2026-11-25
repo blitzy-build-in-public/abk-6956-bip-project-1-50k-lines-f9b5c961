@@ -1,39 +1,30 @@
 """The ``foundry_config`` and ``foundry_profile`` fixtures: the resolved configuration of a run.
 
-Two of Foundry's twelve public fixtures (AAP 0.4.3), both session scoped, because a session has
-exactly one configuration and one profile: ``foundry_config`` returns a
-:class:`foundry.config.models.FoundryConfig` -- the settings of AAP 0.4.5 resolved through the four
-layers, carrying one :class:`foundry.config.sources.ConfigSource` per key -- and ``foundry_profile``
-returns the active profile name as a plain ``str``: ``default``, ``local``, ``ci`` or ``staging``.
+Both are session scoped, because a session has exactly one configuration and one profile:
+``foundry_config`` returns a :class:`foundry.config.models.FoundryConfig` -- the settings resolved
+through the four layers, carrying one :class:`foundry.config.sources.ConfigSource` per key -- and
+``foundry_profile`` returns the active profile name as a plain ``str``: ``default``, ``local``,
+``ci`` or ``staging``.
 
-**The fixture resolves the configuration itself.** AAP 0.4.8 puts a session's state behind the typed
-``pytest.StashKey`` values of :mod:`foundry.execution.state`, which ``foundry.fixtures`` may not
-import, so the fixture calls :func:`foundry.config.merge.resolve` with the two inputs the plugin's
-own bootstrap passes: the ``--foundry-*`` overrides, read back through
+**The fixture resolves the configuration itself.** ``foundry.fixtures`` may not import the plugin's
+session stash, so the fixture calls :func:`foundry.config.merge.resolve` with the two inputs the
+plugin's own bootstrap passes: the ``--foundry-*`` overrides, read back through
 :func:`foundry.config.cli_layer.collect_from_pytest`, and the invocation directory file discovery is
 anchored to. Resolution is the one place the four layers are applied, so the fixture and the plugin
-cannot disagree about a value, and pytest's session-scoped caching means the work is paid for once.
-``environ`` is deliberately not passed: the environment layer belongs to :mod:`foundry.config.env`,
-which AAP 0.4.8 makes, with :mod:`foundry.http.auth`, the only reader of the process environment.
+cannot disagree about a value. ``environ`` is deliberately not passed: the environment layer belongs
+to :mod:`foundry.config.env`, the only reader of the process environment.
 
-**Overridable by name.** ``foundry_config`` is a plain ``@pytest.fixture(scope="session")`` function
-returning the plain resolved model, so a project replaces it with pytest's documented same-name
-override and shadows the value through ``model_copy(update=...)``; that is how
-``examples/checkout/conftest.py`` supplies an ephemeral ``http.base_url`` and points
-``data.dir``/``cassette.dir`` at the example's directories (AAP 0.8.1, assumption A9).
+**Overridable by name.** ``foundry_config`` is a plain session-scoped fixture returning the plain
+resolved model, so a project replaces it with pytest's documented same-name override and shadows the
+value through ``model_copy(update=...)``, which is how ``examples/checkout/conftest.py`` supplies an
+ephemeral ``http.base_url`` and points ``data.dir``/``cassette.dir`` at the example's directories.
 ``foundry_profile`` follows a shadowed value because it reads the configuration.
 
-**Import discipline and layering** (AAP 0.4.8, AAP 0.14.2). ``foundry.plugin`` imports this module
-during ``pytest_configure`` inside the 150 ms budget, so module scope imports ``pytest``,
-:mod:`pathlib` and :mod:`typing` only: :mod:`foundry.config`, which pulls in ``pydantic``, is
-imported inside the fixture body and :class:`FoundryConfig` under ``TYPE_CHECKING``. This module
-uses the single permitted upward edge of the capability rung -- ``foundry.fixtures`` may import
-``foundry.config`` -- and imports no ``foundry.execution``, ``foundry.reporting``, ``foundry.cli``
-or ``foundry.plugin``, which is what ``tests/unit/test_layering.py`` parses every import for.
-
-**No secret and no clock here** (AAP 0.14.3). The fixture returns the configuration as resolved and
-adds no sink: a configuration holds the *names* of the environment variables that carry credentials,
-never their values, and nothing in this module reads a clock. Importing it defines names only.
+**Import discipline.** ``foundry.plugin`` imports this module during ``pytest_configure`` inside the
+150 ms budget, so module scope imports ``pytest``, :mod:`pathlib` and :mod:`typing` only:
+:mod:`foundry.config`, which pulls in ``pydantic``, is imported inside the fixture body. A
+configuration holds the *names* of the environment variables that carry credentials, never their
+values, and nothing here reads a clock.
 """
 
 from __future__ import annotations
@@ -53,15 +44,13 @@ __all__ = ["foundry_config", "foundry_profile"]
 def _invocation_dir(config: pytest.Config) -> Path:
     """Return the directory a run was invoked from, which file discovery resolves against.
 
-    AAP 0.4.5 anchors two of its five discovery steps to the invocation directory, so the value
-    handed to :func:`foundry.config.merge.resolve` as ``cwd`` has to be the directory the operator
-    typed the command in, not the root directory pytest computed from the arguments and not a test
-    file's directory.
+    Two of the five discovery steps are anchored to the invocation directory, so the value handed to
+    :func:`foundry.config.merge.resolve` as ``cwd`` is the directory the operator typed the command
+    in, not the root directory pytest computed from the arguments.
 
     The record is read as text before it becomes a path because ``Path("")`` is ``Path(".")``: an
     empty record would normalise itself into a usable "current directory" and hide the case this
-    fallback exists for. A blank record therefore falls back to ``rootpath``, which pytest always
-    populates; a record already normalised to ``.`` is taken at its word.
+    fallback exists for, so a blank record falls back to ``rootpath``.
 
     Returns:
         The invocation directory, or ``config.rootpath`` when the recorded directory is blank.
@@ -76,28 +65,25 @@ def _invocation_dir(config: pytest.Config) -> Path:
 def foundry_config(request: pytest.FixtureRequest) -> FoundryConfig:
     """Return the configuration this session resolved, with the source of every value.
 
-    Session scoped (AAP 0.4.3): one resolution serves the whole run, and every test, every fixture
-    that depends on it and the plugin's own report read the same immutable instance.
+    Session scoped: one resolution serves the whole run, and every test, every fixture that depends
+    on it and the plugin's own report read the same immutable instance.
 
-    The four layers of AAP 0.4.5 are applied in their fixed order -- the settings field defaults,
-    then the configuration file with the selected ``[profiles.<name>]`` table over it, then the
-    ``FOUNDRY_*`` environment, then the ``--foundry-*`` command line -- so a value stated in more
-    than one place resolves to the highest layer that stated it. Per-key provenance is available
-    through :meth:`foundry.config.models.FoundryConfig.source_of`, which names the layer
-    (``default``, ``file``, ``profile:<name>``, ``env`` or ``cli``) and what inside it supplied the
-    value, which makes the precedence inspectable from a test.
+    The four layers are applied in their fixed order -- the settings field defaults, then the
+    configuration file with the selected ``[profiles.<name>]`` table over it, then the ``FOUNDRY_*``
+    environment, then the ``--foundry-*`` command line -- so a value stated in more than one place
+    resolves to the highest layer that stated it. Per-key provenance is available through
+    :meth:`foundry.config.models.FoundryConfig.source_of`, which names the layer (``default``,
+    ``file``, ``profile:<name>``, ``env`` or ``cli``) and what inside it supplied the value.
 
     A configuration fault is not absorbed here: :class:`foundry.core.exceptions.ConfigError`
     propagates unchanged, so the test that requested the fixture reports why the run cannot be
-    configured. The plugin terminates a session it cannot configure before collection
-    (assumption A4, exit code 2); this fixture raises at the point of use for the same inputs.
+    configured, just as the plugin terminates a session it cannot configure before collection.
 
     Returns:
-        The resolved, frozen :class:`foundry.config.models.FoundryConfig` holding all 28 published
-        keys plus one :class:`foundry.config.sources.ConfigSource` per key.
+        The resolved, frozen :class:`foundry.config.models.FoundryConfig`.
 
     Raises:
-        foundry.core.exceptions.ConfigError: For the first fault AAP 0.4.7 makes fatal, raised by
+        foundry.core.exceptions.ConfigError: For the first fatal fault, raised by
             :func:`foundry.config.merge.resolve` and propagated unchanged: an explicitly named
             configuration file that is absent, an unknown key in any layer, an unparseable
             environment value, a value outside its accepted range, a profile outside the four names,
@@ -119,17 +105,14 @@ def foundry_config(request: pytest.FixtureRequest) -> FoundryConfig:
 def foundry_profile(foundry_config: FoundryConfig) -> str:
     """Return the name of the active profile as a plain string.
 
-    Session scoped (AAP 0.4.3), and always one of ``default``, ``local``, ``ci`` or ``staging``: the
-    value is the ``profile`` key of the resolved configuration, which the file layer's
-    ``[profiles.<name>]`` selection, a ``FOUNDRY_PROFILE`` variable or ``--foundry-profile`` may
-    have set, with the environment and the command line outranking the file (AAP 0.4.5).
+    Session scoped, and always one of ``default``, ``local``, ``ci`` or ``staging``: the value is
+    the ``profile`` key of the resolved configuration, which the file layer's ``[profiles.<name>]``
+    selection, a ``FOUNDRY_PROFILE`` variable or ``--foundry-profile`` may have set, with the
+    environment and the command line outranking the file.
 
     A string rather than the :class:`foundry.config.enums.ProfileName` member, because this is the
     fixture a suite asserts and interpolates with: it is the name the terminal summary prints as
-    ``foundry: profile=<name>`` (AAP 0.7.4), the name recorded in every result record and manifest,
-    and the name a table-driven test compares against a fixture file. A ``StrEnum`` member formats
-    as its value, so the conversion costs nothing and the fixture keeps answering with a string
-    after a project shadows ``foundry_config`` with a ``model_copy`` that installs a plain string.
+    ``foundry: profile=<name>`` and the name recorded in every result record and manifest.
 
     Returns:
         The active profile name, for example ``"ci"``.

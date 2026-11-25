@@ -1,8 +1,8 @@
 """The ``foundry.config`` package: the four-layer configuration engine of AAP 0.4.5.
 
-Each key carries the :class:`~foundry.config.sources.ConfigSource` naming the layer that won it
-(AAP 0.4.3), and the nine published names are re-exported lazily through :func:`__getattr__` so that
-no ``pydantic`` import lands on the ``pytest_addoption`` path (AAP 0.14.2).
+Each key carries the :class:`~foundry.config.sources.ConfigSource` naming the layer that won it, and
+the nine published names re-export lazily through :func:`__getattr__`, which keeps ``pydantic`` off
+the ``pytest_addoption`` path.
 """
 
 from __future__ import annotations
@@ -39,19 +39,18 @@ _LAZY_IMPORTS: Final[Mapping[str, str]] = MappingProxyType(
 )
 """Which module defines each name of :data:`__all__`, for :func:`__getattr__` to import.
 
-An immutable intent record rather than module state: it is never written after import, its keys are
-exactly the published names, and it is read-only through :class:`~types.MappingProxyType`, which
-keeps this module free of the mutable module-level state AAP 0.4.8 prohibits.
+Its keys are exactly the published names and it is read-only, so this module holds no mutable
+module-level state and keeps the promise AAP 0.4.8 makes about the package.
 """
 
 
 def __getattr__(name: str) -> object:
     """Resolve one published name on first access, importing its module at that point.
 
-    A name outside :data:`_LAZY_IMPORTS` raises the ``AttributeError`` PEP 562 expects, which is
-    what lets a ``from foundry.config import errors`` statement fall through to importing that
-    submodule. Nothing is written back into the module globals, so the module stays free of
-    post-import mutation and a second access costs one dictionary lookup.
+    A name outside :data:`_LAZY_IMPORTS` raises the ``AttributeError`` PEP 562 expects, so a
+    ``from foundry.config import errors`` statement falls through to importing that submodule.
+    Nothing is written back into the module globals, so a second access costs one dictionary
+    lookup.
     """
     module_name = _LAZY_IMPORTS.get(name)
     if module_name is None:
@@ -65,9 +64,8 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:
-    # The runtime resolves these names through __getattr__, which a static checker cannot follow,
-    # so the same nine names are bound here under their real types. The ``as``-form is the
-    # explicit re-export spelling, which keeps them from reading as unused imports.
+    # A static checker cannot follow __getattr__, so the same nine names are bound here under their
+    # real types. The ``as``-form is the explicit re-export spelling, which marks them as used.
     from foundry.config.enums import AuthStrategy as AuthStrategy
     from foundry.config.enums import CassetteMode as CassetteMode
     from foundry.config.enums import LogLevel as LogLevel

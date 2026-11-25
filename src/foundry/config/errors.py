@@ -1,8 +1,8 @@
 """The single construction site for every configuration error Foundry reports.
 
 A fault reaches a person as one message and, when a next step is worth stating, one hint line
-beneath it (AAP 0.7.4). The layers call these builders rather than compose text, so each wording
-is stated once (AAP 0.4.5, AAP 0.4.7), and no builder ever receives a resolved credential (I9).
+beneath it. The layers call these builders rather than compose text, so each wording is stated
+once, and no builder ever receives a resolved credential.
 """
 
 from __future__ import annotations
@@ -61,9 +61,9 @@ __all__: Final[tuple[str, ...]] = (
 )
 
 
-# The four resolution layers (AAP 0.4.5) plus the prefix that labels a profile table.
-# A ``ConfigSource`` layer and a message layer are spelled by these same values, so the
-# line ``foundry config show`` prints and the line an error prints name a layer alike.
+# The four resolution layers plus the prefix that labels a profile table. A ``ConfigSource``
+# layer and a message layer are spelled by these same values, so a row and an error name a layer
+# alike.
 LAYER_DEFAULT: Final[str] = "default"
 LAYER_FILE: Final[str] = "file"
 LAYER_ENV: Final[str] = "env"
@@ -116,8 +116,8 @@ UNKNOWN_KEY_HINT_TEMPLATE: Final[str] = "did you mean '{closest}'?"
 UNKNOWN_VARIABLE_TEMPLATE: Final[str] = "unknown configuration variable: {variable}"
 """A ``FOUNDRY_*`` name that spells no key at all, such as the bare ``FOUNDRY_``.
 
-AAP 0.4.5 encodes a key as the ``FOUNDRY_`` prefix followed by its segments, so such a name
-leaves :func:`unknown_key` an empty key; the variable itself is named instead.
+AAP 0.4.5 encodes a key as the prefix followed by its segments, so such a name leaves
+:func:`unknown_key` an empty key and the variable itself is named instead.
 """
 
 RANGE_TEMPLATE: Final[str] = RANGE_FAULT_TEMPLATE
@@ -129,10 +129,9 @@ BAD_ENV_TEMPLATE: Final[str] = (
 """AAP 0.4.5: an unparseable variable names the variable and the expected type."""
 
 BAD_OPTION_TEMPLATE: Final[str] = "invalid value for option {option}: expected {expected}"
-"""AAP 0.4.4: an unreadable ``--foundry-*`` value names the option spelling it was given with.
+"""An unreadable ``--foundry-*`` value names the option spelling it was given with.
 
-The environment wording cannot serve here: an operator who mistyped
-``--foundry-data.schema_strict`` has a command line to correct, not a variable.
+The environment wording cannot serve here: the operator has a command line to correct.
 """
 
 ENV_NOT_SUPPORTED_TEMPLATE: Final[str] = (
@@ -181,7 +180,7 @@ def _is_strategy_key(key: str) -> bool:
 
 
 def missing_file(path: Path) -> ConfigError:
-    """Build the error for an explicitly named configuration file that is absent (AAP 0.4.7).
+    """Build the error for an explicitly named configuration file that is absent.
 
     The message is exactly ``config file not found: <path>`` and there is no hint.
     """
@@ -214,7 +213,7 @@ def malformed_toml(
 ) -> ConfigError:
     """Build the error for a configuration file that is not valid TOML.
 
-    AAP 0.4.5 requires a located error, so the 1-based line and column are appended to the message.
+    A located error is required, so the 1-based line and column are appended to the message.
     """
     location = ""
     if line is not None:
@@ -233,7 +232,7 @@ def malformed_toml(
 def unknown_key(key: str, *, closest: str | None, layer: str, detail: str) -> ConfigError:
     """Build the error for a key that is not in the configuration registry.
 
-    Rejection applies to every layer (AAP 0.4.5), and the closest valid spelling is the hint.
+    Rejection applies to every layer, and the closest valid spelling is the hint.
     """
     hint_parts: list[str] = []
     if closest is not None:
@@ -250,18 +249,15 @@ def unknown_key(key: str, *, closest: str | None, layer: str, detail: str) -> Co
 def unknown_variable(variable: str) -> ConfigError:
     """Build the error for an environment variable whose name spells no key at all.
 
-    AAP 0.4.5 encodes a key as the ``FOUNDRY_`` prefix followed by its ``__``-joined
-    segments, so the bare ``FOUNDRY_`` leaves :func:`unknown_key` an empty key to report and
-    a message ending after its colon. This builder names the variable the environment held,
-    and its hint states the encoding, because an empty key-part gives ``difflib`` nothing to
-    match. Only the name is taken, so no credential can reach this message (requirement I9).
+    The bare ``FOUNDRY_`` leaves :func:`unknown_key` an empty key to report, so this builder names
+    the variable the environment held and states the encoding in its hint, an empty key-part giving
+    ``difflib`` nothing to match. Only the name is taken, so no credential can reach this message.
 
     Args:
         variable: The variable's name as the environment held it, for example ``FOUNDRY_``.
 
     Returns:
-        A :class:`ConfigError` carrying the ``env`` layer and no key, because none was
-        spelled.
+        A :class:`ConfigError` carrying the ``env`` layer and no key, because none was spelled.
     """
     return ConfigError(
         UNKNOWN_VARIABLE_TEMPLATE.format(variable=variable),
@@ -294,7 +290,7 @@ def range_violation(
 def bad_env_value(variable: str, expected: str, *, key: str) -> ConfigError:
     """Build the error for an environment variable the environment layer cannot parse.
 
-    AAP 0.4.5 requires the variable's spelling and the expected type in the message.
+    The message carries the variable's spelling and the expected type.
     """
     return ConfigError(
         BAD_ENV_TEMPLATE.format(variable=variable, expected=expected),
@@ -308,7 +304,7 @@ def bad_env_value(variable: str, expected: str, *, key: str) -> ConfigError:
 def bad_option_value(option: str, expected: str, *, key: str) -> ConfigError:
     """Build the error for a ``--foundry-*`` override whose value cannot be read.
 
-    AAP 0.4.5 reports the value against the option spelling, never an environment variable.
+    The value is reported against the option spelling, never an environment variable.
     """
     return ConfigError(
         BAD_OPTION_TEMPLATE.format(option=option, expected=expected),
@@ -335,19 +331,16 @@ def env_key_unsupported(variable: str, key: str) -> ConfigError:
 def option_not_settable(option: str, key: str) -> ConfigError:
     """Build the error for a list- or table-valued key named on the command line.
 
-    AAP 0.4.4 registers ``--foundry-<dotted.key>`` for the scalar keys only, so the three
-    non-scalar keys of AAP 0.4.5 arrive as a dotted key or an unregistered spelling, and AAP
-    0.4.5's value-format text would invite the very form this layer rejects. The message
-    therefore states the refusal and names the layer that can carry the key: the file.
+    The generic option exists for the scalar keys only, so a table or list arrives as a dotted key
+    or an unregistered spelling, and value-format advice would invite the very form this layer
+    rejects. The message instead states the refusal and names the file, which can carry the key.
 
     Args:
-        option: The option's spelling, already carrying its leading ``--`` as
-            :func:`cli_detail` renders it.
+        option: The option's spelling, already carrying its leading ``--``.
         key: The dotted key the option would set.
 
     Returns:
-        A :class:`ConfigError` carrying the key, the ``cli`` layer and the option as its
-        layer note.
+        A :class:`ConfigError` carrying the key, the ``cli`` layer and the option as layer note.
     """
     return ConfigError(
         OPTION_NOT_SETTABLE_TEMPLATE.format(option=option, key=key),
@@ -360,7 +353,7 @@ def option_not_settable(option: str, key: str) -> ConfigError:
 def missing_secret_variable(variable: str, key: str) -> ConfigError:
     """Build the error for an absent environment variable that a key names.
 
-    No credential can reach the message: the builder takes the variable's name, never a value.
+    The builder takes the variable's name, never a value, so no credential reaches the message.
     """
     return ConfigError(
         MISSING_SECRET_TEMPLATE.format(variable=variable),
@@ -432,8 +425,8 @@ def profile_override_attempt(name: str) -> ConfigError:
 def both_record_and_replay() -> ConfigError:
     """Build the error for supplying ``--foundry-record`` and ``--foundry-replay`` together.
 
-    AAP 0.4.4 makes the combination a usage error, mapped to exit 2 by the command line and
-    reported through ``pytest.exit(returncode=2)`` by the plugin (assumption A4).
+    The combination is a usage error, mapped to exit 2 by the command line and reported through
+    ``pytest.exit(returncode=2)`` by the plugin.
     """
     return ConfigError(
         RECORD_AND_REPLAY_TEMPLATE,
@@ -445,6 +438,6 @@ def both_record_and_replay() -> ConfigError:
 def success_message(profile: str) -> str:
     """Return the line ``foundry config validate`` prints for a valid configuration.
 
-    AAP 0.4.4 and AAP 0.4.5 pin the text to ``configuration valid (profile=<name>)``. No newline.
+    The text is pinned to ``configuration valid (profile=<name>)``, with no newline.
     """
     return VALIDATION_OK_TEMPLATE.format(profile=profile)

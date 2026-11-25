@@ -5,9 +5,7 @@ written in that order to the invocation directory (assumption A5). :data:`RENDER
 import-time table mapping a format name to its file name and writer (AAP 0.4.8) and
 :func:`write_all` is the single call a run makes. The switches are independent (AAP 0.4.5), except
 the documented fallback: a template that cannot be rendered skips ``junit.xml`` too, with the exit
-code untouched (AAP 0.4.7). Every write goes through the store, whose writers have already isolated
-a filesystem or encoding refusal into a ``WARNING`` (AAP 0.14.3), and Jinja2 is imported on the
-render path only, off the startup budget (implicit requirement I5).
+code untouched (AAP 0.4.7). Jinja2 is imported on the render path only (implicit requirement I5).
 """
 
 from __future__ import annotations
@@ -53,12 +51,11 @@ JUNIT_FILENAME: Final[str] = "junit.xml"
 """File name of the JUnit XML document, beside the result document."""
 
 REPORT_FORMATS: Final[tuple[str, ...]] = ("json", "html", "junit")
-"""The three format names, in the order their files are written.
+"""The three format names, in the published write order, which :func:`write_all` follows.
 
-The order is the published write order: it is what :func:`registered_formats` returns and what
-:func:`write_all` follows. A format name is the stem an operator asks for, and it is deliberately
-not the file name -- ``json`` is written to ``results.json`` because that is the name the ecosystem
-and ``foundry report compare`` read.
+A format name is the stem an operator asks for, and deliberately not the file name: ``json`` is
+written to ``results.json`` because that is the name the ecosystem and ``foundry report compare``
+read.
 """
 
 _JSON_FORMAT: Final[str] = "json"
@@ -75,9 +72,8 @@ Writer: TypeAlias = Callable[..., Path | None]
 
 A writer returns the path it wrote -- normally the one it was given -- or ``None`` when it wrote
 nothing, which covers both a filesystem refusal already reported at ``WARNING`` and the documented
-template fallback. The extra keyword options are format-specific: only the HTML writer accepts a
-redactor, an artifacts root, a log-line count, a run id and a profile. ``...`` is therefore the
-honest signature, and each call site in :func:`write_all` passes what its writer documents.
+template fallback. The keyword options are format-specific, so ``...`` is the honest signature and
+each call site in :func:`write_all` passes what its writer documents.
 """
 
 
@@ -85,15 +81,14 @@ honest signature, and each call site in :func:`write_all` passes what its writer
 class RendererSpec:
     """One report format: the name it is asked for by, the file it lands in, and who writes it.
 
-    Frozen so the table's entries cannot be edited in place: the registry is published data, and a
-    caller that wants different content passes a different path instead of rewriting a writer.
+    Frozen so the registry cannot be edited in place: a caller that wants different content passes
+    a different path instead of rewriting a writer.
 
     Attributes:
         name: The format name, one of :data:`REPORT_FORMATS`.
         filename: The fixed file name the format is written under, without a directory.
         writer: The callable that produces the document and writes it.
-        order: The position the format is written at, ascending: ``0`` for ``json``, ``1`` for
-            ``html``, ``2`` for ``junit``.
+        order: The position the format is written at, ascending: ``json``, ``html``, ``junit``.
     """
 
     name: str
@@ -119,34 +114,26 @@ def write_html_report(
 
     :func:`foundry.reporting.html.render` builds the document and returns it; this adapter hands it
     to :func:`foundry.reporting.store.write_text`, which is this package's only writer (AAP 0.4.8).
-    The document is rendered through the default template and the default asset bundle, both of
-    which the HTML module owns.
 
     Args:
         records: The run's elements: result records, run errors, or both in any order.
         path: The file to write, normally ``report.html`` in the invocation directory.
-        redactor: The run's redaction engine, built from ``secrets.redact_keys``. ``None`` uses the
-            built-in header and query deny-lists.
+        redactor: The run's redaction engine. ``None`` uses the built-in deny-lists.
         artifacts_root: The run directory the records' artifact paths are relative to, or ``None``
             when the artifacts directory was not writable.
-        report_dir: The directory the report is written to, which the failure panels' links are
-            relative to. ``None`` uses ``path``'s own directory, so the links stay correct wherever
-            the report is written.
+        report_dir: The directory the report is written to, which the panels' links are relative
+            to; ``None`` uses ``path``'s own directory.
         log_lines: How many captured log lines each failure panel carries.
         run_id: The run id to label the report with, or ``None`` to take it from the records.
         profile: The profile to label the report with, on the same terms as ``run_id``.
-        finished_at: The run's finish time to label the report with, ISO 8601 UTC, on the same terms
-            as ``run_id``: the caller that knows it -- ``plugin.py`` -- supplies it for a run whose
-            records carry none (AAP 0.4.6, 0.7.4).
-        artifacts_disabled: The artifact writer's own ``disabled`` flag, supplied by the caller that
-            holds the writer, which turns the failure panels' artifact links into the report's
-            single banner (AAP 0.4.7).
+        finished_at: The run's finish time, ISO 8601 UTC, on the same terms as ``run_id``.
+        artifacts_disabled: The artifact writer's own ``disabled`` flag, which turns the panels'
+            artifact links into the report's single banner (AAP 0.4.7).
 
     Returns:
         The path written, or ``None`` when nothing was written: the template could not be rendered
-        (the fallback of AAP 0.4.7, already reported at ``WARNING`` by the HTML module) or the
-        filesystem refused the write (reported at ``WARNING`` by the store). Either way the failure
-        is reported once, never twice, and the run's exit code is untouched.
+        (the fallback of AAP 0.4.7) or the filesystem refused the write. Either way the failure is
+        reported once, never twice, and the run's exit code is untouched.
 
     Raises:
         FoundryError: The default asset bundle is not self-contained, which is a defect in
@@ -201,9 +188,8 @@ RENDERERS: Final[dict[str, RendererSpec]] = {
 }
 """Every report format Foundry writes, keyed by the name it is asked for by.
 
-The values are frozen and the keys are the three names of :data:`REPORT_FORMATS`, in write order.
-The dict itself is a plain module-level table rather than a mapping proxy because the published
-shape is something a caller iterates; nothing in the tree assigns to it after this literal runs.
+The values are frozen and the keys are the three names of :data:`REPORT_FORMATS`, in write order;
+nothing in the tree assigns to the table after this literal runs.
 """
 
 _FORMATS_HINT: Final[str] = f"report formats are: {', '.join(REPORT_FORMATS)}"
@@ -227,7 +213,7 @@ def renderer_for(name: str) -> RendererSpec:
     Raises:
         FoundryError: ``name`` is not a registered format. The message names the format asked for
             and the hint lists every published format, so a mistyped format reads as a mistake with
-            a correction rather than as a ``KeyError`` traceback (AAP 0.4.3).
+            a correction rather than as a ``KeyError`` traceback.
     """
     try:
         return RENDERERS[name]
@@ -238,9 +224,8 @@ def renderer_for(name: str) -> RendererSpec:
 def registered_formats() -> tuple[str, ...]:
     """Return the registered format names in the order their files are written.
 
-    Derived from :data:`RENDERERS` and sorted by each spec's ``order`` rather than relying on the
-    dict's insertion order, so the answer is the published write order even if the literal is ever
-    reordered. It equals :data:`REPORT_FORMATS`.
+    Sorted by each spec's ``order`` rather than relying on the dict's insertion order, so the answer
+    is the published write order however the literal is arranged.
 
     Returns:
         The format names, ``("json", "html", "junit")``.
@@ -329,17 +314,15 @@ def write_all(
     Args:
         records: The run's elements: result records, run errors, or both in any order.
         output_dir: The directory the three files are written into, normally the invocation dir.
-        redactor: The run's redaction engine, built from ``secrets.redact_keys``. ``None`` uses the
-            built-in header and query deny-lists, so redaction cannot be skipped by omitting it.
+        redactor: The run's redaction engine. ``None`` uses the built-in deny-lists, so redaction
+            cannot be skipped by omitting it.
         artifacts_root: The run directory the records' artifact paths are relative to, or ``None``
             when the artifacts directory was not writable.
         log_lines: How many captured log lines each HTML failure panel carries.
         run_id: The run id to label the report with, or ``None`` to take it from the records.
         profile: The profile to label the report with, on the same terms as ``run_id``.
-        finished_at: The run's finish time to label the report with, ISO 8601 UTC, on the same terms
-            as ``run_id`` (AAP 0.4.6, 0.7.4).
-        artifacts_disabled: The artifact writer's own ``disabled`` flag, on the same terms as
-            ``artifacts_root``: the caller that holds the writer supplies it, and it replaces the
+        finished_at: The run's finish time, ISO 8601 UTC, on the same terms as ``run_id``.
+        artifacts_disabled: The artifact writer's own ``disabled`` flag, which replaces the
             artifact links with the report's single banner (AAP 0.4.7).
         write_json: Whether to write ``results.json``, from the resolved ``reporting.json``.
         write_html: Whether to write ``report.html``, from the resolved ``reporting.html``.

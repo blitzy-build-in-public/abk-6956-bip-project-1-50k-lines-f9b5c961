@@ -1,10 +1,7 @@
 """Deciding which recorded interaction, if any, is the request about to be sent.
 
-Method, path, sorted query and body hash decide a match, in recording order (AAP 0.2.1, AAP 0.4.6);
-the entry point is ``match_interaction`` because AAP 0.7.1's ``match`` is a soft keyword.
-:func:`mask_query` is the one query-value rule, applied at capture and at lookup alike, and a
-marker on either side matches any value, so masking a parameter costs no recording its replay
-(AAP 0.3.2, AAP 0.4.9).
+Method, path, sorted query and body hash decide a match, in recording order, and a masked query
+value on either side matches any value.
 """
 
 from __future__ import annotations
@@ -69,28 +66,10 @@ def mask_query(
 ) -> tuple[tuple[str, str], ...]:
     """Return ``query`` with every secret-bearing value replaced by the redaction marker.
 
-    The one implementation of the query-value rule (AAP 0.2.1, AAP 0.3.2 "Security architecture"),
-    called before a cassette is written and before a request is looked up. Because both sides of a
-    comparison are masked the same way, a recording of one request still replays it, and the
-    document never holds a value whose name the engine redacts.
-
-    Order, duplicates and names are kept exactly as given, so the pairs a normalised query produced
-    keep the one order capture and matching compare in, and ``?a=1&a=2`` stays two parameters.
-
-    Applying this twice changes nothing: a masked pair already holds the marker and the engine
-    still redacts its name, so re-redacting an interaction yields an equal one.
-
-    Args:
-        query: The decoded pairs, normally :func:`~foundry.cassette.models.normalise_query` output.
-        redactor: The run's redaction engine. What counts as secret is asked of it and never
-            restated here.
-        found: The accumulator the scrubbed names are added to, case-folded as
-            :func:`foundry.cassette.store.redact_interaction` records header names, so
-            ``redacted_keys`` can name a query parameter. ``None`` when only the pairs are wanted.
-
-    Returns:
-        The pairs in the order given, each value replaced by
-        :data:`~foundry.obs.redaction.REDACTED` when the engine redacts its name.
+    This is the one implementation of the query-value rule, called before a cassette is written and
+    before a request is looked up, so a recording of one request still replays it and the document
+    never holds a value whose name the engine redacts. Order, duplicates and names are kept exactly
+    as given, so ``?a=1&a=2`` stays two parameters, and applying the rule twice changes nothing.
     """
     masked: list[tuple[str, str]] = []
     for name, value in query:
@@ -136,18 +115,8 @@ def _queries_match(left: tuple[tuple[str, str], ...], right: tuple[tuple[str, st
 def matches_recorded(fp: RequestFingerprint, recorded: RecordedRequest) -> bool:
     """Return whether ``fp`` is the request that ``recorded`` describes.
 
-    Four fields decide it and no others (AAP 0.2.1, AAP 0.3.2): method, path, sorted query pairs and
-    body hash. ``recorded.headers_subset`` is there for a person reading the cassette, and no host
-    or port is compared, because the fingerprint carries none (assumption A7). A query value the
-    engine masked matches any value (:func:`mask_query`), so a recording made before a
-    parameter was masked still replays.
-
-    Args:
-        fp: The request about to be sent, as the transport fingerprinted it.
-        recorded: One interaction's recorded request.
-
-    Returns:
-        ``True`` when the two describe the same request, ``False`` otherwise.
+    ``recorded.headers_subset`` is kept for a reader and never matched, and a query value the engine
+    masked matches any value.
     """
     if fp.method.upper() != recorded.method.upper():
         return False

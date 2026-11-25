@@ -1,8 +1,4 @@
-"""The retry engine of ``foundry.http``: the policy, the predicates, the backoff and the loop.
-
-``RetryRunner`` puts one logical request on the wire up to ``max_attempts`` times; the predicates,
-the backoff formula and the exhausted-attempt records are AAP 0.7.3's.
-"""
+"""The retry engine of ``foundry.http``: the policy, the predicates, the backoff and the loop."""
 
 from __future__ import annotations
 
@@ -77,12 +73,7 @@ RETRY_PREDICATES: Final[tuple[str, ...]] = (
     PREDICATE_STATUS_5XX,
     PREDICATE_STATUS_429,
 )
-"""Every accepted ``http.retries.retry_on`` element, in the order AAP 0.4.5 lists them.
-
-The order is the one the configuration help text and every error message use, so the accepted
-set reads the same everywhere. Nothing serialises the tuple, which makes it documentation
-rather than output.
-"""
+"""Every accepted ``http.retries.retry_on`` element, in the order AAP 0.4.5 lists them."""
 
 DEFAULT_RETRY_ON: Final[tuple[str, ...]] = (
     PREDICATE_TIMEOUT,
@@ -170,14 +161,9 @@ def normalise_predicates(values: Iterable[str | object]) -> frozenset[str]:
 def classify(error: BaseException | None, status_code: int | None) -> str | None:
     """Return the retry predicate that describes a fault or a status.
 
-    A timeout is tested before a connection failure because :class:`httpx.ConnectTimeout` is a
-    :class:`httpx.TimeoutException` and not a :class:`httpx.ConnectError`; the other order would
-    file a slow connection at the wrong predicate and against the wrong element of
-    ``http.retries.retry_on``. Every other ``httpx`` transport fault -- a read that failed
-    midway, a protocol violation -- classifies as ``None`` and is never retried, because
-    retrying a broken protocol only repeats the breakage (AAP 0.7.3). ``error`` wins over
-    ``status_code`` when both are given: the status of a response that also faulted says
-    nothing about the fault.
+    A timeout is classified before a connection failure, because :class:`httpx.ConnectTimeout` is a
+    timeout and not a :class:`httpx.ConnectError`; every other transport fault classifies as
+    ``None`` and is never retried. ``error`` wins over ``status_code`` when both are given.
     """
     if error is not None:
         if isinstance(error, httpx.TimeoutException):
@@ -237,16 +223,9 @@ def backoff(attempt: int, *, base: float, maximum: float) -> float:
 def _require_int(value: object, key: str, minimum: int, maximum: int, *, constraint: str) -> int:
     """Return ``value`` as an ``int`` inside ``minimum..maximum``, or raise ``ConfigError``.
 
-    A configuration model rejects an out-of-range value before a policy exists, so reaching this
-    check means the policy came from a fixture override or a test; the error still names the
-    dotted key, because that is what an operator would fix. ``bool`` is refused even though it
-    subclasses ``int``: ``max_attempts=True`` is a mistake, not a one-attempt policy. The message
-    is :func:`foundry.core.limits.range_fault_message`'s one wording, carrying ``constraint`` --
-    the range as the published registry spells it -- rather than one re-composed from the bounds.
-
-    Raises:
-        ConfigError: When the value is not an ``int`` or lies outside the range, carrying the
-            key and a message naming the key, the accepted range and the offending value.
+    ``bool`` is refused even though it subclasses ``int``, and the message is
+    :func:`foundry.core.limits.range_fault_message`'s one wording, carrying the registry's
+    ``constraint``.
     """
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
         raise ConfigError(range_fault_message(key, value, constraint), key=key)
@@ -375,12 +354,7 @@ class RetryPolicy:
     def as_dict(self) -> dict[str, object]:
         """Return the policy as a mapping for diagnostics and log lines.
 
-        ``retry_on`` is sorted, so two runs that resolved the same policy print the same line
-        whatever order the configured list held. Nothing persists this mapping: ``foundry config
-        show`` renders the resolved configuration model instead.
-
-        Returns:
-            The four fields, with ``retry_on`` a sorted list of names.
+        ``retry_on`` is sorted, so two runs that resolved the same policy print the same line.
         """
         return {
             "max_attempts": self.max_attempts,
@@ -543,25 +517,9 @@ class RetryRunner:
     ) -> None:
         """Record a transport fault, then wait for the next attempt or raise.
 
-        Args:
-            exc: The ``httpx`` exception the attempt raised.
-            records: The attempt records, appended to in place.
-            number: The 1-based number of the attempt that failed.
-            started: The monotonic reading taken when that attempt began.
-            method: The request method.
-            path: The request path.
-
-        Returns:
-            ``None`` once the backoff has been waited, which means another attempt is due.
-
-        Raises:
-            TransportError: When the fault is not retryable under the policy, or is retryable
-                and no attempt remains. ``cause`` is the predicate for a retryable kind and the
-                exception's class name otherwise, and the message is redacted.
-
-        Every attempt ended by a retryable fault keeps that predicate in ``retry_on``, the last
-        one included: the record says why the attempt failed, and the number of records is the
-        number of attempts made (assumption A2).
+        Every attempt ended by a retryable fault keeps that predicate in ``retry_on``, the last one
+        included, and a fault the policy does not retry raises ``TransportError`` whose ``cause`` is
+        the exception's class name. The message is redacted.
         """
         predicate = classify(exc, None)
         detail = self._redactor.text(f"{type(exc).__name__}: {exc}")

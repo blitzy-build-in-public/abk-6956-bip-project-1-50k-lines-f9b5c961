@@ -3,38 +3,21 @@
 ``plugin.py`` is the only module that implements a pytest hookspec, so the ``firstresult``
 ``pytest_runtest_protocol`` delegation lives there and this module is the plain Python it calls.
 :func:`run_attempts` drives pytest's own ``_pytest.runner.runtestprotocol`` once per attempt, so
-every attempt runs setup, call and teardown: function-scoped fixtures are created and torn down
-between attempts, session-scoped fixtures persist, and no fixture is resolved by Foundry
-(AAP 0.7.1). ``execution.retries`` counts the *repeats* after the first attempt (AAP 0.4.5,
-assumption A2), so ``--foundry-retries 2`` allows three attempts, and a test that fails twice and
-then passes records ``passed`` with ``attempts: 3`` (criterion 6).
+every attempt runs setup, call and teardown. ``execution.retries`` counts the *repeats* after the
+first attempt (AAP 0.4.5, assumption A2), so ``--foundry-retries 2`` allows three attempts.
 
-Three rules the loop keeps, and why none of them is optional:
+Exactly one set of reports reaches the log: each attempt runs with ``log=False`` and only the final
+attempt's reports are re-emitted, while ``call_and_report`` still fires the ``makereport`` hook
+first, so every attempt is stamped with Foundry's ``user_properties``. No delay is inserted between
+attempts, because backoff belongs to :mod:`foundry.http.retries`, so this module never sleeps,
+starts a thread or opens a socket (AAP 0.14.3). An interrupted run stays interrupted, because
+``KeyboardInterrupt`` and pytest's ``Exit`` are never caught here (AAP 0.4.7). The bookkeeping
+around each attempt is isolated one call site at a time, so a plumbing fault logs one ``WARNING``
+and leaves the outcome and the exit code alone (AAP 0.1.2).
 
-* **Exactly one set of reports reaches the log.** Each attempt runs with ``log=False`` and only the
-  final attempt's reports are re-emitted through ``pytest_runtest_logreport``, once its record is in
-  the ledger. ``call_and_report`` fires ``pytest_runtest_makereport`` *before* it looks at ``log``,
-  so every attempt is still stamped with Foundry's ``user_properties``; ``log=False`` suppresses
-  only the delivery of an attempt no report keeps, which is what stops the terminal, JUnit and xdist
-  counting a failure a retry repaired.
-* **No delay between attempts.** AAP 0.4.5 publishes no ``execution.backoff`` key, and backoff
-  belongs to :mod:`foundry.http.retries` with an injected sleep, so a test-level repeat is
-  immediate and this module never sleeps, starts a thread or opens a socket (AAP 0.14.3).
-* **An interrupted run stays interrupted.** ``runtestprotocol`` re-raises ``KeyboardInterrupt`` and
-  pytest's own ``Exit``, and neither is caught here, so pytest flushes partial results and keeps its
-  interrupt code (AAP 0.4.7). The bookkeeping around each attempt -- the stash write, the lifecycle
-  event, the quarantine verdict -- is isolated one call site at a time rather than behind a blanket
-  handler: a plumbing fault logs one ``WARNING`` through
-  :func:`foundry.obs.events.emit_plumbing_failure` and leaves the outcome and the exit code alone
-  (AAP 0.1.2), and an item whose state cannot be read still runs once, as pytest would run it.
-
-Elapsed time comes from :func:`time.monotonic` alone; ``duration_ms`` is one of the four values
-criterion 14 normalises, and ``tests/unit/test_sleep_policy.py`` rejects every wall-clock read
-outside the run-id and timestamp producers, so the clock enters through
-:func:`foundry.core.ids.utc_now` and nowhere else.
-
-Importing this module defines names only (AAP 0.4.8): ``pytest`` is imported for annotations alone
-and the runner is imported by the function that runs an attempt.
+Elapsed time comes from :func:`time.monotonic` alone, and the clock enters through
+:func:`foundry.core.ids.utc_now` and nowhere else. Importing this module defines names only
+(AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -98,17 +81,14 @@ _CALL_PHASE: Final[Phase] = "call"
 _LABEL_TIMEOUT: Final[str] = "timeout"
 """``AttemptRecord.retry_on`` for a test-level timeout, spelled as the retry predicate is.
 
-Used only when :func:`foundry.execution.retry.retry_label` cannot name the ending -- a
-pytest-timeout failure is pytest's own ``Failed``, not an ``httpx`` fault, so the predicate
-vocabulary has nothing to classify and the peer's own marker is the only evidence there is.
+Used only when :func:`foundry.execution.retry.retry_label` cannot name the ending, because a
+pytest-timeout failure is pytest's own ``Failed`` and carries no fault the predicates classify.
 """
 
 _TIMEOUT_ERROR_NAME: Final[str] = "ReadTimeout"
 """An ``httpx`` timeout exception, used to obtain the predicate spelling from ``retry_label``.
 
-A test-level timeout carries no recoverable exception this module can see, so the peer's marker
-selects a representative fault and :func:`foundry.execution.retry.retry_label` -- which delegates to
-:func:`foundry.http.retries.classify` -- answers with the one predicate name the two engines share.
+No exception is recoverable from a rendered timeout, so a representative fault is classified.
 """
 
 _ERROR_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -116,9 +96,8 @@ _ERROR_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 """An exception class name in a rendered failure: ``AssertionError``, ``ConnectError``, ``Failed``.
 
-A ``pytest.TestReport`` carries a rendered representation rather than the exception object, so a
-class name is the only evidence of what was raised. The pattern requires a capitalised token with an
-exception-shaped suffix, which is what keeps prose and paths out of the match.
+A report carries rendered text rather than the exception, and the capitalised exception-shaped token
+is what keeps prose and paths out of the match.
 """
 
 _MISSING_STATE_MESSAGE: Final[str] = (
@@ -153,11 +132,9 @@ _KeyT = TypeVar("_KeyT")
 class AttemptLedger:
     """One item's attempts, oldest first: the only place attempt history lives (AAP 0.4.8).
 
-    Frozen because the report hook in ``plugin.py``, the ``user_properties`` mirror and the summed
-    ``duration_ms`` all read one value that none of them may alter, and :meth:`add` returns a new
-    ledger so the instance a caller already holds still describes the history it was read from. The
-    stash holds the plain ``list`` of records that crosses the worker boundary, which
-    :func:`ledger_of` wraps, so the wire form is the one ``foundry.execution.state`` declares.
+    Frozen because the report hook, the ``user_properties`` mirror and the summed ``duration_ms``
+    all read one value that none of them may alter, and :meth:`add` returns a new ledger. The stash
+    holds the plain ``list`` of records that crosses the worker boundary.
     """
 
     records: tuple[AttemptRecord, ...] = ()
@@ -210,10 +187,9 @@ EMPTY_LEDGER: Final[AttemptLedger] = AttemptLedger()
 def ledger_of(item: pytest.Item) -> AttemptLedger:
     """Return the attempts recorded for ``item`` so far, oldest first, or :data:`EMPTY_LEDGER`.
 
-    ``item.stash[ITEM_ATTEMPTS]`` is the single home of attempt history (AAP 0.4.8), and this is its
-    one read. While an attempt's own reports are being made the ledger holds only the attempts that
-    have already *finished*, because a record is appended once ``runtestprotocol`` returns, so the
-    report hook in ``plugin.py`` derives the current attempt's number as ``ledger.attempts + 1``.
+    ``item.stash[ITEM_ATTEMPTS]`` is the single home of attempt history (AAP 0.4.8), and it holds
+    only the attempts that have already *finished*, so the report hook in ``plugin.py`` derives the
+    current attempt's number as ``ledger.attempts + 1``.
     """
     records = item.stash.get(ITEM_ATTEMPTS, None)
     return EMPTY_LEDGER if records is None else AttemptLedger.of(records)
@@ -222,10 +198,8 @@ def ledger_of(item: pytest.Item) -> AttemptLedger:
 def reset_item_state(item: pytest.Item) -> None:
     """Clear one item's per-attempt stash entries before its first attempt.
 
-    Defensive rather than routine: pytest builds a fresh ``Item`` per collected test, but a reused
-    one would otherwise inherit another test's attempt history, quarantine verdict and start time.
-    Only the four keys this module owns are cleared; the capture ring and the artifact writer belong
-    to the modules that created them.
+    Defensive rather than routine: a reused ``Item`` would otherwise inherit another test's attempt
+    history, quarantine verdict and start time. Only the four keys this module owns are cleared.
     """
     _forget(item, ITEM_ATTEMPTS)
     _forget(item, ITEM_QUARANTINE)
@@ -243,8 +217,7 @@ def classify_reports(reports: Sequence[pytest.TestReport]) -> tuple[OutcomeValue
     """Return how one attempt ended and the label describing its ending.
 
     The single classification of an attempt, so a record's ``outcome`` and the ledger's cannot
-    disagree. The label is ``None`` for an attempt that did not fail, because
-    ``AttemptRecord.retry_on`` describes an ending and a pass has none.
+    disagree. The label is ``None`` for an attempt that did not fail.
     """
     outcome = final_outcome(reports)
     if outcome not in _FAILURE_OUTCOMES:
@@ -255,12 +228,10 @@ def classify_reports(reports: Sequence[pytest.TestReport]) -> tuple[OutcomeValue
 def final_outcome(reports: Sequence[pytest.TestReport]) -> OutcomeValue:
     """Return the outcome one attempt's reports describe, before any quarantine verdict.
 
-    A setup failure is an ``error``, and so is a teardown failure after a passing call, because
-    both are failures outside the test body (AAP 0.4.6); a failing call is ``failed``; ``wasxfail``
-    on the call report separates an xfail or xpass from a skip or pass, and an attempt with no
-    report at all is ``not_run``.
-    The precedence is the one :func:`foundry.execution.session.assemble_payload` applies, so the
-    record, the verdict taken from it and the exit code agree about one test.
+    A setup failure is an ``error``, and so is a teardown failure after a passing call (AAP 0.4.6);
+    a failing call is ``failed``; ``wasxfail`` on the call report separates an xfail or xpass from a
+    skip or pass; an attempt with no report is ``not_run``. The precedence is the one
+    :func:`foundry.execution.session.assemble_payload` applies.
     """
     if not reports:
         return _NOT_RUN
@@ -291,9 +262,8 @@ def first_failure_message(reports: Sequence[pytest.TestReport], redactor: Redact
     """Return the first failing phase's message, redacted and bounded, or ``None`` for a pass.
 
     The excerpt that rides ``AttemptRecord.message``: the first non-empty line of the failing
-    report's rendered representation, scrubbed by the run's own redaction engine and cut to the
-    200-byte budget AAP 0.4.7 uses for a body excerpt -- redaction before truncation, as every sink
-    in Foundry does it -- so a token echoed into a traceback cannot leave the process.
+    report's rendered representation, redacted before it is cut to the 200-byte budget AAP 0.4.7
+    uses, so a token echoed into a traceback cannot leave the process.
     """
     report = _first_failure(reports)
     if report is None:
@@ -308,15 +278,12 @@ def run_attempts(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
     """Run ``item`` up to ``execution.retries`` times; the ``firstresult`` hook's whole body.
 
     What ``plugin.py``'s ``pytest_runtest_protocol`` delegation calls. It runs pytest's own protocol
-    once per attempt (AAP 0.7.1), records every attempt in the item's ledger, takes the quarantine
-    verdict from the final attempt's outcome and emits exactly one set of reports -- the final
-    one -- so a retry that repaired a failure is not counted as a failure by the terminal or xdist.
+    once per attempt, records every attempt in the item's ledger, takes the quarantine verdict from
+    the final attempt's outcome and emits exactly one set of reports, the final one.
 
     ``KeyboardInterrupt`` and pytest's ``Exit`` propagate untouched (AAP 0.4.7), and a fault in
     Foundry's own plumbing is one ``WARNING`` that changes neither the outcome nor the exit code
-    (AAP 0.1.2): an item whose state or protocol cannot be reached still runs, unretried.
-    ``nextitem`` is passed straight through so teardown happens at the right moment, and the return
-    of ``True`` stops the ``firstresult`` chain so pytest's protocol does not run the item again.
+    (AAP 0.1.2). Returning ``True`` stops the ``firstresult`` chain.
     """
     state = _read_state(item)
     if state is None:
@@ -344,12 +311,10 @@ def _attempt_loop(
 ) -> list[pytest.TestReport]:
     """Repeat the runtest protocol until the item passes, cannot be retried, or spends its budget.
 
-    A fault raised *out of* the protocol -- one raised by Foundry's own report hook, say -- is
-    reported once and ends the loop with no reports, which is the caller's cue to run the item once,
-    unretried (AAP 0.1.2). pytest's control flow is not a fault and is re-raised: ``Exit`` is an
-    ``Exception`` whose whole purpose is to end the session, so a configuration fault calling
-    ``pytest.exit`` must reach it (AAP 0.4.7), and ``KeyboardInterrupt`` is a ``BaseException`` no
-    handler here catches at all.
+    A fault raised out of the protocol is reported once and ends the loop with no reports, which is
+    the caller's cue to run the item once, unretried (AAP 0.1.2). pytest's control flow is not a
+    fault and is re-raised: ``Exit`` must reach pytest (AAP 0.4.7), and ``KeyboardInterrupt`` is a
+    ``BaseException`` no handler here catches.
     """
     # Imported here rather than at module scope: the runner is what the hook delegation enters
     # anyway, and AAP 0.4.8 keeps pytest off this module's runtime import surface.
@@ -447,8 +412,8 @@ def _stamp_quarantine(
 def _plain_pass(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
     """Run the item once, as pytest's own protocol would, and return ``True``.
 
-    The fallback for a run whose state could not be read, so the item's outcome reaches the terminal
-    and the exit code exactly as it would with Foundry out of the chain.
+    The fallback for a run whose state could not be read, so the outcome reaches the terminal and
+    the exit code as it would with Foundry out of the chain.
     """
     ihook = item.ihook
     ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
@@ -461,7 +426,7 @@ def _plain_pass(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
 def _plain_run(item: pytest.Item, nextitem: pytest.Item | None) -> list[pytest.TestReport]:
     """Run the item's protocol once, as pytest's default ``pytest_runtest_protocol`` would.
 
-    ``log=False`` because the caller emits the reports once the quarantine verdict is in the stash.
+    ``log=False`` because the caller emits the reports itself.
     """
     from _pytest.runner import runtestprotocol
 
@@ -489,8 +454,7 @@ def _first_failure(reports: Sequence[pytest.TestReport]) -> pytest.TestReport | 
 def _failing_phase(reports: Sequence[pytest.TestReport]) -> Phase:
     """Return the phase an attempt failed in, and ``call`` when no report names one.
 
-    Only the position matters to the retry decision, and a fixture fault a repeat cannot repair is
-    what a ``setup`` or ``teardown`` failure is.
+    Only the position matters to the retry decision.
     """
     report = _first_failure(reports)
     if report is None:
@@ -504,10 +468,8 @@ def _failing_phase(reports: Sequence[pytest.TestReport]) -> Phase:
 def _failure_text(report: pytest.TestReport) -> str:
     """Return a report's rendered failure, preferring the crash line over the whole traceback.
 
-    ``reprcrash.message`` is the one line pytest prints after the traceback -- ``AssertionError:
-    assert 1100 == 1200`` -- and it is what an attempt's message wants. A ``longrepr`` that is a
-    plain string has no crash line, and one that cannot be rendered is read as no message rather
-    than raising (AAP 0.1.2).
+    ``reprcrash.message`` is the one line pytest prints after the traceback. A ``longrepr`` that
+    cannot be rendered is read as no message rather than raising (AAP 0.1.2).
     """
     longrepr: object = report.longrepr
     crash: object = getattr(longrepr, "reprcrash", None)
@@ -524,11 +486,7 @@ def _failure_text(report: pytest.TestReport) -> str:
 
 
 def _first_line(text: str) -> str:
-    """Return the first non-empty line of ``text`` with its whitespace collapsed, or ``""``.
-
-    A record's message is one bounded line, so a rendered traceback can never grow a second one in a
-    JSON document, a JUnit element or a row of the report.
-    """
+    """Return the first non-empty line of ``text`` with its whitespace collapsed, or ``""``."""
     for line in text.splitlines():
         collapsed = " ".join(line.split())
         if collapsed:
@@ -545,8 +503,8 @@ def _failure_label(reports: Sequence[pytest.TestReport]) -> str:
 def _label_for(text: str) -> str:
     """Return the label a rendered failure names, from the vocabulary the retry engine shares.
 
-    The label is diagnostic only -- ``retry.should_retry`` decides on the phase, the outcome and the
-    budget -- so reading it differently from the HTTP engine changes a word, never a verdict.
+    The label is diagnostic only, so reading it differently from the HTTP engine changes a word,
+    never a verdict.
     """
     if timeout.TIMEOUT_MARKER in text:
         return retry.retry_label(_recovered_error(_TIMEOUT_ERROR_NAME)) or _LABEL_TIMEOUT
@@ -561,8 +519,7 @@ def _recovered_error(name: str) -> BaseException | None:
     """Return a representative exception for a class name a failure names, or ``None``.
 
     ``retry.retry_label`` classifies an exception object while a report carries only rendered text,
-    so the class is reconstructed from the library whose faults the retry predicates describe;
-    ``httpx`` is imported here because only a failing attempt ever asks for a label.
+    and ``httpx`` is imported here because only a failing attempt asks for a label.
     """
     if name == "AssertionError":
         return AssertionError()

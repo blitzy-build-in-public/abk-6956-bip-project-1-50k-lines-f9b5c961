@@ -55,10 +55,10 @@ MAX_LOG_TAIL_BYTES: Final[int] = 256 * 1024
 """Most bytes read from the end of ``log_tail.log``, so a huge artifact is never read whole."""
 
 MAX_LOG_LINE_CHARS: Final[int] = 400
-"""Longest log line the panel carries; a longer one is cut and terminated with ``\\u2026``.
+"""Longest log line the panel carries; a longer one is cut and ends with ``\\u2026``.
 
-A captured line can be a serialised payload thousands of characters wide, and the block is a
-reading aid rather than a data export, so the width is bounded here rather than in CSS.
+A captured line can be a payload thousands of characters wide, and the block is a reading aid
+rather than a data export, so the width is bounded here rather than in CSS.
 """
 
 PHASE_ORDER: Final[tuple[Phase, ...]] = PHASES
@@ -72,8 +72,7 @@ PANEL_ARTIFACT_KINDS: Final[tuple[ArtifactKind, ...]] = (
 )
 """The artifact kinds a panel links to or reads, in the order AAP 0.7.4 lists them.
 
-``stdout``, ``stderr`` and ``manifest`` are captured and listed in the record but deliberately
-absent: the manifest is the artifact index, not part of a failure's story.
+``stdout``, ``stderr`` and ``manifest`` are listed in the record but deliberately absent here.
 """
 
 _COMPONENT: Final[str] = "reporting.panels"
@@ -83,16 +82,12 @@ _TRUNCATION_SUFFIX: Final[str] = "\u2026"
 """Marker appended to a line cut at :data:`MAX_LOG_LINE_CHARS`, one character wide."""
 
 _REQUEST_KIND: Final[ArtifactKind] = "request"
-"""Kind of the recorded request dump a panel links to."""
 
 _RESPONSE_KIND: Final[ArtifactKind] = "response"
-"""Kind of the recorded response dump a panel links to."""
 
 _TRACEBACK_KIND: Final[ArtifactKind] = "traceback"
-"""Kind of the traceback artifact a panel links to."""
 
 _LOG_TAIL_KIND: Final[ArtifactKind] = "log_tail"
-"""Kind of the captured log tail a panel reads into its monospace block."""
 
 _PHASE_ORDER_INDEX: Final[Mapping[Phase, int]] = MappingProxyType(
     {phase: index for index, phase in enumerate(PHASE_ORDER)}
@@ -106,13 +101,13 @@ _PHASE_ORDER_INDEX: Final[Mapping[Phase, int]] = MappingProxyType(
 def _clamp_lines(value: int) -> int:
     """Clamp a requested tail size into the range ``logging.capture_lines`` accepts.
 
-    The value arrives from a hand-editable configuration file, so it may be negative, larger than
-    :data:`MAX_LOG_TAIL_LINES`, or not an integer at all.
+    The value arrives from a hand-editable configuration file, so it may be negative, too large or
+    not an integer at all.
 
     Returns:
-        A size between ``0`` and :data:`MAX_LOG_TAIL_LINES`. A non-integer -- ``bool`` included,
-        since ``True`` would mean one line -- falls back to :data:`DEFAULT_LOG_TAIL_LINES` rather
-        than raising, because a malformed capture setting must never fail a run.
+        A size between ``0`` and :data:`MAX_LOG_TAIL_LINES`. A non-integer -- ``bool`` included --
+        falls back to :data:`DEFAULT_LOG_TAIL_LINES` rather than raising, because a malformed
+        capture setting must never fail a run.
     """
     if isinstance(value, bool) or not isinstance(value, int):
         return DEFAULT_LOG_TAIL_LINES
@@ -124,8 +119,7 @@ def _panel_sort_key(panel: FailurePanel) -> tuple[str, int, str]:
 
     Returns:
         ``(nodeid, phase index, message)``: a setup failure is listed before the call failure of
-        the same test, and the message separates two failures of one phase. A phase outside
-        :data:`PHASE_ORDER` -- which the record's validator makes impossible -- sorts last.
+        the same test, and the message separates two failures of one phase.
     """
     return (
         panel.nodeid,
@@ -171,8 +165,7 @@ class FailurePanel:
     def has_links(self) -> bool:
         """Return whether the panel has at least one artifact link to render.
 
-        The template asks this rather than testing three fields itself, so a link section is
-        omitted entirely when a run's artifacts were disabled (AAP 0.4.7).
+        A link section is omitted entirely when a run's artifacts were disabled (AAP 0.4.7).
         """
         return (
             self.request_path is not None
@@ -185,7 +178,7 @@ class FailurePanel:
         """Return whether there is a log tail to render in the monospace block.
 
         A tail that was read but held no lines yields ``False`` as well: an empty ``<pre>`` block
-        reads as a rendering fault, while :attr:`log_available` distinguishes the two states.
+        reads as a rendering fault.
         """
         return self.log_available and bool(self.log_lines)
 
@@ -202,7 +195,7 @@ def _relative_href(relative_path: str, *, run_dir: Path, report_dir: Path) -> st
 
     Returns:
         The path relative to ``report_dir`` with ``/`` separators, or ``None`` when the path escapes
-        ``run_dir`` or cannot be expressed relative to ``report_dir``. Nothing is logged here: the
+        ``run_dir`` or has no common ancestor with ``report_dir``. Nothing is logged here: the
         caller that attempts a read reports the fault once.
     """
     try:
@@ -228,7 +221,7 @@ def href_for(artifact: ArtifactRecord, *, run_dir: Path, report_dir: Path) -> st
         ``None`` when the recorded path would escape ``run_dir``.
 
     The result is a relative filesystem path by construction, so a rendered report never carries an
-    ``http`` or ``https`` reference to one of its own artifacts (criterion 9).
+    external reference to one of its own artifacts (criterion 9).
     """
     return _relative_href(artifact.path, run_dir=run_dir, report_dir=report_dir)
 
@@ -236,11 +229,7 @@ def href_for(artifact: ArtifactRecord, *, run_dir: Path, report_dir: Path) -> st
 def _artifact_of(record: ResultRecord, kind: ArtifactKind) -> ArtifactRecord | None:
     """Return the record's first artifact of ``kind``, or ``None`` when it captured none.
 
-    A record lists at most one artifact per kind, and taking the first rather than asserting
-    uniqueness keeps a hand-edited document renderable.
-
-    Returns:
-        The matching artifact entry, or ``None``.
+    Taking the first rather than asserting uniqueness keeps a hand-edited document renderable.
     """
     return next((artifact for artifact in record.artifacts if artifact.kind == kind), None)
 
@@ -272,8 +261,7 @@ def _failure_traceback_link(
     """Return the href of the traceback a failure names, when no traceback artifact was listed.
 
     A failure record carries its own ``traceback_path`` (AAP 0.4.6) beside the record's artifact
-    list; the artifact list wins when both are present, because it is the list the manifest was
-    built from.
+    list; the artifact list wins when both are present.
 
     Returns:
         The href, or ``None`` when artifacts were disabled, the failure names no traceback, or the
@@ -291,8 +279,8 @@ def _read_tail_text(path: Path, *, max_bytes: int = MAX_LOG_TAIL_BYTES) -> str:
     """Read at most the last ``max_bytes`` of a file and decode them as text.
 
     A ``log_tail.log`` can be several megabytes, so the whole file is never read; a partial first
-    line is dropped so the block does not begin with half a record, and a file whose tail holds no
-    line break at all keeps its suffix, which is still the newest content.
+    line is dropped so the block does not begin with half a record, and a tail with no line break
+    keeps its suffix, which is still the newest content.
 
     Returns:
         The decoded text, with invalid UTF-8 replaced rather than raised: a decoding fault must
@@ -340,11 +328,10 @@ def read_log_tail(
     """Read, redact and truncate the last ``limit`` lines of a captured log tail.
 
     Total by design (AAP 0.14.3): nothing here raises into a test, changes an outcome or changes an
-    exit code. A ``limit`` of ``0`` is a supported configuration rather than a fault -- it reads
-    nothing, reports nothing and yields ``((), False)`` -- and the three genuine faults, a path that
-    escapes the run directory, a path that is not a regular file and a read fault, each yield
-    ``((), False)`` after one ``WARNING``. Undecodable bytes are not a fault: they are replaced as
-    the tail is decoded, so a tail holding them is still shown.
+    exit code. A ``limit`` of ``0`` reads nothing, reports nothing and yields ``((), False)``, and
+    the three genuine faults -- a path that escapes the run directory, a path that is not a regular
+    file and a read fault -- each yield ``((), False)`` after one ``WARNING``. Undecodable bytes are
+    replaced rather than treated as a fault, so a tail holding them is still shown.
 
     Args:
         path: The tail file, resolved against ``run_dir`` before it is opened.
@@ -353,8 +340,8 @@ def read_log_tail(
         run_dir: The directory ``path`` must stay inside; ``None`` uses the path as given.
 
     Returns:
-        ``(lines, available)``, ``available`` being ``True`` when the file was read, which
-        distinguishes a tail that legitimately held no lines from one that could not be read.
+        ``(lines, available)``, ``available`` being ``True`` when the file was read, which tells a
+        tail that held no lines from one that could not be read.
     """
     wanted = _clamp_lines(limit)
     if wanted == 0:
@@ -391,8 +378,7 @@ def _log_tail_for(
     """Return the log tail one record's panels share.
 
     The tail belongs to the test, not to one of its failing phases, so it is read once per record
-    and every panel of that test carries the same lines; reading it per failure would repeat the
-    work and, when the artifact is unreadable, repeat the ``WARNING``.
+    and every panel of that test carries the same lines.
 
     Returns:
         ``(lines, available)`` as :func:`read_log_tail` returns them, ``((), False)`` when artifacts
@@ -465,12 +451,11 @@ def build_panels(
     """Build the failure panels of a run from its result elements.
 
     One panel is produced per failing phase of every result record, and records that carry no
-    failures produce no panel. A :class:`foundry.reporting.record.RunError` describes the run rather
-    than a test, so it is skipped rather than dereferenced and the report lists it in its own Errors
-    section; any other element kind is skipped the same way, which is why only a
-    :class:`foundry.reporting.record.ResultRecord` is ever read here. A ``report.html`` caller never
-    reaches that skip: :func:`foundry.reporting.html.build_context` validates the sequence first and
-    raises :class:`foundry.core.exceptions.ElementTypeError` for anything else (AAP 0.14.3).
+    failures produce no panel. A run error describes the run rather than a test, so it is skipped
+    and the report lists it in its own Errors section, as is any other element kind; a
+    ``report.html`` caller never reaches that skip, because
+    :func:`foundry.reporting.html.build_context` validates the sequence first and raises
+    :class:`foundry.core.exceptions.ElementTypeError` (AAP 0.14.3).
 
     The panels are sorted by :func:`_panel_sort_key`, which makes the section byte-identical between
     two runs of the same suite (criterion 14). Every message and log line is redacted before its
@@ -478,9 +463,7 @@ def build_panels(
     leaves that section out and logs one ``WARNING`` instead of failing the report (AAP 0.14.3).
 
     ``report_dir`` is the directory the document will be written into, and every artifact href is
-    relative to it. Omitted, the link base is the process working directory, which is where the
-    product writes ``report.html`` (assumption A5), so a caller rendering a document for any other
-    directory must pass it.
+    relative to it; omitted, the link base is the process working directory (assumption A5).
 
     Returns:
         The failure panels, ordered by node id, then phase in execution order, then message. An

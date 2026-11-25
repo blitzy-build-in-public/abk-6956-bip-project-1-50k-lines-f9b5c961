@@ -4,14 +4,10 @@ Every piece of per-test state Foundry keeps lives in a ``pytest.Stash`` entry ke
 :class:`pytest.StashKey` declared here, and everything that must survive a ``pytest-xdist`` worker
 travels as one :class:`TestPayload` stamped onto ``TestReport.user_properties``. This is the single
 declaration site for both, because two declarations of one key would be two different keys
-(AAP 0.4.8, requirement I3).
-
-Per-item and session state are keyed by the typed stash keys below, never by an item attribute or a
-module-level dict keyed by node id (AAP 0.4.8). A value in ``user_properties`` must be
-JSON-serialisable, so nested structures travel as the ``json.dumps(..., sort_keys=True)`` text of
-:func:`dumps`: :func:`write_properties` replaces Foundry's entries and :func:`read_properties` is
-the tolerant inverse, because a fault in Foundry's plumbing may never change a test's outcome.
-:meth:`TestPayload.as_result_fields` restates ``ResultRecord``'s field names for ``plugin.py``.
+(AAP 0.4.8, requirement I3). A value in ``user_properties`` must be JSON-serialisable, so nested
+structures travel as the ``json.dumps(..., sort_keys=True)`` text of :func:`dumps`;
+:func:`write_properties` replaces Foundry's entries and :func:`read_properties` is the tolerant
+inverse, because a fault in Foundry's plumbing may never change a test's outcome.
 """
 
 from __future__ import annotations

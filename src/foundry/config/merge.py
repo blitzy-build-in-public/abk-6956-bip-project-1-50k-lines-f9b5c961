@@ -4,10 +4,9 @@
 selected ``[profiles.<name>]`` table, the ``FOUNDRY_*`` environment and the ``--foundry-*`` command
 line -- in :data:`foundry.config.layers.LAYER_ORDER` and returns the one immutable
 :class:`foundry.config.models.FoundryConfig` a run reads, with the provenance recorded here because
-``pydantic-settings`` resolves values but names no source (implicit requirement I2). The only fault
-is :class:`foundry.core.exceptions.ConfigError`, AAP 0.4.7's rows, each ending the session at exit
-code 2 before anything is collected; a run with no configuration file is not a fault and logs
-``foundry: no config file found`` at ``DEBUG``.
+``pydantic-settings`` resolves values but names no source. The only fault is
+:class:`foundry.core.exceptions.ConfigError`, each ending the session at exit code 2 before anything
+is collected; a run with no configuration file is not a fault and logs at ``DEBUG``.
 """
 
 from __future__ import annotations
@@ -36,35 +35,35 @@ __all__: Final[tuple[str, ...]] = (
 _COMMAND_LINE_DETAIL: Final[str] = "command line"
 """What a rejection of the whole command-line payload names as its detail.
 
-The option spelling of a rejected *value* is known and travels with it, but a payload rejected
-before any value is applied has nothing finer to name than the layer itself.
+The option spelling of a rejected *value* travels with it, but a payload rejected before any value
+is applied has nothing finer to name than the layer itself.
 """
 
 _TOKEN_ENV_KEY: Final[str] = "http.auth.token_env"
-"""The key naming the variable a ``bearer`` session reads its token from (AAP 0.4.5)."""
+"""The key naming the variable a ``bearer`` session reads its token from."""
 
 _USER_ENV_KEY: Final[str] = "http.auth.user_env"
-"""The key naming the variable a ``basic`` session reads its user name from (AAP 0.4.5)."""
+"""The key naming the variable a ``basic`` session reads its user name from."""
 
 _PASSWORD_ENV_KEY: Final[str] = "http.auth.password_env"
-"""The key naming the variable a ``basic`` session reads its password from (AAP 0.4.5)."""
+"""The key naming the variable a ``basic`` session reads its password from."""
 
 _HEADER_VALUE_ENV_KEY: Final[str] = "http.auth.header_value_env"
-"""The key naming the variable a ``header`` session reads its header value from (AAP 0.4.5)."""
+"""The key naming the variable a ``header`` session reads its header value from."""
 
 _LAYER_SEPARATOR: Final[str] = ":"
 """What separates a layer label from its detail, as :func:`foundry.config.layers.layer_label` joins
-them (:meth:`foundry.config.sources.ConfigSource.label` renders the same text)."""
+them."""
 
 
 @dataclass(frozen=True, slots=True)
 class _Layer:
     """One layer ready to fold: the payload it contributes, and how each of its keys is named.
 
-    Most layers have exactly one detail for all their values -- the file layer names its path, the
-    profile layer its name. Two do not: every ``FOUNDRY_*`` variable names one key and every
-    ``--foundry-*`` option names one key, so those layers carry a per-key map in :attr:`details` and
-    use the payload's own detail only as a fallback.
+    Most layers have one detail for all their values -- the file layer names its path, the profile
+    layer its name. Two do not: every ``FOUNDRY_*`` variable and every ``--foundry-*`` option names
+    one key, so those layers carry a per-key map in :attr:`details` and fall back to the payload's
+    own detail.
     """
 
     payload: LayerPayload
@@ -77,9 +76,8 @@ class _Layer:
             dotted: The dotted configuration key, for example ``http.timeout``.
 
         Returns:
-            The per-key detail -- the environment variable's spelling or the option as it was typed
-            -- when the layer knows one, otherwise the detail the payload carries for the layer as a
-            whole.
+            The per-key detail -- the variable's spelling or the option as it was typed -- when the
+            layer knows one, otherwise the detail the payload carries for the layer as a whole.
         """
         return self.details.get(dotted, self.payload.detail)
 
@@ -91,28 +89,21 @@ def resolve(
 ) -> FoundryConfig:
     """Resolve the configuration a run uses, from the four layers of AAP 0.4.5.
 
-    The single entry point of the configuration package. :mod:`foundry.execution.session` calls it
-    once when a pytest session boots, and ``foundry.cli``'s ``run``, ``config`` and ``doctor``
-    commands call it once per invocation, so its arguments are the whole of a resolution's input:
-    nothing is read from the process that the caller cannot see.
+    The single entry point of the configuration package: a pytest session calls it once at boot and
+    the ``run``, ``config`` and ``doctor`` commands once per invocation, so its arguments are the
+    whole of a resolution's input and nothing is read from the process the caller cannot see.
 
-    The layers are applied in the order :data:`foundry.config.layers.LAYER_ORDER` states -- field
-    default, then the file with the selected profile table over it, then the environment, then the
-    command line -- so the worked example of AAP 0.1.2 and criterion 4 holds by construction: a
-    ``foundry.toml`` stating ``http.timeout = 2.0``, an environment setting
-    ``FOUNDRY_HTTP__TIMEOUT=3.5`` and ``--foundry-http.timeout 1.0`` resolve to ``1.0``; dropping
-    the command line yields ``3.5``, dropping the environment ``2.0``, dropping the file the default
-    ``10.0``. Which layer won each key is reported by the returned configuration's
-    :meth:`foundry.config.models.FoundryConfig.source_of`.
+    The layers are applied in the order :data:`foundry.config.layers.LAYER_ORDER` states, so the
+    precedence rule holds by construction, and which layer won each key is reported by the returned
+    configuration's :meth:`foundry.config.models.FoundryConfig.source_of`.
 
     Args:
         cli_overrides: What the command line supplied, already coerced by
             :mod:`foundry.config.cli_layer`, or ``None`` when the caller has no command line -- the
-            zero-configuration state of AAP 0.4.7.
+            zero-configuration state.
         environ: The environment to read ``FOUNDRY_*`` variables from, or ``None`` to read the
-            process environment (see :func:`foundry.config.env.effective_environ`). A supplied
-            mapping *is* the environment for this resolution, so a test never depends on the ambient
-            one.
+            process environment. A supplied mapping *is* the environment for this resolution, so a
+            test never depends on the ambient one.
         cwd: The invocation directory that file discovery and a relative ``--foundry-config``
             resolve against, or ``None`` for the process working directory.
 
@@ -122,14 +113,13 @@ def resolve(
         reports as ``default`` rather than as an absence.
 
     Raises:
-        foundry.core.exceptions.ConfigError: For the first fault AAP 0.4.7 makes fatal, each naming
-            the key and the layer that supplied it: an explicitly named file that is absent or
-            unreadable, an unknown key in the file, the profile table, the environment or the
-            command line, a file value of a type its key does not declare, an unparseable
-            environment value, a value outside its accepted range or values, a profile outside the
-            four names, and a configured auth variable the environment does not set. Nothing else
-            leaves this function: a resolution either returns a configuration or raises the one
-            type a caller maps to exit code 2.
+        foundry.core.exceptions.ConfigError: For the first fatal fault, each naming the key and the
+            layer that supplied it: a named file that is absent or unreadable, an unknown key in the
+            file, the profile table, the environment or the command line, a file value of a type its
+            key does not declare, an unparseable environment value, a value outside its accepted
+            range, a profile outside the four names, and a configured auth variable the environment
+            does not set. A resolution either returns a configuration or raises this one type, which
+            a caller maps to exit code 2.
     """
     cli = cli_layer.EMPTY_CLI_INPUT if cli_overrides is None else cli_overrides
     environment = env.effective_environ(environ)
@@ -178,20 +168,15 @@ def resolve(
 def check_secret_variables(config: FoundryConfig, environ: Mapping[str, str]) -> None:
     """Verify that every variable the selected auth strategy needs is present, by name alone.
 
-    The check is a membership test and nothing else: for each variable ``http.auth.*_env`` names
-    while its strategy is selected -- ``token_env`` for ``bearer``, ``user_env`` and
-    ``password_env`` for ``basic``, ``header_value_env`` for ``header``, nothing for ``none`` -- the
-    name is looked up in ``environ`` and the value is never read, stored, compared or logged, so the
-    message can name the variable an operator has to set and cannot name the credential
-    (implicit requirement I9).
+    The check is a membership test: for each variable ``http.auth.*_env`` names while its strategy
+    is selected, the name is looked up in ``environ`` and the value never read, stored, compared or
+    logged, so the message can name the variable an operator has to set, never the credential.
 
-    Why the name is checked here while the value is read at session start holds two AAP statements
-    together: AAP 0.4.7 makes an absent configured secret variable a configuration-time fault,
-    before anything is collected and at exit code 2 (assumption A4), while AAP 0.3.3 has
-    :mod:`foundry.http.auth` resolve the values at session start, so no configuration object,
-    ``results.json`` or report holds a credential. A variable that disappears between the two
-    moments raises the same ``ConfigError`` from :mod:`foundry.http.auth`, which is why the check is
-    repeated at the point of use rather than trusted from here.
+    Checking the name here while the value is read at session start keeps two rules together: an
+    absent configured secret variable is a configuration-time fault at exit code 2, while
+    :mod:`foundry.http.auth` resolves the values at session start, so no configuration object,
+    ``results.json`` or report holds a credential. A variable that disappears between those moments
+    raises the same ``ConfigError`` from there.
 
     Raises:
         foundry.core.exceptions.ConfigError: For the first required variable, in the fixed order of
@@ -239,17 +224,14 @@ def _contributions(
     file_payload: files.FilePayload,
     selected: ProfileName,
 ) -> Mapping[ConfigLayer, _Layer]:
-    """Assemble the five layers of AAP 0.4.5 as the payloads the fold applies.
+    """Assemble the five layers as the payloads the fold applies.
 
-    The file layer carries the values the *file* supplied, and the profile layer carries the values
-    the selected ``[profiles.<name>]`` table supplied. Splitting them is what makes AAP 0.4.5's
-    per-key attribution exact: a value the table overrode reports ``profile:<name>`` rather than
-    ``file:<path>``, and a value the table left alone keeps the file's path even though the two
-    arrived in one document.
-
-    The ``default`` layer contributes no values at all -- its contribution is the settings model's
-    own field defaults, applied for every key no other layer names, which is why a key with no entry
-    in the source map reports as ``default`` rather than as absent.
+    The file layer carries the values the *file* supplied and the profile layer the values the
+    selected ``[profiles.<name>]`` table supplied. Splitting them makes the per-key attribution
+    exact: a value the table overrode reports ``profile:<name>`` rather than ``file:<path>``, and a
+    value it left alone keeps the file's path although the two arrived in one document. The
+    ``default`` layer contributes no values, which is why a key with no entry in the source map
+    reports as ``default`` rather than as absent.
 
     Args:
         cli: The command line's coerced overrides, with the option spelling behind each one.
@@ -261,8 +243,7 @@ def _contributions(
 
     Returns:
         One entry per layer, keyed by :class:`foundry.config.layers.ConfigLayer`; reading them in
-        :data:`~foundry.config.layers.LAYER_ORDER` is the precedence rule, so the order is not
-        restated here.
+        :data:`~foundry.config.layers.LAYER_ORDER` is the precedence rule.
     """
     base_values, profile_values = _split_profile(application)
     return MappingProxyType(
@@ -319,11 +300,10 @@ def _fold(
 ) -> tuple[dict[str, object], dict[str, ConfigSource]]:
     """Apply the layers in precedence order, recording the value and the origin of every key.
 
-    The loop is :data:`foundry.config.layers.LAYER_ORDER` itself rather than a list of layers
-    written out here, so the precedence rule of AAP 0.4.5 has exactly one encoding in the package. A
-    later
-    layer overwrites an earlier one's value and its source together, which is what keeps a value and
-    its attributed origin impossible to disagree.
+    The loop is :data:`foundry.config.layers.LAYER_ORDER` itself rather than a list written out
+    here, so the precedence rule has one encoding in the package. A later layer overwrites an
+    earlier one's value and its source together, which keeps a value and its attributed origin
+    impossible to disagree.
 
     Args:
         contributions: One assembled layer per :class:`foundry.config.layers.ConfigLayer`.
@@ -331,7 +311,7 @@ def _fold(
     Returns:
         The merged flat values and, for every key some layer supplied, the
         :class:`foundry.config.sources.ConfigSource` describing the layer that won it. Keys no layer
-        supplied are absent from both: they are the field defaults, and the caller completes them.
+        supplied are absent from both: they are the field defaults, which the caller completes.
     """
     values: dict[str, object] = {}
     recorded: dict[str, ConfigSource] = {}
@@ -347,16 +327,16 @@ def _source(layer: ConfigLayer, detail: str) -> ConfigSource:
     """Build the provenance record of a value ``layer`` supplied, named by ``detail``.
 
     :mod:`foundry.config.sources` owns the five published spellings, so this function only chooses
-    among its constructors -- it composes no label of its own. That is what keeps ``config show``,
-    ``doctor`` and the report agreeing on what ``env:FOUNDRY_HTTP__TIMEOUT`` means.
+    among its constructors and composes no label of its own, which keeps every renderer agreeing on
+    what ``env:FOUNDRY_HTTP__TIMEOUT`` means.
 
     Args:
         layer: The layer that supplied the value.
-        detail: What inside that layer named it: the file path, the profile name, the environment
-            variable's spelling or the option as it was typed.
+        detail: What inside that layer named it: the file path, the profile name, the variable's
+            spelling or the option as it was typed.
 
     Returns:
-        The record for that layer; the ``default`` record for the layer that has nothing to name.
+        The record for that layer; the ``default`` record for the layer with nothing to name.
     """
     if layer is ConfigLayer.FILE:
         return ConfigSource.from_file(detail)
@@ -400,9 +380,8 @@ def _attributed_failure(exc: ValidationError, recorded: Mapping[str, ConfigSourc
 
     :func:`foundry.config.validation.translate_validation_error` owns both the wording and the
     reading of pydantic's report, so it is asked once without a layer to learn which key failed, and
-    the recorder -- which knows that key's origin and nothing else's -- supplies the layer for the
-    second call. Pydantic's location format is therefore never parsed here: duplicating it would
-    give the package two readers of the same field and let them drift.
+    the recorder -- which knows that key's origin -- supplies the layer for the second call.
+    Pydantic's location format is therefore never parsed here.
 
     A fault the recorder cannot place is returned as the first call built it, which is the
     cross-field rule case: ``bearer`` without ``http.auth.token_env`` names a companion key that no

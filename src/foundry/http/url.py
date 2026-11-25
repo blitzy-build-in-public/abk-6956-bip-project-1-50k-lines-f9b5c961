@@ -1,8 +1,4 @@
-"""The single place a request target is resolved and a URL is made safe to dump.
-
-:func:`join_url` is step 1 of AAP 0.7.3's pipeline and raises ``ConfigError`` with no base URL;
-:func:`redact_url` strips userinfo and token parameters before a URL reaches any sink (AAP 0.3.2).
-"""
+"""The single place a request target is resolved and a URL is made safe to dump."""
 
 from __future__ import annotations
 
@@ -78,21 +74,9 @@ SUPPORTED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 class UrlParts:
     """The pieces of a URL that Foundry acts on, with any fragment already dropped.
 
-    Produced by :func:`split_url`, and consumed by :func:`origin`, :func:`path_and_query` and
-    :func:`join_url`. Splitting is total: a string that carries no scheme, an empty authority
-    or a non-numeric port still yields parts instead of raising, because a caller composing a
-    ``TransportError`` or a log line must be able to describe whatever it was handed.
-
-    Attributes:
-        scheme: The scheme, case-folded, or ``""`` when the string carries none.
-        host: The host without userinfo or port, case-folded, with an IPv6 literal kept in
-            its brackets. ``""`` when there is no authority.
-        port: The numeric port, or ``None`` when it is absent or not a number a URL can carry.
-        path: The path, starting with ``/`` whenever the URL has an authority.
-        query: The query string without its leading ``?``, in the order it was given.
-        userinfo: The ``user:password`` part of the authority, or ``None`` when absent. Kept
-            so :func:`strip_userinfo` can remove it and so a caller can tell that a credential
-            was supplied; it is never part of :func:`origin`.
+    Splitting is total: a string that carries no scheme, an empty authority or a non-numeric port
+    still yields parts instead of raising, because a caller composing a ``TransportError`` or a log
+    line must be able to describe whatever it was handed.
     """
 
     scheme: str
@@ -302,15 +286,8 @@ def origin(url: str) -> str:
 def path_and_query(url: str) -> str:
     """Return the request target of ``url``: its path and query, and no fragment.
 
-    Args:
-        url: An absolute URL or a relative reference.
-
-    Returns:
-        A string starting with ``/``, such as ``"/api/orders?page=2"``. The query is kept byte
-        for byte and in the order it was given -- order-insensitive comparison belongs to the
-        cassette matcher, not here. An empty path renders as ``"/"`` so a ``TransportError``
-        or a log line never reads as blank, and a relative reference gains the leading ``/``
-        that makes it a request target.
+    The query is kept byte for byte and in the order it was given -- order-insensitive comparison
+    belongs to the cassette matcher, not here -- and an empty path renders as ``"/"``.
     """
     parts = split_url(url)
     path = parts.path or "/"
@@ -352,22 +329,11 @@ def require_base_url(base_url: str | None) -> str:
 def join_url(base_url: str | None, path: str) -> str:
     """Resolve a request target against ``http.base_url``.
 
-    * an absolute ``http``/``https`` target is returned unchanged, its scheme validated even though
-      ``base_url`` is never consulted, so ``foundry_http`` can issue absolute URLs with no base URL;
-    * an absolute path replaces the base URL's path: ``"/orders"`` against ``"http://h:8080/api"``
-    gives
-      ``"http://h:8080/orders"``;
-    * a relative path is appended with exactly one ``/`` between the two, and the query travels with
-    it; * a relative path with ``base_url`` unset raises :class:`ConfigError`.
-
-    A fragment is dropped from either side, because a request never sends one, the base URL's own
-    query is not inherited, and ``"//host/path"`` is treated as a path rather than as a
-    scheme-relative URL.
-
-    Raises:
-        ConfigError: ``path`` is relative and ``base_url`` is unusable, its scheme is not ``http``
-        or
-            ``https``, or it is absolute and has no host.
+    An absolute ``http``/``https`` target is returned unchanged, an absolute path replaces the base
+    URL's path, and a relative path is appended with exactly one ``/`` between the two, its query
+    travelling with it. A fragment is dropped from either side, the base URL's own query is never
+    inherited, and ``"//host/path"`` is treated as a path. A relative target with no usable base URL
+    raises :class:`ConfigError`.
     """
     target = path.partition("#")[0]
     if has_scheme(target):

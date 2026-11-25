@@ -90,21 +90,9 @@ def _compare(
 ) -> _Mismatch | None:
     """Compare one expected fragment with the actual value, returning the first mismatch.
 
-    Recursion follows ``expected``, so the fragment's own depth bounds the walk and no depth
-    guard is needed: a self-referential ``actual`` is never traversed.
-
-    Args:
-        expected: The fragment that must be contained in ``actual``.
-        actual: The decoded JSON value found at ``path``.
-        path: JSON path of this pair, used verbatim in the mismatch it may produce.
-        redactor: The engine every quoted value in a message is scrubbed through, resolved once
-            by :func:`assert_json_subset` and handed down unchanged.
-        secret: True when this subtree sits under a secret-bearing key, in which case quoted
-            values are withheld.
-
-    Returns:
-        The first :class:`_Mismatch` in sorted traversal order, or ``None`` when the fragment is
-        contained.
+    Recursion follows ``expected``, so the fragment's own depth bounds the walk and no depth guard
+    is needed: a self-referential ``actual`` is never traversed. ``secret`` is true when this
+    subtree sits under a secret-bearing key, in which case quoted values are withheld.
 
     Raises:
         AssertionError: When ``expected`` is not a JSON value, or a mapping in it carries a
@@ -182,18 +170,10 @@ def _compare_list(
 ) -> _Mismatch | None:
     """Compare an expected list with the actual value, index by index.
 
-    Args:
-        expected: The expected list. A ``str`` is never treated as one, because a string in
-            ``expected`` is a scalar.
-        actual: The decoded JSON value found at ``path``.
-        path: JSON path of this pair.
-        redactor: The engine every quoted value in a message is scrubbed through, resolved once
-            by :func:`assert_json_subset` and handed down unchanged.
-        secret: True when this subtree sits under a secret-bearing key.
+    Both lists must be the same length, since every expected element is visited in index order.
 
-    Returns:
-        The first :class:`_Mismatch` in index order, or ``None`` when both lists are the same
-        length and every element matches.
+    Raises:
+        AssertionError: Propagated when a nested fragment is not a JSON value.
     """
     if not isinstance(actual, list | tuple):
         return _Mismatch(path, f"expected list, actual {_type_name(actual)}")
@@ -312,15 +292,7 @@ def _child(path: str, key: str) -> str:
 
 
 def _index(path: str, index: int) -> str:
-    """Return the JSON path of ``index`` inside the list at ``path``.
-
-    Args:
-        path: JSON path of the list.
-        index: Zero-based element index.
-
-    Returns:
-        The element path, such as ``$.items[1]``.
-    """
+    """Return the JSON path of the zero-based ``index`` inside the list at ``path``."""
     return f"{path}[{index}]"
 
 

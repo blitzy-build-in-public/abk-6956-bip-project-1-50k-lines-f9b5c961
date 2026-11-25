@@ -1,6 +1,5 @@
 """The ``results.json`` store: the writer and the reader of a run's result document.
 
-:func:`dumps` renders the document, :func:`loads` and :func:`read` decode one back, and
 :func:`write_text` is the single text writer of the whole ``foundry.reporting`` package (AAP 0.4.8),
 so the JUnit writer and the HTML renderer hand it their text rather than opening a file. Records are
 sorted by node id and run errors by worker id and message, never by ``recorded_at``, so two runs of
@@ -41,7 +40,6 @@ _NEWLINE: Final[str] = "\n"
 """Line terminator imposed on write, so a document is identical on any platform."""
 
 _INDENT: Final[int] = 2
-"""Indent width of the document: two spaces, one level per nesting depth."""
 
 _TEMP_SUFFIX: Final[str] = ".tmp"
 """Suffix of the sibling file a write goes through before it is renamed into place."""
@@ -66,16 +64,12 @@ def dumps(elements: Sequence[ResultElement], *, redactor: Redactor | None = None
 
     Returns:
         The document as text: a JSON array indented by two spaces, with sorted keys, non-ASCII
-        characters unescaped and a trailing newline. An empty ``elements`` yields the empty array
-        plus that newline.
+        characters unescaped and a trailing newline.
 
     Raises:
-        ElementTypeError: An element is neither a
-            :class:`~foundry.reporting.record.ResultRecord` nor a
-            :class:`~foundry.reporting.record.RunError`. It subclasses ``TypeError``, so a caller
-            catching that documented defect still catches it.
-        TypeError: An element serialises to a value that is not JSON-native, which ``json.dumps``
-            rejects: a defect in the record models, not a filesystem fault, so it is not absorbed.
+        ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
+        TypeError: An element serialises to a value that is not JSON-native, which is a defect in
+            the record models rather than a filesystem fault, so it is not absorbed.
     """
     scrub = default_redactor() if redactor is None else redactor
     records: list[ResultRecord] = []
@@ -101,14 +95,7 @@ def dumps(elements: Sequence[ResultElement], *, redactor: Redactor | None = None
 
 
 def loads(text: str, *, source: Path) -> tuple[ResultElement, ...]:
-    """Decode a stored ``results.json`` document into its validated elements.
-
-    Args:
-        text: The document's text, as :func:`read` obtained it.
-        source: The document's path, named in the failure so a person can find the file.
-
-    Returns:
-        Every element of the document, in the order the document lists them.
+    """Decode a stored ``results.json`` document into its validated elements, in document order.
 
     Raises:
         DataError: The text is not JSON, is not a JSON array, holds an element that is not an
@@ -160,12 +147,6 @@ def write(
     The parent directory is created by :func:`write_text` inside its guarded region, so a path
     that cannot be created is isolated the same way a path that cannot be written is.
 
-    Args:
-        records: The run's elements, in any order; :func:`dumps` imposes the document's order.
-        path: The document to write, normally ``results.json`` in the invocation directory or the
-            path ``--foundry-json-report`` named.
-        redactor: The run's redactor, or ``None`` for the built-in deny-lists.
-
     Returns:
         The path written, or ``None`` when the write failed and was reported at ``WARNING``.
     """
@@ -180,10 +161,6 @@ def write_text(text: str, path: str | Path) -> Path | None:
     cannot encode -- a lone surrogate decoded from a path, say -- is written with the ``replace``
     handler and reported as one ``WARNING`` naming ``path``, so the character degrades instead of
     the document being lost and the degradation is not silent.
-
-    Args:
-        text: The document's complete text, written as given, trailing newline included.
-        path: The file to write; missing parent directories are created.
 
     Returns:
         The path written, or ``None`` when the write was refused. A refusal is reported once at
@@ -213,16 +190,10 @@ def write_text(text: str, path: str | Path) -> Path | None:
 
 
 def read(path: str | Path) -> tuple[ResultElement, ...]:
-    """Read a result document from disk.
+    """Read a result document from disk into its validated elements, in document order.
 
     Unlike :func:`write`, this raises: a document a person asked to compare cannot be silently
     absent, and the command line turns the failure into exit code ``2``.
-
-    Args:
-        path: The document to read, normally a ``results.json`` written by a previous run.
-
-    Returns:
-        Every element of the document, in the order the document lists them.
 
     Raises:
         DataError: The file cannot be read, cannot be decoded as UTF-8, or is not a Foundry result
@@ -277,14 +248,6 @@ def _redact_record(record: ResultRecord, scrub: Redactor) -> dict[str, object]:
     already carries it, so the document keeps exactly the shape
     :meth:`foundry.reporting.record.ResultRecord.to_dict` defines: a node id, an outcome, a
     duration or a marker is a contract value that redaction must not touch.
-
-    Args:
-        record: The result record to serialise.
-        scrub: The redactor to apply.
-
-    Returns:
-        The record as a JSON-ready mapping, with its failure messages, traceback paths and
-        artifact paths redacted.
     """
     payload = record.to_dict()
     payload["failures"] = [_redact_failure(failure, scrub) for failure in record.failures]
@@ -293,16 +256,7 @@ def _redact_record(record: ResultRecord, scrub: Redactor) -> dict[str, object]:
 
 
 def _redact_failure(failure: FailureRecord, scrub: Redactor) -> dict[str, object]:
-    """Return one failure entry with its message and its traceback path redacted.
-
-    Args:
-        failure: The failure entry to serialise.
-        scrub: The redactor to apply.
-
-    Returns:
-        The entry as a JSON-ready mapping, with the two text fields scrubbed and ``phase``
-        untouched.
-    """
+    """Return one failure entry with its message and its traceback path redacted."""
     payload = failure.to_dict()
     payload["message"] = scrub.text(failure.message)
     if failure.traceback_path is not None:
@@ -315,13 +269,6 @@ def _redact_artifact(artifact: ArtifactRecord, scrub: Redactor) -> dict[str, obj
 
     A node id can carry a name that looks like a credential's, and the path is built from one, so
     the path is scrubbed like any other text before it reaches the document.
-
-    Args:
-        artifact: The artifact reference to serialise.
-        scrub: The redactor to apply.
-
-    Returns:
-        The reference as a JSON-ready mapping, with its path scrubbed and ``bytes`` untouched.
     """
     payload = artifact.to_dict()
     payload["path"] = scrub.text(artifact.path)
@@ -329,15 +276,7 @@ def _redact_artifact(artifact: ArtifactRecord, scrub: Redactor) -> dict[str, obj
 
 
 def _redact_run_error(error: RunError, scrub: Redactor) -> dict[str, object]:
-    """Return one run-error element with its message redacted.
-
-    Args:
-        error: The run error to serialise.
-        scrub: The redactor to apply.
-
-    Returns:
-        The element as a JSON-ready mapping, with its message scrubbed.
-    """
+    """Return one run-error element with its message redacted."""
     payload = error.to_dict()
     payload["message"] = scrub.text(error.message)
     return payload
@@ -350,9 +289,8 @@ def _is_encodable(text: str) -> bool:
     """Return whether UTF-8 can encode ``text`` as it stands.
 
     Asking before the file is opened is what lets :func:`write_text` report a degradation with one
-    ``WARNING``: the document is encoded once here to find out, and the write itself is what
-    imposes the ``replace`` handler, so nothing has to be re-read afterwards to compare. The
-    answer depends on the text alone, so it keeps the write deterministic (AAP 0.14.1).
+    ``WARNING``. The answer depends on the text alone, so it keeps the write deterministic
+    (AAP 0.14.1).
     """
     try:
         text.encode(_ENCODING)
@@ -365,11 +303,10 @@ def _discard(temporary: Path) -> None:
     """Remove a temporary file a failed write left behind, ignoring a second failure.
 
     A write that could not be renamed into place must not leave a stray ``.tmp`` beside the
-    document, and the cleanup is itself plumbing: if the file cannot be removed either, there is
-    nothing further to report without turning one isolated failure into two. A name that cannot be
-    encoded is covered as well as a filesystem refusal, because the undecodable bytes that make a
-    document's text unrepresentable can make its path unrepresentable too, and the cleanup must not
-    be the step that lets that fault reach the session (AAP 0.1.2, AAP 0.14.3).
+    document, and if the file cannot be removed either there is nothing further to report without
+    turning one isolated failure into two. A name that cannot be encoded is covered as well as a
+    filesystem refusal, so the cleanup is never the step that lets that fault reach the session
+    (AAP 0.1.2, AAP 0.14.3).
     """
     try:
         temporary.unlink(missing_ok=True)

@@ -1,8 +1,8 @@
-"""The command-line layer: the ``--foundry-*`` overrides an operator typed (AAP 0.4.5).
+"""The command-line layer: the ``--foundry-*`` overrides an operator typed.
 
 :class:`CliInput` is the only shape :mod:`foundry.config.merge` needs: a dotted key's coerced value
 and the option spelling that supplied it, which ``foundry config show --resolved`` attributes to
-``cli:<option>`` (AAP 0.4.4, criterion 4). :data:`SPECIAL_OPTIONS` configure no key.
+``cli:<option>``. :data:`SPECIAL_OPTIONS` configure no key.
 """
 
 from __future__ import annotations
@@ -32,10 +32,7 @@ __all__: Final[tuple[str, ...]] = (
 )
 
 GENERIC_OPTION_PREFIX: Final[str] = keys.GENERIC_OPTION_PREFIX
-"""Prefix of the option generated for every scalar key (AAP 0.4.4).
-
-Re-exported from :mod:`foundry.config.keys` rather than respelled, so both sides build one string.
-"""
+"""Prefix of the option generated for every scalar key, re-exported from the registry."""
 
 _ValueT = TypeVar("_ValueT")
 
@@ -68,11 +65,11 @@ A caller building a mapping by hand may write ``"false"``, which must not turn r
 
 @dataclass(frozen=True, slots=True)
 class SpecialOption:
-    """A named ``--foundry-*`` option that configures no configuration key (AAP 0.4.4).
+    """A named ``--foundry-*`` option that configures no configuration key.
 
     They are described here rather than in :data:`foundry.config.keys.KEY_SPECS`, because that
-    registry is the table of the configuration surface, and ``--foundry-json-report`` in particular
-    is not a key: it moves a file without changing a resolved value (AAP 0.1.2).
+    registry is the table of the configuration surface: ``--foundry-json-report`` in particular is
+    not a key, moving a file without changing a resolved value.
 
     Attributes:
         spelling: The option as an operator writes it, also the ``cli:<option>`` detail reported.
@@ -91,8 +88,8 @@ SPECIAL_OPTIONS: Final[tuple[SpecialOption, ...]] = (
 )
 """The four named options that configure no key, in the order AAP 0.4.4 documents them.
 
-The three key-bound aliases are absent: the :class:`~foundry.config.keys.KeySpec` they set
-declares them, so the registry stays the single table of what configures a key.
+The three key-bound aliases are absent: the :class:`~foundry.config.keys.KeySpec` they set declares
+them, so the registry stays the single table of what configures a key.
 """
 
 _SPECIAL_BY_SPELLING: Final[Mapping[str, SpecialOption]] = types.MappingProxyType(
@@ -114,9 +111,8 @@ class CliInput:
     """Everything the command line supplied, coerced, with the spelling behind each value.
 
     The carrier :mod:`foundry.config.merge` applies as its highest layer: a value alone is not
-    enough, because ``foundry config show --resolved`` reports ``cli:--foundry-http.timeout``
-    (AAP 0.4.4, criterion 4), and the two path-valued options travel beside both because they
-    configure no key (AAP 0.1.2).
+    enough, because ``foundry config show --resolved`` reports ``cli:--foundry-http.timeout``, and
+    the two path-valued options travel beside both because they configure no key.
 
     Attributes:
         overrides: The coerced value of each overridden key, by dotted key.
@@ -134,18 +130,14 @@ class CliInput:
         """Freeze both mappings into key-sorted read-only views.
 
         A frozen dataclass still holds a mutable ``dict``, and the sorted order is what reaches the
-        source table and the debug log line (AAP 0.13.1).
+        source table and the debug log line.
         """
         object.__setattr__(self, "overrides", _frozen_by_key(self.overrides))
         object.__setattr__(self, "spellings", _frozen_by_key(self.spellings))
 
     @classmethod
     def empty(cls) -> CliInput:
-        """Return the input of a command line that supplied no ``--foundry-*`` option.
-
-        Returns:
-            A :class:`CliInput` equal to :data:`EMPTY_CLI_INPUT`.
-        """
+        """Return the input of a command line that supplied no ``--foundry-*`` option."""
         return cls()
 
     def is_empty(self) -> bool:
@@ -182,9 +174,9 @@ def alias_dest(option: str) -> str:
 
     The single statement of the convention two modules must agree on: :mod:`foundry.plugin`
     registers each named option with exactly this ``dest`` and :func:`collect_from_pytest` reads
-    its value back through it, so a mismatch would silently drop the override. A generic
-    ``--foundry-<dotted.key>`` option uses :func:`foundry.config.keys.option_dest` instead, since
-    a dot is no attribute name.
+    it back through it, so a mismatch would silently drop the override. A generic
+    ``--foundry-<dotted.key>`` option uses :func:`foundry.config.keys.option_dest` instead, a dot
+    being no attribute name.
 
     Args:
         option: The spelling, with or without leading dashes or an inline value.
@@ -201,26 +193,20 @@ def alias_dest(option: str) -> str:
 def from_mapping(raw: Mapping[str, object], *, cwd: Path | None = None) -> CliInput:
     """Collect the ``--foundry-*`` overrides a command line supplied.
 
-    The entry point both surfaces share -- ``click``'s mapping and the one
-    :func:`collect_from_pytest` reads from a :class:`pytest.Config` -- so the spelling rules, the
-    coercions and the error wording exist once. An entry is keyed by an option spelling,
-    optionally carrying its value inline, or by a dotted key, and entries are visited in sorted
-    order.
+    The entry point both surfaces share -- click's mapping and the one :func:`collect_from_pytest`
+    reads from a :class:`pytest.Config` -- so the spelling rules, the coercions and the error
+    wording exist once. An entry is keyed by an option spelling, optionally carrying its value
+    inline, or by a dotted key, and entries are visited in sorted order.
 
-    An entry whose value is ``None`` is skipped, as is a path option given as an empty string;
-    ``--foundry-config`` and ``--foundry-json-report`` are recorded exactly as typed, a relative
-    path being resolved later by :func:`foundry.config.files.discover_file` (AAP 0.4.5, A5), and
-    ``cwd`` changes nothing that is recorded; ``--foundry-record`` with ``--foundry-replay`` is a
-    usage error (AAP 0.4.4), and either alone sets ``cassette.mode``, winning over a mode supplied
-    in the same mapping; a named alias resolves to the key its
-    :class:`~foundry.config.keys.KeySpec` declares (AAP 0.1.2).
+    An entry whose value is ``None`` is skipped, as is a path option given as an empty string.
+    ``--foundry-config`` and ``--foundry-json-report`` are recorded exactly as typed, ``cwd``
+    changing nothing that is recorded; ``--foundry-record`` with ``--foundry-replay`` is a usage
+    error, and either alone sets ``cassette.mode``, winning over a mode in the same mapping.
 
     Every value is coerced by :func:`foundry.config.validation.coerce_cli_value` and the spelling
-    that supplied it is recorded beside it, which is what lets ``foundry config show --resolved``
-    report ``cli:--foundry-http.timeout`` (criterion 4). A table- or list-valued key raises
-    instead: AAP 0.4.4 registers the generic option for the scalar keys only, so no parser ever
-    produced a value for it, and :func:`foundry.config.errors.option_not_settable` names the file
-    layer that can carry it.
+    that supplied it is recorded beside it. A table- or list-valued key raises instead, because the
+    generic option is registered for the scalar keys only, and
+    :func:`foundry.config.errors.option_not_settable` names the file layer that can carry it.
 
     Returns:
         The overrides, the spelling behind each of them and the two path options.
@@ -291,11 +277,9 @@ def collect_from_pytest(config: pytest.Config) -> CliInput:
     """Collect the ``--foundry-*`` overrides a :class:`pytest.Config` carries.
 
     Reads the values back through the two ``dest`` conventions and hands them to
-    :func:`from_mapping`, so there is one implementation of the coercion rules (AAP 0.4.4). Every
-    read passes ``default=None``, so a build that registered fewer options degrades to "no
-    override supplied" instead of raising inside ``pytest_configure``, and a key reachable through
-    both a generic and a named ``dest`` keeps the named spelling, which is the one the operator
-    typed.
+    :func:`from_mapping`, so there is one implementation of the coercion rules. Every read passes
+    ``default=None``, so a build that registered fewer options degrades to "no override supplied"
+    instead of raising inside ``pytest_configure``.
     """
     raw: dict[str, object] = {}
     for spec in keys.KEY_SPECS:
@@ -319,7 +303,7 @@ def _registered_key(spelling: str) -> tuple[str, keys.KeySpec]:
 
     Raises:
         ConfigError: When no key is bound to the spelling, naming the closest registered spelling
-            in the hint and the option in the detail (AAP 0.4.5).
+            in the hint and the option in the detail.
     """
     dotted = keys.option_to_key(spelling)
     spec = keys.spec_for(dotted) if dotted is not None else None
@@ -371,7 +355,7 @@ def _path_option(spelling: str, value: object) -> Path | None:
 def _flag_enabled(value: object) -> bool:
     """Return whether a supplied switch was turned on.
 
-    ``click`` and ``pytest`` hand over a real ``bool`` and a hand-built mapping may write the word
+    ``click`` and ``pytest`` hand over a real ``bool``, and a hand-built mapping may write the word
     instead, so a flag written as ``"false"`` does not silently turn recording on.
     """
     if isinstance(value, bool):
@@ -389,8 +373,9 @@ def _selected_mode(flags: Mapping[str, bool]) -> tuple[str, CassetteMode] | None
         CassetteMode.REPLAY)``, or ``None`` when neither switch was turned on.
 
     Raises:
-        ConfigError: When both were turned on, which AAP 0.4.4 makes a usage error. The conflict is
-            decided after every entry has been read, so it is reported whatever order they came in.
+        ConfigError: When both were turned on, which the command line makes a usage error. The
+            conflict is decided after every entry has been read, so it is reported whatever order
+            they came in.
     """
     recording = flags.get(_RECORD_OPTION, False)
     replaying = flags.get(_REPLAY_OPTION, False)

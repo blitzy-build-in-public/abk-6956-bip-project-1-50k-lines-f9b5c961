@@ -1,8 +1,4 @@
-"""The four credential strategies of Foundry's HTTP layer and the rule that keeps them safe.
-
-Configuration holds only the *names* of the environment variables carrying the secrets (AAP 0.3.2):
-:func:`resolve_auth` reads them once at session start, and no representation prints the value.
-"""
+"""The four credential strategies of Foundry's HTTP layer and the rule that keeps them safe."""
 
 from __future__ import annotations
 
@@ -86,25 +82,8 @@ _ACCEPTED_TEXT: Final[str] = ", ".join(AUTH_STRATEGIES)
 class AuthSettings:
     """The six ``http.auth.*`` keys, carrying variable *names* and never a secret.
 
-    The fields mirror the configuration keys one for one (AAP 0.4.5), so the HTTP session
-    builds an instance from resolved configuration by copying six values across and this
-    module needs no import of :mod:`foundry.config`. A frozen, slotted dataclass is what makes
-    an instance cheap to construct per test -- ``foundry_api`` is function scoped -- and
-    impossible to mutate after resolution.
-
-    Attributes:
-        strategy: The configured strategy. An ``AuthStrategy`` member is accepted as well as
-            its plain value, because the comparison is made through
-            :func:`normalise_strategy`.
-        token_env: Name of the environment variable holding the bearer token. Required when
-            ``strategy`` is ``bearer``.
-        user_env: Name of the environment variable holding the basic-auth user id. Required
-            when ``strategy`` is ``basic``.
-        password_env: Name of the environment variable holding the basic-auth password.
-            Required when ``strategy`` is ``basic``.
-        header_name: Header name to send. Required when ``strategy`` is ``header``.
-        header_value_env: Name of the environment variable holding the value of
-            ``header_name``. Required when ``strategy`` is ``header``.
+    Each ``*_env`` field is required by the strategy that reads it, and a frozen, slotted dataclass
+    keeps an instance cheap to build per test and impossible to change.
     """
 
     strategy: str = STRATEGY_NONE
@@ -141,41 +120,16 @@ class AuthHeader:
     value: str = field(repr=False)
 
     def masked(self) -> str:
-        """Return the mask a redacted rendering shows in place of the value.
-
-        A caller that must show *something* -- ``doctor`` echoing the header it would send, a
-        CLI table listing the resolved configuration -- calls this instead of reading
-        :attr:`value`.
-
-        Returns:
-            :data:`~foundry.obs.redaction.REDACTED`, the ``***`` every Foundry sink substitutes
-            for a secret.
-        """
+        """Return the mask a redacted rendering shows in place of the value."""
         return REDACTED
 
 
 def normalise_strategy(value: str | object) -> str:
     """Return the comparable strategy name for ``value``.
 
-    The result is stripped and case-folded, which is what makes ``" Bearer "``, ``"BEARER"``
-    and ``AuthStrategy.BEARER`` one strategy. An enum member is unwrapped through its ``value``
-    first, so a caller may pass :class:`foundry.config.enums.AuthStrategy` without this module
-    importing the enum -- the layering contract keeps :mod:`foundry.config` out of
-    :mod:`foundry.http` (AAP 0.4.8).
-
-    The function is total: ``None``, an empty string and a whitespace-only string all normalise
-    to ``""``, which :func:`resolve_auth` treats as :data:`STRATEGY_NONE`, and any other object
-    is rendered with ``str()`` so the unknown-strategy error names what was actually passed.
-
-    Args:
-        value: A strategy name, or an enum member whose ``value`` is one.
-
-    Returns:
-        The stripped, case-folded strategy name, or ``""`` when ``value`` carries no text.
-
-    Example:
-        >>> normalise_strategy(" Bearer ")
-        'bearer'
+    The result is stripped and case-folded, and an enum member is unwrapped through its ``value``,
+    so a caller may pass :class:`foundry.config.enums.AuthStrategy` without this module importing
+    the enum. ``None``, an empty string and a whitespace-only string all normalise to ``""``.
     """
     member: object = getattr(value, "value", value)
     if member is None:

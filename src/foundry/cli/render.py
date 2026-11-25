@@ -1,12 +1,11 @@
 """The one place Foundry renders terminal output.
 
 Every CLI module hands this renderer plain data -- rows, node ids, one message, one document -- and
-receives nothing back: widths, colours, borders and the stdout/stderr choice live here (AAP 0.7.1,
-AAP 0.7.4). ``rich`` is imported inside each function that needs it, so the pytest activation path
-pays for nothing until a command renders (I5, AAP 0.14.2), and every cell, message and line passes
-through the redactor before it reaches the console (AAP 0.3.2, AAP 0.14.3). Output is deterministic
-and unstyled on rich's own defaults, with no value ever interpreted as markup, and a write fault
-travels no further than the caller's guard (AAP 0.13.1, AAP 0.6, AAP 0.1.2).
+receives nothing back: widths, colours, borders and the stdout/stderr choice live here. ``rich`` is
+imported inside each function that needs it, so the pytest activation path pays for nothing until a
+command renders, and every cell, message and line passes through the redactor before it reaches the
+console. Output is deterministic and unstyled on rich's own defaults, with no value ever interpreted
+as markup, and a write fault travels no further than the caller's guard.
 """
 
 from __future__ import annotations
@@ -185,19 +184,12 @@ if TYPE_CHECKING:
 def _console(stderr: bool = False) -> Console:
     """Return the console one rendering writes through.
 
-    This is the single ``rich.console.Console`` construction site in the tree (AAP 0.7.1).
-    ``highlight``, ``emoji`` and ``soft_wrap`` are off so two runs of one command capture identical
-    bytes, and ``stderr`` selects the stream, which is how an error reaches stderr while a result
-    reaches stdout (AAP 0.7.4). No theme and no style is passed: rich's defaults are the whole of
-    the presentation (AAP 0.6). ``rich`` is imported here rather than at module scope, so a command
-    pays for it and the pytest activation path never does (implicit requirement I5).
-
-    Args:
-        stderr: Whether the console writes to stderr instead of stdout.
-
-    Returns:
-        A console over ``sys.stdout``, or over ``sys.stderr`` when ``stderr`` is true. rich resolves
-        the stream when it prints, so a stream a caller replaced after this call is still honoured.
+    The single ``rich.console.Console`` construction site in the tree. ``highlight``, ``emoji`` and
+    ``soft_wrap`` are off so two runs of one command capture identical bytes, and ``stderr`` selects
+    the stream, which is how an error reaches stderr while a result reaches stdout. No theme and no
+    style is passed: rich's defaults are the whole of the presentation. ``rich`` is imported here
+    rather than at module scope, so the pytest activation path never pays for it, and rich resolves
+    the stream when it prints, so a stream a caller replaced after this call is still honoured.
     """
     from rich.console import Console
 
@@ -205,14 +197,10 @@ def _console(stderr: bool = False) -> Console:
 
 
 def _redactor(redactor: Redactor | None) -> Redactor:
-    """Return ``redactor``, or the default one for a caller that supplied none.
+    """Return ``redactor``, or :func:`foundry.obs.redaction.default_redactor` when none was given.
 
-    Args:
-        redactor: The redactor a caller passed, or ``None``.
-
-    Returns:
-        ``redactor`` unchanged, or :func:`foundry.obs.redaction.default_redactor`, which carries the
-        built-in header and query deny-lists and therefore covers every default secret name.
+    The default carries the built-in header and query deny-lists, so it covers every default secret
+    name.
     """
     return default_redactor() if redactor is None else redactor
 
@@ -223,14 +211,6 @@ def _scrubbed_text(text: str, redactor: Redactor, *, style: str | None = None) -
     Wrapping rather than passing a ``str`` is what keeps markup out of the console: rich parses
     ``[``-delimited tags in a ``str`` but never in ``Text``, so a parametrised node id such as
     ``test_login[case-1]`` prints exactly as written instead of losing a fragment or raising.
-
-    Args:
-        text: The value to print, which may hold a credential.
-        redactor: The redactor to scrub ``text`` through before it reaches the console.
-        style: A rich built-in style name such as ``red``, or ``None`` for the default style.
-
-    Returns:
-        The redacted value as a renderable that rich prints without interpreting its markup.
     """
     from rich.text import Text
 
@@ -263,32 +243,14 @@ def _table(title: str | None, columns: _RowCells, redactor: Redactor) -> Table:
 
 
 def _config_cells(row: KeyValueSourceRow | _RowCells) -> _RowCells:
-    """Return the three cells of one configuration row, whichever of its two shapes arrived.
-
-    Args:
-        row: A row with the attributes :class:`KeyValueSourceRow` describes, as
-            :func:`foundry.config.render.rows` produces, or the same three cells as a tuple.
-
-    Returns:
-        ``(key, value, source)``.
-    """
+    """Return the three cells of one configuration row, whichever of its two shapes arrived."""
     if isinstance(row, tuple):
         return _tuple_cells(row)
     return (row.key, row.value, row.source)
 
 
 def _probe_cells(row: ProbeRow | _RowCells) -> _RowCells:
-    """Return the three cells of one doctor row, whichever of its two shapes arrived.
-
-    :meth:`foundry.diagnostics.report.ProbeResult.as_row` returns the tuple form and
-    :meth:`foundry.diagnostics.report.DoctorReport.as_rows` a tuple of them, so both are accepted.
-
-    Args:
-        row: A row with the attributes :class:`ProbeRow` describes, or the same cells as a tuple.
-
-    Returns:
-        ``(name, status, detail)``.
-    """
+    """Return the three cells of one doctor row, whichever of its two shapes arrived."""
     if isinstance(row, tuple):
         return _tuple_cells(row)
     return (row.name, row.status, row.detail)
@@ -299,13 +261,7 @@ def _tuple_cells(row: _RowCells) -> _RowCells:
 
     The padding is defensive: the annotation already says three, so this never fires for a caller
     that honours it, and a row that lost a cell prints a blank column instead of turning a display
-    fault into a failed test (AAP 0.1.2).
-
-    Args:
-        row: The cells of one row.
-
-    Returns:
-        The first three cells, with empty ones appended when the row is shorter than three.
+    fault into a failed test.
     """
     first = row[0] if len(row) > 0 else ""
     second = row[1] if len(row) > 1 else ""
@@ -324,20 +280,11 @@ def render_config_table(
 ) -> None:
     """Print the ``foundry config show`` table of ``Key``, ``Value`` and ``Source``.
 
-    The headings are exactly ``Key``, ``Value`` and ``Source`` (AAP 0.7.4), the rows print in the
-    order they arrive -- the caller supplies the sorted key order of ``foundry.config.keys`` and
-    this module never re-sorts -- and every cell passes through the redactor, because
-    ``http.headers`` values and a ``http.base_url`` carrying URL userinfo are the configuration
-    values that can hold a credential (AAP 0.3.2).
-
-    Args:
-        rows: The rows to print, either the frozen rows :func:`foundry.config.render.rows` returns
-            or plain ``(key, value, source)`` triples.
-        title: A heading to print above the table, redacted like every other value, or ``None``.
-        redactor: The redactor to scrub every cell through; ``None`` selects the default one.
-
-    Returns:
-        ``None``; the table is written to stdout.
+    The headings are exactly those three words and the rows print in the order they arrive -- the
+    caller supplies the sorted key order and this module never re-sorts. Every cell passes through
+    the redactor, because ``http.headers`` values and a ``http.base_url`` carrying URL userinfo are
+    the configuration values that can hold a credential. A ``title`` is redacted like every other
+    value, and ``None`` for either keyword argument selects the default behaviour.
     """
     scrubbing = _redactor(redactor)
     table = _table(title, _CONFIG_COLUMNS, scrubbing)
@@ -354,17 +301,10 @@ def render_not_applied(
     """Print the separate section naming configuration overrides a command did not apply.
 
     ``foundry config show`` without ``--resolved`` resolves the configuration from defaults, file,
-    profile and environment only, so the override options it was given change nothing and are
-    listed apart from the resolution rather than folded into it (AAP 0.4.4). The section is titled
-    with the literal words ``not applied`` and has the same three columns as the resolved table.
-
-    Args:
-        rows: One row per override the command did not apply; an empty sequence prints nothing, so a
-            command that applied everything it was given needs no branch of its own.
-        redactor: The redactor to scrub every cell through; ``None`` selects the default one.
-
-    Returns:
-        ``None``; the section is written to stdout.
+    profile and environment only, so the override options it was given change nothing and are listed
+    apart from the resolution rather than folded into it. The section is titled with the literal
+    words ``not applied`` and has the same three columns as the resolved table. An empty sequence
+    prints nothing, so a command that applied everything it was given needs no branch of its own.
     """
     if not rows:
         return
@@ -421,15 +361,7 @@ def render_probe_table(
 
 
 def _probe_summary(counts: Mapping[str, int], *, ok: bool) -> str:
-    """Return the closing line of the doctor table: one count per state, then the verdict.
-
-    Args:
-        counts: How many probes reported each of the three states.
-        ok: Whether no required probe failed.
-
-    Returns:
-        A single line such as ``probes: 4 pass, 1 warn, 0 fail (ok)``.
-    """
+    """Return the closing line of the doctor table: one count per state, then the verdict."""
     verdict = "ok" if ok else "failed"
     return (
         f"probes: {counts.get(_PASS, 0)} {_PASS}, "
@@ -468,14 +400,7 @@ def render_comparison(groups: ComparisonGroups, *, redactor: Redactor | None = N
 
 
 def _render_group(console: Console, label: str, nodeids: Sequence[str], redactor: Redactor) -> None:
-    """Print one comparison group: its label and size, then its node ids or the empty marker.
-
-    Args:
-        console: The console to print through.
-        label: The group's fixed label, such as ``Newly failing``.
-        nodeids: The group's node ids, already in the order they are to print.
-        redactor: The redactor every line passes through.
-    """
+    """Print one comparison group: its label and size, then its node ids or the empty marker."""
     console.print(_scrubbed_text(f"{label} ({len(nodeids)}):", redactor), soft_wrap=True)
     if not nodeids:
         console.print(_scrubbed_text(f"{_LINE_INDENT}{_NONE_MARKER}", redactor), soft_wrap=True)

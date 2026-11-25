@@ -1,12 +1,11 @@
 """The five required ``foundry doctor`` probes and the runner that reports every row.
 
-AAP 0.7.1 places the environment probes here, and each answers with a
-:class:`~foundry.diagnostics.report.ProbeResult`, so the table of AAP 0.7.4 and the ``checks`` array
-of AAP 0.7.3 cannot disagree. :data:`REQUIRED_PROBES` are the five defined here, each reported with
-``required=True`` so a ``FAIL`` makes ``foundry doctor`` exit ``2`` (AAP 0.4.4); the sixth row, the
-socket-guard state, comes from :func:`foundry.diagnostics.socket_guard.check_socket_guard` with
-``required=False`` and cannot change that code. A probe that raises is isolated into a ``FAIL`` row
-naming the exception's class alone, after one ``WARNING`` (AAP 0.1.2). Importing runs no probe.
+Every probe answers with a :class:`~foundry.diagnostics.report.ProbeResult`, so the table of
+AAP 0.7.4 and the ``checks`` array of AAP 0.7.3 cannot disagree (AAP 0.7.1). Each of
+:data:`REQUIRED_PROBES` is reported with ``required=True``, so a ``FAIL`` makes ``foundry doctor``
+exit ``2`` (AAP 0.4.4); the sixth row, the socket-guard state, is ``required=False`` and cannot
+change that code. A probe that raises is isolated into a ``FAIL`` row naming the exception's class
+alone, after one ``WARNING`` (AAP 0.1.2). Importing runs no probe.
 """
 
 from __future__ import annotations
@@ -43,9 +42,8 @@ __all__ = [
 ]
 
 # The five stable probe identifiers of AAP 0.7.1. Each doubles as the ``Probe`` cell of the table
-# (AAP 0.7.4) and as the ``name`` of the JSON ``checks`` element (AAP 0.7.3), and both belong to the
-# additive-only public surface of AAP 0.4.9: they may be added to, never renamed. The sixth row's
-# identifier is :data:`foundry.diagnostics.socket_guard.PROBE_NAME`, defined once in that module.
+# (AAP 0.7.4) and as the ``name`` of the JSON ``checks`` element (AAP 0.7.3); both belong to the
+# additive-only public surface of AAP 0.4.9, so they may be added to but never renamed.
 PROBE_INTERPRETER: Final[str] = "interpreter"
 PROBE_PLUGIN: Final[str] = "plugin"
 PROBE_CONFIGURATION: Final[str] = "configuration"
@@ -132,16 +130,9 @@ def check_interpreter(info: InterpreterInfo | None = None) -> ProbeResult:
     An interpreter outside the ``CPython 3.11-3.13`` range of AAP 0.3.1's ``requires-python`` is a
     ``FAIL``, because no other part of the product has been tested there. A supported interpreter
     on a platform other than Linux or macOS is a ``WARN``: AAP 0.4.1 declares Windows unsupported
-    and asks ``foundry doctor`` to report a warning rather than a pass, and the same reasoning
-    covers any platform ``sys.platform`` names outside the two that are tested.
-
-    Args:
-        info: the interpreter to judge. It defaults to ``None``, meaning
-            :meth:`~foundry.diagnostics.report.InterpreterInfo.current` computed inside this call,
-            so importing the module judges nothing (AAP 0.4.8).
-
-    Returns:
-        The row named :data:`PROBE_INTERPRETER`, with ``required=True``.
+    and asks ``foundry doctor`` to warn rather than pass. ``info`` defaults to ``None``, meaning
+    :meth:`~foundry.diagnostics.report.InterpreterInfo.current` computed inside this call, so
+    importing the module judges nothing (AAP 0.4.8).
     """
     resolved = InterpreterInfo.current() if info is None else info
     identity = f"{resolved.implementation} {resolved.version} on {resolved.platform}"
@@ -168,9 +159,9 @@ def _installed_entry_points() -> tuple[tuple[str, str], ...]:
     """Return the installed ``pytest11`` entry points as sorted ``(name, value)`` pairs.
 
     :mod:`importlib.metadata` reads the metadata of the installed distributions, so the answer
-    comes from the environment rather than from a network index (AAP 0.9.2). It is imported here
-    rather than at module scope to keep importing this module cheap, and the pairs are sorted so a
-    failing probe's detail does not depend on the order the metadata lists them in.
+    comes from the environment rather than a network index (AAP 0.9.2). It is imported here to keep
+    importing this module cheap, and the pairs are sorted so a failing probe's detail does not
+    depend on the order the metadata lists them in.
     """
     from importlib.metadata import entry_points
 
@@ -187,9 +178,9 @@ def _module_importable(name: str) -> bool:
     """Return whether ``name`` resolves to an importable module, without importing it.
 
     :func:`importlib.util.find_spec` locates the module rather than executing it, so the plugin
-    probe cannot trigger the hooks and registration work that importing :mod:`foundry.plugin`
-    performs. A parent package that is missing raises instead of returning ``None``, which is
-    reported as "not importable" rather than reaching the caller (AAP 0.1.2).
+    probe cannot trigger the hooks and registration work that importing :mod:`foundry.plugin` does.
+    A parent package that is missing raises instead, which is reported as "not importable"
+    (AAP 0.1.2).
     """
     try:
         return importlib.util.find_spec(name) is not None

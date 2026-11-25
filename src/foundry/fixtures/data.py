@@ -1,42 +1,33 @@
 """The ``foundry_data`` fixture: the data files one test reads by name.
 
-``foundry_data`` is one of Foundry's twelve public fixtures (AAP 0.4.3). It is function scoped and
-returns a :class:`FoundryDataLoader` whose two published methods each read one data file:
-``foundry_data.cases("cart.csv")`` returns every data row of ``<data.dir>/cart.csv`` as a
-:class:`foundry.data.cases.Case`, and ``foundry_data.matrix("pricing.yaml")`` returns the cases a
-matrix document's cross-product expands to. Both hand back immutable tuples in the order the loader
-produced them -- file order for a table, sorted-axis expansion order for a matrix -- so a test
-parametrises over a deterministic sequence (implicit requirement I6).
+``foundry_data`` is function scoped and returns a :class:`FoundryDataLoader` whose two published
+methods each read one data file: ``foundry_data.cases("cart.csv")`` returns every data row of
+``<data.dir>/cart.csv`` as a :class:`foundry.data.cases.Case`, and
+``foundry_data.matrix("pricing.yaml")`` returns the cases a matrix document's cross-product expands
+to. Both hand back immutable tuples in the order the loader produced them -- file order for a table,
+sorted-axis expansion order for a matrix -- so a test parametrises over a deterministic sequence.
 
-**Names, not paths.** A test names a file relative to ``data.dir`` (default ``testdata``,
-AAP 0.4.5), and nothing outside that directory is addressable:
+**Names, not paths.** A test names a file relative to ``data.dir`` (default ``testdata``), and
+nothing outside that directory is addressable:
 :func:`foundry.data.registry.resolve_data_file` refuses an escaping name through
-:func:`foundry.core.paths.resolve_under`, the tree's single containment check (AAP 0.14.3), and a
-relative ``data.dir`` is resolved once, here, against pytest's invocation directory.
+:func:`foundry.core.paths.resolve_under`, the tree's single containment check, and a relative
+``data.dir`` is resolved once, here, against pytest's invocation directory.
 
 **Strictness and the located ``DataError``.** ``data.schema_strict`` is passed to the loader as
 given: switched on (the default) a column the file's sidecar JSON Schema does not declare is a
-fault, switched off the column is tolerated (AAP 0.4.5). Every fault a data file can produce
-surfaces as one :class:`foundry.core.exceptions.DataError` naming the file and, where they are
-known, the line and the column (AAP 0.4.7), and propagates from here unchanged.
+fault. Every fault a data file can produce surfaces as one
+:class:`foundry.core.exceptions.DataError` naming the file and, where they are known, the line and
+the column.
 
 **An empty file is not a fault.** A header-only CSV, an empty JSON array, a blank YAML document and
 a blank-only JSON Lines file all yield ``()``, which lets a parametrisation skip the item with the
-reason ``no cases in <file>`` rather than fail collection (AAP 0.4.7). An extension no reader claims
-is the opposite case and does raise, listing the extensions that would work.
+reason ``no cases in <file>`` rather than fail collection. An extension no reader claims is the
+opposite case and does raise, listing the extensions that would work.
 
-**This module parses nothing.** Reading a format, expanding a matrix, deriving a case id and
-enforcing a schema belong to :mod:`foundry.data`, because the ids this fixture returns have to match
-the ones the plugin's own ``pytest_generate_tests`` delegation produces for the same file
-(AAP 0.7.2). ``foundry_config`` is requested as a fixture argument rather than read from a session
-stash, so a project that overrides it -- as ``examples/checkout`` does -- changes the directory this
-fixture reads from.
-
-**Imported lazily and layered** (AAP 0.4.8, AAP 0.14.2). This module is imported during
-``pytest_configure``, at every pytest start, inside the 150 ms budget, so module scope imports
-``dataclasses``, ``pathlib``, ``typing`` and ``pytest`` and no Foundry module at all:
-:mod:`foundry.data` and :mod:`foundry.core.exceptions` are imported inside the method that first
-needs them, and annotation names under ``TYPE_CHECKING``. Importing this module defines names only.
+**Imported lazily.** This module is imported during ``pytest_configure`` inside the 150 ms budget,
+so module scope imports ``dataclasses``, ``pathlib``, ``typing`` and ``pytest`` and no Foundry
+module at all: the Foundry imports sit inside the method that first needs them, and annotation
+names under ``TYPE_CHECKING``.
 """
 
 from __future__ import annotations
@@ -59,18 +50,17 @@ __all__ = ["FoundryDataLoader", "foundry_data"]
 class FoundryDataLoader:
     """Read the data files of one test, resolving their names against ``data.dir``.
 
-    AAP 0.4.3 publishes this object as the value of the ``foundry_data`` fixture: ``cases(name)``
-    returns one :class:`foundry.data.cases.Case` per data row of the named file and
-    ``matrix(name)`` returns one per combination of the named matrix document, both as immutable
-    tuples. A name is relative to :attr:`directory` and nothing outside it is addressable
-    (AAP 0.14.3). Frozen, because a loader captured at collection must not be re-pointed at another
-    directory while the run planned around it executes (AAP 0.4.8).
+    ``cases(name)`` returns one :class:`foundry.data.cases.Case` per data row of the named file and
+    ``matrix(name)`` one per combination of the named matrix document, both as immutable tuples. A
+    name is relative to :attr:`directory` and nothing outside it is addressable. Frozen, because a
+    loader captured at collection must not be re-pointed at another directory while the run planned
+    around it executes.
 
     Attributes:
         directory: The resolved ``data.dir`` the names are resolved against, made absolute against
             pytest's invocation directory.
         schema_strict: ``data.schema_strict`` -- whether a column the file's sidecar schema does not
-            declare is a fault (AAP 0.4.5).
+            declare is a fault.
         schema_dir: The directory a sidecar schema must stay inside, normally :attr:`directory`;
             ``None`` imposes no containment on the schema document.
     """
@@ -84,9 +74,9 @@ class FoundryDataLoader:
 
         The format is decided by the file's suffix, so ``cart.csv``, ``cart.json``, ``cart.yaml``
         and ``cart.jsonl`` are all read here: a tabular document row by row in file order, a matrix
-        document by its cross-product with the axes sorted by name (AAP 0.7.2). A file that parses
-        but holds no data rows yields ``()`` rather than raising, so the caller can skip the
-        generated item with the reason ``no cases in <file>`` (AAP 0.4.7).
+        document by its cross-product with the axes sorted by name. A file that parses but holds no
+        data rows yields ``()`` rather than raising, so the caller can skip the generated item with
+        the reason ``no cases in <file>``.
 
         Args:
             name: The data file's name relative to :attr:`directory`, for example ``cart.csv``; a
@@ -100,9 +90,9 @@ class FoundryDataLoader:
             DataError: The name is empty, resolves outside :attr:`directory`, names a directory or
                 a file that does not exist, carries an extension no reader claims, or produces a row
                 the sidecar schema rejects. The message names the file and, where they are known,
-                the line and the column (AAP 0.4.7).
+                the line and the column.
             ArtifactError: The resolved name escapes :attr:`directory` -- raised by
-                :func:`foundry.core.paths.resolve_under`, which owns that check (AAP 0.14.3).
+                :func:`foundry.core.paths.resolve_under`, which owns that check.
             ContractError: The sidecar schema document is unreadable, is not a schema, or references
                 a location outside itself.
         """
@@ -123,13 +113,9 @@ class FoundryDataLoader:
 
         A matrix document is a mapping whose every value is a list of axis values, so it becomes one
         case per combination with the axes sorted by name and the alphabetically first axis varying
-        slowest -- the one order that makes a serial run and every xdist worker collect the same ids
-        (AAP 0.7.2, implicit requirement I6). A document that reads as a table is reported as a
-        modelling mistake rather than expanded, and an axis holding no values yields ``()``.
-
-        Args:
-            name: The matrix document's name relative to :attr:`directory`, for example
-                ``pricing.yaml``.
+        slowest -- the one order that makes a serial run and every xdist worker collect the same
+        ids. A document that reads as a table is reported as a modelling mistake rather than
+        expanded, and an axis holding no values yields ``()``.
 
         Returns:
             One case per combination, in expansion order, as an immutable tuple.
@@ -137,8 +123,8 @@ class FoundryDataLoader:
         Raises:
             DataError: The name is empty, resolves outside :attr:`directory`, names a directory or
                 a file that does not exist, carries an extension no reader claims, or reads as a
-                tabular document rather than a matrix. The message names the file (AAP 0.4.7).
-            ArtifactError: The resolved name escapes :attr:`directory` (AAP 0.14.3).
+                tabular document rather than a matrix. The message names the file.
+            ArtifactError: The resolved name escapes :attr:`directory`.
         """
         from foundry.data.registry import load_matrix
 
@@ -147,9 +133,8 @@ class FoundryDataLoader:
     def __repr__(self) -> str:
         """Return ``FoundryDataLoader(directory=..., schema_strict=...)``.
 
-        Only the two settings that decide which files a name reaches are echoed: the schema
-        directory normally follows the first, and listing both would suggest they can diverge when
-        a caller has not made them.
+        Only the two settings that decide which files a name reaches are echoed; listing the schema
+        directory too would suggest the two can diverge for a caller who has not made them.
         """
         return (
             f"{type(self).__name__}"
@@ -160,9 +145,8 @@ class FoundryDataLoader:
         """Return the path ``name`` addresses inside :attr:`directory`.
 
         Both published methods resolve their name here, so the containment check and the one message
-        an unusable name produces are decided in a single place; the joining and traversal checking
-        belong to :func:`foundry.data.registry.resolve_data_file`, which delegates containment to
-        :func:`foundry.core.paths.resolve_under` (AAP 0.14.3).
+        an unusable name produces are decided in a single place;
+        :func:`foundry.data.registry.resolve_data_file` owns the joining and traversal checking.
 
         Returns:
             The resolved absolute path of an existing file inside :attr:`directory`.

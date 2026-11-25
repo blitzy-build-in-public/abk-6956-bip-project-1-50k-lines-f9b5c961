@@ -2,10 +2,9 @@
 
 Every value a resolved configuration holds has exactly one origin -- a field default, the
 configuration file, a ``[profiles.<name>]`` table, a ``FOUNDRY_*`` variable or a
-``--foundry-<dotted.key>`` option (AAP 0.4.5). A :class:`ConfigSource` is that origin as a value,
-recorded per key by :mod:`foundry.config.merge` because ``pydantic-settings`` names no source it
-resolved from (implicit requirement I2). ``detail`` names a value and never holds one, which is why
-the configuration carries the *name* of the variable holding a secret (implicit requirement I9).
+``--foundry-<dotted.key>`` option (AAP 0.4.5) -- and :mod:`foundry.config.merge` records it here
+because ``pydantic-settings`` names no source it resolved from. ``detail`` names a value and never
+holds one, which is why the configuration carries the *name* of the variable holding a secret.
 """
 
 from __future__ import annotations
@@ -25,11 +24,8 @@ __all__: Final[tuple[str, ...]] = (
 _PROFILE_LAYER_PREFIX: Final[str] = f"{ConfigLayer.PROFILE.value}:"
 """The prefix a profile-sourced layer carries its name inside (AAP 0.4.5).
 
-:func:`foundry.config.errors.profile_layer` spells the same prefix for the messages that
-name a profile table, and this module spells it for the ``layer`` field of a record whose
-value came from that table; the two must therefore agree.
-:func:`foundry.config.layers.layer_label` owns the ``<layer>:<detail>`` join both are read
-through, so a rendered label agrees with either spelling.
+:func:`foundry.config.errors.profile_layer` spells the same prefix for the messages that name a
+profile table, so the two must agree.
 """
 
 
@@ -37,16 +33,11 @@ through, so a rendered label agrees with either spelling.
 class ConfigSource:
     """Where one resolved configuration value came from (AAP 0.4.5, AAP 0.4.9).
 
-    ``layer`` is a :class:`foundry.config.layers.ConfigLayer` carrying one of the five spellings
-    AAP 0.4.5 publishes -- ``default``, ``file``, ``env``, ``cli`` or ``profile:<name>`` -- and
-    ``detail`` names what inside the layer supplied the value: the configuration file's path, the
-    environment variable as it was spelled, the ``--foundry-*`` option as it was typed, or the
-    profile's name. The ``default`` layer has nothing finer to name and carries
-    :data:`foundry.config.layers.DEFAULT_DETAIL`.
-
-    The record is frozen, slotted and compares by value, so two resolutions of the same inputs
-    compare equal entry by entry. Build one through the constructors rather than the field list:
-    they are where the five published spellings are written.
+    ``layer`` is a :class:`foundry.config.layers.ConfigLayer` carrying one of the five published
+    spellings -- ``default``, ``file``, ``env``, ``cli`` or ``profile:<name>`` -- and ``detail``
+    names what inside it supplied the value: the file's path, the variable as spelled, the option as
+    typed, or the profile's name. Frozen, slotted and compared by value, so two resolutions of the
+    same inputs compare equal entry by entry; build one through the constructors below.
     """
 
     layer: ConfigLayer
@@ -55,34 +46,30 @@ class ConfigSource:
     def label(self) -> str:
         """Return the source label ``foundry config show`` prints in its Source column.
 
-        AAP 0.7.4 renders that column, and the layered section of the report, as
-        ``default``, ``file:<path>``, ``profile:<name>``, ``env:<VARIABLE>`` or
-        ``cli:<--option>``. The join belongs to :func:`foundry.config.layers.layer_label`,
-        so this method adds only what that function cannot know: a profile-sourced record
-        already carries its name in :attr:`layer` and therefore renders as it stands.
+        That column reads ``default``, ``file:<path>``, ``profile:<name>``, ``env:<VARIABLE>`` or
+        ``cli:<--option>``. The join belongs to :func:`foundry.config.layers.layer_label`, so this
+        method adds only what that function cannot know: a profile-sourced record already carries
+        its name in :attr:`layer` and renders as it stands.
 
         Returns:
-            The layer's label, for example ``env:FOUNDRY_HTTP__TIMEOUT``; ``default`` when
-            the value came from a field default, and never a trailing separator.
+            The layer's label, for example ``env:FOUNDRY_HTTP__TIMEOUT``; ``default`` when the
+            value came from a field default, and never a trailing separator.
         """
         if self.layer.startswith(_PROFILE_LAYER_PREFIX):
             return str(self.layer)
         try:
             layer = ConfigLayer(self.layer)
         except ValueError:
-            # A layer spelled outside the published vocabulary still renders rather than
-            # raising: every caller is a renderer -- config show, doctor, the report -- and
-            # Foundry's own plumbing never fails a run (AAP 0.1.2 failure isolation).
+            # A layer spelled outside the published vocabulary still renders rather than raising:
+            # every caller is a renderer, and Foundry's own plumbing never fails a run.
             return str(self.layer)
         return layer_label(layer, self.detail)
 
     def as_dict(self) -> dict[str, str]:
         """Return the record as the JSON object ``config show --format json`` emits.
 
-        AAP 0.4.5 fixes the document: a source is ``{"layer": "env", "detail":
-        "FOUNDRY_HTTP__TIMEOUT"}`` -- exactly these two keys, in this order, with string
-        values. ``foundry config show --format json`` and ``--format toml`` both serialise
-        this result, so a key added here would change the published document.
+        AAP 0.4.5 fixes that document to exactly the keys ``layer`` and ``detail``, in this order,
+        and both output formats serialise this result, so a key added here would change it.
 
         Returns:
             A fresh two-key mapping; mutating it leaves the record unchanged.
@@ -92,9 +79,8 @@ class ConfigSource:
     def is_default(self) -> bool:
         """Return whether the value came from the settings model's own field default.
 
-        A default-sourced value has no file, variable or option behind it, so a reader that
-        lists origins -- the ``config show`` table, the doctor report -- can tell the field
-        default apart from a value an operator set to the same number.
+        A reader that lists origins can then tell the field default apart from a value an operator
+        set to the same value.
 
         Returns:
             ``True`` when :attr:`layer` is the ``default`` layer.
@@ -105,8 +91,8 @@ class ConfigSource:
     def default(cls) -> ConfigSource:
         """Build the record of a value that came from its settings field's default.
 
-        AAP 0.4.5 gives the ``default`` layer nothing finer to name, so the record carries
-        an empty detail and renders as the bare word ``default``.
+        The ``default`` layer has nothing finer to name, so the detail is empty and the record
+        renders as the bare word ``default``.
 
         Returns:
             The ``default`` record.
@@ -117,9 +103,8 @@ class ConfigSource:
     def from_file(cls, path: Path | str) -> ConfigSource:
         """Build the record of a value a configuration file supplied.
 
-        The detail is the path as text, spelled as the caller discovered it: ``foundry
-        config show`` prints ``file:<path>``, and an operator has to be able to open that
-        path from the row they are reading.
+        The detail is the path as text, spelled as the caller discovered it, so an operator can
+        open the file from the row they are reading.
 
         Args:
             path: The configuration file the value came from -- ``foundry.toml`` or a
@@ -134,19 +119,15 @@ class ConfigSource:
     def from_profile(cls, name: str) -> ConfigSource:
         """Build the record of a value a ``[profiles.<name>]`` table supplied.
 
-        A profile overrides the base file it sits in and is overridden by the environment
-        and the command line (AAP 0.4.5), so its value must stay distinguishable from a
-        base-file value: the name rides in :attr:`layer` as ``profile:<name>``, which is
-        what makes the row read ``profile:ci`` rather than ``file:<path>``. That spelling is
-        an instance of :class:`foundry.config.layers.ConfigLayer` built from the profile
-        layer's own prefix, and a record with no name carries the plain ``profile`` layer.
+        A profile overrides the base file it sits in and is overridden by the environment and the
+        command line (AAP 0.4.5), so the name rides in :attr:`layer` as ``profile:<name>`` and the
+        row reads ``profile:ci`` rather than ``file:<path>``.
 
         Args:
             name: The profile whose table supplied the value, for example ``ci``.
 
         Returns:
-            The record whose layer is a :class:`foundry.config.layers.ConfigLayer` spelling
-            ``profile:<name>`` and whose detail is ``name``.
+            The record spelling ``profile:<name>``, with ``name`` as its detail.
         """
         layer = ConfigLayer(f"{_PROFILE_LAYER_PREFIX}{name}") if name else ConfigLayer.PROFILE
         return cls(layer=layer, detail=name)
@@ -155,14 +136,11 @@ class ConfigSource:
     def from_env(cls, variable: str) -> ConfigSource:
         """Build the record of a value a ``FOUNDRY_*`` environment variable supplied.
 
-        The detail is the variable's spelling exactly as the environment layer matched it.
-        Upper case is the canonical spelling of a ``FOUNDRY_*`` name, but nothing is
-        normalised here: an operator who exported ``foundry_http__timeout`` reads that
-        spelling back in the row that attributes their value (AAP 0.4.5).
+        The detail is the variable's spelling as the environment layer matched it, never
+        normalised, so an operator who exported ``foundry_http__timeout`` reads that spelling back.
 
         Args:
-            variable: The environment variable's name, for example
-                ``FOUNDRY_HTTP__TIMEOUT``.
+            variable: The variable's name, for example ``FOUNDRY_HTTP__TIMEOUT``.
 
         Returns:
             The ``env`` record naming ``variable``.
@@ -173,13 +151,11 @@ class ConfigSource:
     def from_cli(cls, option: str) -> ConfigSource:
         """Build the record of a value a ``--foundry-*`` option supplied.
 
-        The detail is the option spelling verbatim, so an override given as
-        ``--foundry-http.timeout`` is attributed to ``cli:--foundry-http.timeout`` with no
-        further formatting (AAP 0.4.4, AAP 0.7.4).
+        The detail is the option spelling verbatim, so ``--foundry-http.timeout`` is attributed to
+        ``cli:--foundry-http.timeout`` with no further formatting.
 
         Args:
-            option: The option as the operator typed it, for example
-                ``--foundry-http.timeout``.
+            option: The option as the operator typed it, for example ``--foundry-http.timeout``.
 
         Returns:
             The ``cli`` record naming ``option``.
@@ -188,18 +164,14 @@ class ConfigSource:
 
 
 ConfigSources: TypeAlias = Mapping[str, ConfigSource]
-"""The per-key provenance of a resolved configuration, as
-:attr:`foundry.config.models.FoundryConfig.sources` holds it.
+"""The per-key provenance of a resolved configuration, as :attr:`FoundryConfig.sources` holds it.
 
 Keys are flat dotted configuration keys -- the form :mod:`foundry.config.layers` merges and
-:mod:`foundry.config.keys` names, for example ``http.retries.max_attempts`` -- so one key is
-attributed to one layer as a whole, including a table-valued key such as ``http.headers``.
-Every leaf key the configuration publishes has an entry, which is what lets
-``foundry_config.source_of(dotted_key)`` answer for any key an operator asks about
-(AAP 0.4.5, AAP 0.7.2).
+:mod:`foundry.config.keys` names -- so one key is attributed to one layer as a whole, including a
+table-valued key such as ``http.headers``. Every leaf key the configuration publishes has an entry,
+which is what lets ``foundry_config.source_of(dotted_key)`` answer for any key an operator asks
+about.
 
-The mapping is read-only by type: :mod:`foundry.config.merge` builds it while it applies the
-layers and hands it over, and every later reader only looks keys up. A renderer that writes
-a document from it sorts the keys, so two runs print the same rows in the same order
-(AAP 0.13.1).
+The mapping is read-only by type, and a renderer that writes a document from it sorts the keys, so
+two runs print the same rows in the same order.
 """

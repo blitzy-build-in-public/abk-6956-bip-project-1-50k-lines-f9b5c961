@@ -1,9 +1,8 @@
 """The ``foundry`` import package: version string and exception names, nothing else.
 
-It re-exports only ``__version__`` and the exception names, so every ``import foundry`` stays
-inside the startup budget (AAP 0.4.8, AAP 0.14.2); the classes are defined once in
-:mod:`foundry.core.exceptions` and their names, bases and attributes are the compatibility
-promise (AAP 0.4.9).
+Re-exporting only these keeps every ``import foundry`` inside the startup budget; the classes are
+defined once in :mod:`foundry.core.exceptions`, and their names, bases and attributes are the
+compatibility promise.
 """
 
 from importlib import metadata

@@ -2,40 +2,34 @@
 
 A data file may carry a *sidecar* schema: a JSON Schema document beside it, discovered under the
 data file's full name plus ``.schema.json`` -- tried first, so ``testdata/cart.csv`` is described by
-``testdata/cart.csv.schema.json`` -- or its bare stem plus the same suffix, so
-``testdata/cart.schema.json`` describes it too. Nothing else declares a schema, so the sidecar's
-presence is the whole declaration and a data file without one is enforced against nothing.
+``testdata/cart.csv.schema.json`` -- or its bare stem plus the same suffix. Nothing else declares a
+schema, so the sidecar's presence is the whole declaration and a data file without one is enforced
+against nothing.
 
 Two checks run for a row, in this order, and both report through
 :func:`foundry.data.loaders.base.data_error`, the package's single ``DataError`` construction
-site, so every fault names the file and, where they are known, the line and the column
-(AAP 0.4.7, AAP 0.14.3):
+site, so every fault names the file and, where they are known, the line and the column:
 
 1. **Structure, before values.** A column the schema lists in ``required`` that the row does not
    carry is reported by name, and a column the schema's ``properties`` does not declare is
-   reported by name when ``data.schema_strict`` is on (AAP 0.4.5). Running this first is what keeps
-   a missing column nameable: the ``required`` complaint a JSON Schema walk produces is located at
-   the document root, where there is no column to report.
+   reported by name when ``data.schema_strict`` is on. Running this first is what keeps a missing
+   column nameable: the ``required`` complaint a JSON Schema walk produces is located at the
+   document root, where there is no column to report.
 2. **Values, through the contract layer.** :func:`foundry.contract.validate.find_violation` returns
    the first violation in Foundry's own order instead of raising, so this module turns it into a
    located :class:`~foundry.core.exceptions.DataError` whose ``column`` comes from the violation's
-   ``path_parts``; ``jsonschema`` is never imported here (implicit requirement I5).
+   ``path_parts``; ``jsonschema`` is never imported here.
 
-A schema document that loads but is unusable is refused by the contract layer inside that same
-walk, as a :class:`~foundry.core.exceptions.ContractError` naming the sidecar it came from.
-
+A schema document that loads but is unusable is refused by the contract layer inside that same walk,
+as a :class:`~foundry.core.exceptions.ContractError` naming the sidecar it came from.
 ``strict=False`` tolerates extra columns: they stay in the row the caller carries forward but are
 left out of the projection the schema validates. Every check is order-stable -- the ``required``
 names, the declared property set and the extra columns are each sorted before the first of them is
-reported -- so the same file reports the same message on every run and on every ``pytest-xdist``
-worker (implicit requirement I6).
+reported -- so the same file reports the same message on every run and on every worker.
 
-Enforcement precedes case construction -- :func:`enforce_table` returns the table that
-:func:`foundry.data.cases.build_case_set` converts -- so no case exists for a rejected row and the
-fault surfaces at collection time rather than inside a test.
-
-Importing the module defines names and does nothing else (AAP 0.4.8): no schema is loaded, no file
-is opened, no environment variable is read and no logger is configured.
+Enforcement precedes case construction, so no case exists for a rejected row and the fault surfaces
+at collection time rather than inside a test. Importing the module defines names and does nothing
+else: no schema is loaded, no file is opened and no environment variable is read.
 """
 
 from __future__ import annotations
@@ -265,12 +259,10 @@ def enforce_table(
     :func:`foundry.data.cases.build_case_set` converts, so schema enforcement always precedes case
     construction and a rejected row never becomes a case.
 
-    One check applies here. When ``schema`` is not ``None``, every row goes through
-    :func:`enforce_row`, which is the only party that compares a row's columns with the schema's
-    ``required`` list and its ``properties`` mapping, and the validated rows are rebuilt so the
-    caller receives what was actually checked: the row's own values under ``strict``, and the
-    declared columns alone when an author tolerates extras. A data file that declares no schema is
-    enforced against nothing, so the table comes back unchanged without a row being opened.
+    When ``schema`` is not ``None``, every row goes through :func:`enforce_row`, and the validated
+    rows are rebuilt so the caller receives what was actually checked: the row's own values under
+    ``strict``, and the declared columns alone when an author tolerates extras. A data file that
+    declares no schema is enforced against nothing, so the table comes back unchanged.
 
     Args:
         table: The table a reader produced, with its path, column order and rows.
@@ -280,10 +272,8 @@ def enforce_table(
             :func:`enforce_row` call. ``None`` applies the built-in deny-lists.
         schema_source: The name a fault in ``schema`` itself reports the document by. ``None``
             derives it from :func:`schema_path_for` of ``table.path`` when that sidecar exists,
-            which is the same single decision :func:`load_row_schema` made for that data file when
-            it loaded the document, so the error names the sidecar that was actually enforced
-            rather than the data file beside it. A data file with no sidecar has no document to
-            name, so the fault reports the reason alone.
+            which is the same decision :func:`load_row_schema` made, so the error names the sidecar
+            that was actually enforced. A data file with no sidecar has no document to name.
 
     Returns:
         ``table`` itself when no schema was given, otherwise a table with the same path and
@@ -294,7 +284,7 @@ def enforce_table(
         DataError: For any fault :func:`enforce_row` reports -- a required column the row lacks, an
             undeclared column present under ``strict``, or a value the schema rejects -- naming the
             file, the row's line and the column.
-        ContractError: When the schema document is unusable, naming the sidecar it was loaded from.
+        ContractError: When the schema document is unusable, naming the sidecar it came from.
     """
     if schema is None:
         return table

@@ -1,8 +1,8 @@
 """The reporting package: a run's report built from immutable result records.
 
 Barrel for the record, store, JUnit, HTML, assets, panels, compare and renderers modules; the
-result record is the only input, and :func:`foundry.reporting.store.write_text` the only file
-writer. Layering and state: AAP 0.4.8. Stable import surface: AAP 0.4.3, 0.4.9.
+result record is the only input and :func:`foundry.reporting.store.write_text` the only file writer
+(AAP 0.4.8, 0.4.9).
 """
 
 from typing import Final

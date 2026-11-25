@@ -1,9 +1,8 @@
 """The inlined stylesheet and script of Foundry's self-contained HTML report.
 
 :data:`CSS` and :data:`JS` are every byte of the report's presentation and behaviour, inlined by
-:mod:`foundry.reporting.html` so ``report.html`` opens with no network;
-:func:`contains_external_reference` and :func:`assert_self_contained` make that property checkable.
-AAP 0.3.2, 0.4.8, 0.7.4, 0.14.1.
+:mod:`foundry.reporting.html` so ``report.html`` opens with no network; the two predicates below
+make that property checkable (AAP 0.3.2, 0.14.1).
 """
 
 from __future__ import annotations
@@ -347,7 +346,7 @@ class AssetsBundle:
     """The inlined presentation assets one report is rendered with.
 
     Both strings are constants owned by this module, so the rendered document's self-contained
-    property is a property of this file alone, and the frozen bundle is hashable and reusable.
+    property is a property of this file alone.
 
     Attributes:
         css: The stylesheet, inlined verbatim inside the report's ``<style>`` element.
@@ -369,8 +368,7 @@ def default_assets() -> AssetsBundle:
     """Return the one shared bundle of inlined assets.
 
     The instance is built once at import and never rebuilt, so rendering five hundred result
-    records costs no more than rendering one (AAP 0.14.2); being frozen, it cannot be mutated by
-    a caller that needs different assets.
+    records costs no more than rendering one (AAP 0.14.2).
 
     Returns:
         The module-level :data:`DEFAULT_ASSETS` instance.
@@ -382,8 +380,7 @@ def _first_external_reference(text: str) -> str | None:
     """Return the first external-reference marker in ``text``, or ``None`` when there is none.
 
     The scan is case-insensitive, and it walks :data:`SELF_CONTAINED_FORBIDDEN` before
-    :data:`EXTERNAL_REFERENCE_MARKERS`, so the marker a caller is told about is the same on every
-    run.
+    :data:`EXTERNAL_REFERENCE_MARKERS`, so the marker reported is the same on every run.
 
     Returns:
         The marker as this module spells it, or ``None`` when ``text`` is self-contained.
@@ -400,8 +397,8 @@ def contains_external_reference(text: str) -> bool:
 
     Returns:
         ``True`` when any marker of :data:`SELF_CONTAINED_FORBIDDEN` or
-        :data:`EXTERNAL_REFERENCE_MARKERS` appears in ``text`` -- compared case-insensitively --
-        ``False`` otherwise. An empty string is self-contained.
+        :data:`EXTERNAL_REFERENCE_MARKERS` appears in ``text``, compared case-insensitively, so an
+        empty string is self-contained.
     """
     return _first_external_reference(text) is not None
 
@@ -409,8 +406,8 @@ def contains_external_reference(text: str) -> bool:
 def assert_self_contained(text: str) -> None:
     """Raise unless ``text`` pulls in nothing from outside itself.
 
-    The asset tests call this on :data:`CSS` and :data:`JS`; the renderer may call it on a
-    finished document, which holds for a report whose interpolated values are escaped.
+    The asset tests call this on :data:`CSS` and :data:`JS`; the renderer calls it on the bundle
+    before anything is rendered.
 
     Raises:
         FoundryError: ``text`` contains a marker from :data:`SELF_CONTAINED_FORBIDDEN` or

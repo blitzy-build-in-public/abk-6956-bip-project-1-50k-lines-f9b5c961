@@ -1,11 +1,9 @@
 """Exit-code vocabulary for the Foundry command line.
 
-AAP 0.4.4 fixes what each published code means and AAP 0.7.3 the mapping every CLI module applies:
 ``0`` success, ``1`` failed tests or a newly failing comparison, ``2`` a usage or configuration
-error raised by Foundry itself, and ``3``/``4``/``5`` pytest's own internal-error, usage-error and
-no-tests codes, preserved exactly as ``foundry run`` received them. Foundry maps its own failures to
-``2`` and never rewrites a code pytest produced (:func:`passthrough`). Constants and pure functions
-only: no Foundry import, no I/O, no environment or clock read (AAP 0.4.8).
+error raised by Foundry, and ``3``/``4``/``5`` pytest's own internal-error, usage-error and no-tests
+codes, kept exactly as ``foundry run`` received them; Foundry never rewrites a code pytest produced.
+Pure constants and functions only: no Foundry import, no I/O, no environment or clock read.
 """
 
 from collections.abc import Mapping
@@ -85,10 +83,7 @@ def passthrough(code: int | None) -> int:
 
 
 def is_pytest_code(code: int) -> bool:
-    """Report whether ``code`` is one of pytest's codes that Foundry preserves.
-
-    Returns ``True`` for pytest's internal-error, usage-error and no-tests codes.
-    """
+    """Report whether ``code`` is one of pytest's internal-error, usage-error or no-tests codes."""
     return code in PYTEST_PASSTHROUGH
 
 

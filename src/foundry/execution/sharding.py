@@ -3,22 +3,19 @@
 Foundry verifies a distributed run; it never distributes one. pytest-xdist owns the scheduling, and
 this module proves that the node ids the workers ran are exactly the set the controller collected --
 the observation AAP 0.14.1 makes for criterion 7 -- and turns a worker that never reported into the
-``run_error`` record AAP 0.4.6 carries. No distribution algorithm, worker count, load-balancing mode
-or work queue lives here, because AAP 0.9.2 places reimplementing any of them out of scope.
+``run_error`` record AAP 0.4.6 carries. No distribution algorithm, worker count or work queue lives
+here, because AAP 0.9.2 places reimplementing any of them out of scope.
 
 A distributed run shares state only through what xdist provides, and each channel has one owner:
 :data:`WORKER_INPUT_KEY` names the ``config.workerinput`` entry carrying the payload
 :func:`foundry.execution.session.worker_payload` produces, :data:`WORKER_OUTPUT_KEY` names the
 ``config.workeroutput`` entry a worker fills with the node ids it ran, and per-test state rides
-``TestReport.user_properties`` as :mod:`foundry.execution.state` defines. Everything crossing a
-channel is serialisable (implicit requirement I3).
+``TestReport.user_properties`` as :mod:`foundry.execution.state` defines.
 
-``foundry.execution`` may never import ``foundry.reporting`` (AAP 0.4.8), so the element this module
-produces is :class:`foundry.execution.state.RunErrorPayload`, and ``plugin.py`` appends those
-elements when it writes the result document. A lost worker leaves collected items with no result at
-all (assumption A12), so :meth:`ShardingService.missing_after_run` names them for ``session.py`` to
-emit as ``not_run`` records. Nothing here raises: a ``run_error`` is a record, not an exception, and
-every collection the module returns is sorted, so two runs serialise one shape.
+This package may never import ``foundry.reporting`` (AAP 0.4.8), so the element this module produces
+is :class:`foundry.execution.state.RunErrorPayload`, and ``plugin.py`` appends those elements when
+it writes the result document. Nothing here raises: a ``run_error`` is a record, not an exception,
+and every collection the module returns is sorted, so two runs serialise one shape.
 """
 
 from __future__ import annotations
@@ -47,30 +44,23 @@ __all__ = [
 WORKER_OUTPUT_KEY: Final[str] = "foundry_nodeids"
 """The ``config.workeroutput`` entry a worker fills with the node ids it ran.
 
-The value is a ``tuple[str, ...]``, so it crosses the worker boundary as plain serialisable data;
-the controller reads it in ``pytest_testnodedown`` through :func:`record_worker_output`
-(AAP 0.2.1).
+The controller reads it in ``pytest_testnodedown`` through :func:`record_worker_output`.
 """
 
 WORKER_INPUT_KEY: Final[str] = "foundry"
 """The ``config.workerinput`` entry carrying the payload ``session.worker_payload()`` produces.
 
-It is the worker's copy of the run id, the artifacts root and the resolved configuration; the plugin
-writes it on the controller and reads it on the worker, and nothing else writes ``workerinput``.
+It is the worker's copy of the run id, the artifacts root and the resolved configuration, and
+nothing else writes ``workerinput``.
 """
 
 CONTROLLER_WORKER_ID: Final[str] = "controller"
-"""The id the controller's own collection is recorded under, so a lost worker's items stay known.
-
-No xdist gateway uses this id, which is why it can name the serial collection inside a ledger whose
-other keys are worker ids.
-"""
+"""The id the controller's own collection is recorded under, which no xdist gateway uses."""
 
 RUN_ERROR_MESSAGE_MAX_BYTES: Final[int] = 2_000
 """Cap on a ``run_error`` message in UTF-8 bytes: enough for a traceback tail, bounded for a report.
 
-Captured worker output can be arbitrarily large, and the message is persisted in ``results.json``,
-``junit.xml`` and ``report.html``, so it is redacted first and cut second (AAP 0.4.6).
+Captured worker output can be arbitrarily large, so the message is redacted first and cut second.
 """
 
 
@@ -100,8 +90,7 @@ def _clean(values: Iterable[object]) -> list[str]:
     """Return the non-blank node ids in ``values``, stripped, de-duplicated, in first-seen order.
 
     A lone ``str`` counts as one value rather than as its characters, and a value that is not text
-    is ignored rather than rendered: a node id is text by contract (AAP 0.4.6), so inventing one
-    from a number or a path would put an id into a report that no item answers to.
+    is ignored: a node id is text by contract (AAP 0.4.6).
     """
     if isinstance(values, str):
         values = (values,)
@@ -122,8 +111,8 @@ class NodeLedger:
     """The node ids each worker collected, and the controller's own serial collection.
 
     One instance per session, behind ``foundry.execution.state.SESSION_NODES``. Each worker's node
-    ids keep first-seen order and are exposed sorted, so a repeated ``pytest_testnodedown`` for one
-    gateway cannot double-count a node id and no set iteration reaches a report.
+    ids are held de-duplicated and exposed sorted, so a repeated ``pytest_testnodedown`` for one
+    gateway cannot double-count a node id.
     """
 
     __slots__ = ("_by_worker", "_expected", "_expected_seen", "_seen")
@@ -138,9 +127,8 @@ class NodeLedger:
     def record(self, worker_id: str, nodeids: Iterable[object]) -> None:
         """Add ``nodeids`` to ``worker_id``'s collection, de-duplicated and in first-seen order.
 
-        A blank worker id names no worker, so nothing is recorded for it: the ``run_error`` record
-        that reports a lost worker names that worker, and an entry no gateway answers to would be a
-        second, empty worker in every count.
+        A blank worker id names no worker, so nothing is recorded for it: an entry no gateway
+        answers to would be a second, empty worker in every count.
         """
         worker = _text(worker_id)
         if not worker:
@@ -155,8 +143,8 @@ class NodeLedger:
     def record_expected(self, nodeids: Iterable[object]) -> None:
         """Record the controller's serial collection, de-duplicated and in first-seen order.
 
-        Without it, :meth:`expected_nodes` falls back to what the workers reported, which is enough
-        to compare sets but cannot name the items of a worker that never reported at all.
+        Without it, :meth:`expected_nodes` falls back to what the workers reported, which cannot
+        name the items of a worker that never reported at all.
         """
         for nodeid in _clean(nodeids):
             if nodeid not in self._expected_seen:
@@ -212,8 +200,7 @@ class RunErrorLedger:
 
     One instance per session, behind ``foundry.execution.state.SESSION_RUN_ERRORS``. Two payloads
     are the same run error when the worker they name and the message they carry match, and only the
-    first is kept: ``pytest_testnodedown`` can fire again for one crash, and a second entry would
-    report one lost worker twice.
+    first is kept, so a repeated ``pytest_testnodedown`` cannot report one lost worker twice.
     """
 
     __slots__ = ("_entries", "_keys")
@@ -257,7 +244,7 @@ def record_worker_output(
 
     A worker that died never published ``config.workeroutput`` at all, so the mapping arrives here
     as ``None`` or without the key; both record nothing instead of raising, and the node ids now
-    held for ``worker_id`` are returned so the caller can log their count.
+    held for ``worker_id`` are returned.
     """
     if not isinstance(worker_output, Mapping):
         return ledger.nodes_for(worker_id)
@@ -275,8 +262,7 @@ class ShardingReport:
 
     ``missing`` is in the controller's collection but in no worker's, ``duplicate`` was reported by
     more than one worker, ``extra`` was reported by a worker and never collected, and
-    ``worker_losses`` names the workers the run recorded a ``run_error`` for. Every collection is
-    sorted and de-duplicated on construction, so two runs produce one shape.
+    ``worker_losses`` names the workers the run recorded a ``run_error`` for.
     """
 
     serial_count: int
@@ -346,9 +332,9 @@ class ShardingReport:
 class ShardingService:
     """The controller's view of a distributed run: compare the sets, record the lost workers.
 
-    Frozen and read-only over two session-scoped ledgers, so the plugin holds it behind the session
-    state and every call is a query. ``redactor`` defaults to the built-in deny-lists and the
-    session widens it with the configured ``secrets.redact_keys``.
+    Frozen and read-only over two session-scoped ledgers, so every call is a query. ``redactor``
+    defaults to the built-in deny-lists and the session widens it with the configured
+    ``secrets.redact_keys``.
     """
 
     nodes: NodeLedger
@@ -365,9 +351,8 @@ class ShardingService:
 
         An empty ``expected_nodeids`` beside one or more reporting workers is an absent input rather
         than divergence, because xdist's distribution leaves the controller's ``session.items``
-        empty; the workers' union then becomes the verified universe, and divergence is reported by
-        ``duplicate`` -- the defect this check exists for. One ``DEBUG`` ``sharding_decision`` event
-        per worker carries that worker's count and never a node id.
+        empty; the workers' union then becomes the verified universe. One ``DEBUG``
+        ``sharding_decision`` event per worker carries that worker's count, never a node id.
         """
         serial = tuple(sorted(_clean(expected_nodeids)))
         self.nodes.record_expected(serial)

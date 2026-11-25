@@ -4,8 +4,7 @@ Every ``<testcase>`` carries ``classname``, ``name`` and ``time``, the four prop
 ``foundry.profile``, ``foundry.outcome``, ``foundry.attempts`` and ``foundry.quarantine``, then one
 ``foundry.artifact.<kind>`` reference per captured artifact -- the five kinds of AAP 0.4.6, never
 ``log_tail`` or ``manifest``; the single ``<testsuite>`` carries ``foundry.run_id`` and
-``foundry.profile``. The mapping tables below give the outcome-to-element rules; escaping and
-redaction are AAP 0.3.2, determinism AAP 0.14.1, and the write is
+``foundry.profile``. The mapping tables below give the outcome-to-element rules, and the write is
 :func:`foundry.reporting.store.write_text` (AAP 0.4.8).
 """
 
@@ -70,9 +69,8 @@ FAILURE_MESSAGE_BYTES: Final[int] = 500
 """UTF-8 byte budget of a ``<failure>``/``<error>`` ``message`` attribute.
 
 A CI system shows that attribute in a list, so it is bounded: the element's text carries every
-failing phase in full, and the attribute carries the first failure's message, redacted first and
-then clipped by :meth:`foundry.obs.redaction.Redactor.text`, which appends its own truncation
-marker rather than splitting a character.
+failing phase in full, while the attribute carries the first failure's message, redacted and then
+clipped by :meth:`foundry.obs.redaction.Redactor.text`.
 """
 
 # --- The exact strings AAP 0.4.6 fixes ------------------------------------
@@ -120,19 +118,14 @@ PROPERTY_RUN_ID: Final[str] = "foundry.run_id"
 """Name of the ``<testsuite>`` property carrying the run's identifier (AAP 0.4.6)."""
 
 PROPERTY_ARTIFACT_REQUEST: Final[str] = "foundry.artifact.request"
-"""Name of the property referencing the dumped request, relative to the run directory."""
 
 PROPERTY_ARTIFACT_RESPONSE: Final[str] = "foundry.artifact.response"
-"""Name of the property referencing the dumped response, relative to the run directory."""
 
 PROPERTY_ARTIFACT_STDOUT: Final[str] = "foundry.artifact.stdout"
-"""Name of the property referencing the captured stdout, relative to the run directory."""
 
 PROPERTY_ARTIFACT_STDERR: Final[str] = "foundry.artifact.stderr"
-"""Name of the property referencing the captured stderr, relative to the run directory."""
 
 PROPERTY_ARTIFACT_TRACEBACK: Final[str] = "foundry.artifact.traceback"
-"""Name of the property referencing the traceback artifact, relative to the run directory."""
 
 ARTIFACT_PROPERTY_NAMES: Final[Mapping[ArtifactKind, str]] = MappingProxyType(
     {
@@ -145,8 +138,9 @@ ARTIFACT_PROPERTY_NAMES: Final[Mapping[ArtifactKind, str]] = MappingProxyType(
 )
 """The five artifact kinds AAP 0.4.6 references, each with its property name.
 
-``log_tail`` and ``manifest`` are absent on purpose: the manifest lists the artifacts, and the log
-tail is the HTML report's panel rather than a JUnit reference.
+Each property's value is the artifact's path relative to the run directory. ``log_tail`` and
+``manifest`` are absent on purpose: the manifest lists the artifacts, and the log tail is the HTML
+report's panel rather than a JUnit reference.
 """
 
 ARTIFACT_PROPERTY_ORDER: Final[tuple[ArtifactKind, ...]] = (
@@ -161,16 +155,12 @@ ARTIFACT_PROPERTY_ORDER: Final[tuple[ArtifactKind, ...]] = (
 # --- Element names and the outcome dispatch -------------------------------
 
 _SUITE: Final[str] = "testsuite"
-"""Element name of the document's single suite, the root of the tree."""
 
 _TESTCASE: Final[str] = "testcase"
-"""Element name of one test."""
 
 _PROPERTIES: Final[str] = "properties"
-"""Element name of the container holding a testcase's or the suite's properties."""
 
 _PROPERTY: Final[str] = "property"
-"""Element name of one property; its ``name`` and ``value`` attributes are fixed by JUnit."""
 
 _FAILURE: Final[str] = "failure"
 """Element name of a failed assertion, which is a CI failure."""
@@ -179,10 +169,8 @@ _ERROR: Final[str] = "error"
 """Element name of an unexpected exception, which a CI reader reports apart from a failure."""
 
 _SKIPPED: Final[str] = "skipped"
-"""Element name of a test that did not count against the run."""
 
 _SYSTEM_OUT: Final[str] = "system-out"
-"""Element name of the note a passing quarantined or ``xfail``-passing test carries."""
 
 _SYSTEM_ERR: Final[str] = "system-err"
 """Element name of a run error on the ``<testsuite>``, as AAP 0.4.6 requires."""
@@ -211,10 +199,9 @@ _NOTE_MESSAGES: Final[Mapping[Outcome, str]] = MappingProxyType(
 def split_nodeid(nodeid: str) -> tuple[str, str]:
     """Split a pytest node id into the JUnit ``classname`` and ``name`` pair.
 
-    ``tests/test_api.py::TestClient::test_get[200-ok]`` becomes
-    ``("tests.test_api.TestClient", "test_get[200-ok]")``: the module path loses its ``.py`` suffix
-    and its separators become dots, the class segments join that name, and the last segment is the
-    test id, its ``[...]`` suffix kept. A bare path with no ``::`` is both class and name.
+    The module path loses its ``.py`` suffix and its separators become dots, the class segments
+    join that name, and the last segment is the test id with its ``[...]`` suffix kept. A bare path
+    with no ``::`` is both class and name.
 
     Args:
         nodeid: The record's node id, unsanitised as pytest reports it.
@@ -240,8 +227,7 @@ def split_nodeid(nodeid: str) -> tuple[str, str]:
 def _seconds(duration_ms: float) -> str:
     """Return a duration in milliseconds as the ``time`` attribute's seconds text.
 
-    Three decimals are always written, so a fast run renders ``0.001`` rather than a shorter float
-    repr and two runs of one suite produce the same text.
+    Three decimals are always written, so two runs of one suite produce the same text.
 
     Args:
         duration_ms: The duration in milliseconds, never negative.
@@ -268,9 +254,6 @@ C0 control, a lone surrogate, ``#xFFFE`` or ``#xFFFF`` is not.
 def _sanitise(text: str) -> str:
     """Return the already-redacted ``text`` carrying only characters XML 1.0 admits.
 
-    Args:
-        text: A string a record contributed to the document.
-
     Returns:
         The text with every code point outside the ``Char`` production removed.
     """
@@ -280,11 +263,10 @@ def _sanitise(text: str) -> str:
 def _sanitise_tree(root: ElementTree.Element) -> None:
     """Reduce every attribute value and text node of ``root`` to characters XML admits.
 
-    One walk over the built tree covers each record-derived string once -- the testcase
+    One walk over the built tree covers every record-derived string once -- the testcase
     ``classname`` and ``name``, every property value, the failure or error ``message`` attribute
-    and body, and a run error's ``<system-err>`` text -- and it covers a field a later record
-    adds. Only :func:`_sanitise` changes a value, so no order changes and two renders of one record
-    set stay byte-identical (AAP 0.13.1).
+    and body, and a run error's ``<system-err>`` text. Only :func:`_sanitise` changes a value, so no
+    order changes and two renders of one record set stay byte-identical (AAP 0.13.1).
 
     Args:
         root: The suite element built from the run's records, before it is indented.
@@ -303,7 +285,7 @@ def _add_properties(parent: ElementTree.Element, pairs: Sequence[tuple[str, str]
     """Attach a ``<properties>`` container to ``parent`` when there is a property to record.
 
     An empty ``pairs`` attaches nothing, so a suite that knows no run id does not carry an empty
-    container and the zero-record document stays the bare element AAP 0.4.6 describes.
+    container.
 
     Args:
         parent: The element -- a testcase or the testsuite -- the container is attached to.
@@ -321,8 +303,7 @@ def _artifact_pairs(record: ResultRecord, scrub: Redactor) -> list[tuple[str, st
 
     The five kinds are emitted in :data:`ARTIFACT_PROPERTY_ORDER`, so two runs that captured the
     same artifacts produce the same property order. A kind the record does not carry is omitted
-    rather than emitted empty: a reference to a file that was never written would be a dead link,
-    and a passed test with ``artifacts.keep_passed`` off carries no artifacts at all.
+    rather than emitted empty: a reference to a file that was never written would be a dead link.
 
     Args:
         record: The result record whose artifact list is read.
@@ -372,7 +353,7 @@ def _failure_payload(record: ResultRecord, scrub: Redactor) -> tuple[str, str]:
     The attribute is the first failure's message, redacted and then clipped to
     :data:`FAILURE_MESSAGE_BYTES`, because a CI list shows it. The text carries every failing
     phase, each prefixed with its phase name in brackets, so a test that failed in ``setup`` and
-    again in ``teardown`` reports both instead of only the first.
+    again in ``teardown`` reports both.
 
     Args:
         record: The failing result record.
@@ -380,8 +361,7 @@ def _failure_payload(record: ResultRecord, scrub: Redactor) -> tuple[str, str]:
 
     Returns:
         The ``(message attribute, element text)`` pair. A failing record that carries no failure
-        entry -- which a run produces only when the failure text was lost with a worker -- reports
-        :data:`NO_FAILURE_DETAIL_MESSAGE` in both, so no element is ever blank.
+        entry reports :data:`NO_FAILURE_DETAIL_MESSAGE` in both, so no element is ever blank.
     """
     if not record.failures:
         return NO_FAILURE_DETAIL_MESSAGE, NO_FAILURE_DETAIL_MESSAGE
@@ -422,7 +402,7 @@ def _testcase(record: ResultRecord, scrub: Redactor) -> ElementTree.Element:
 
     Returns:
         The element, carrying ``classname``, ``name`` and ``time``, then its properties, then the
-        single child element its outcome maps to.
+        child element its outcome maps to.
     """
     classname, name = split_nodeid(record.nodeid)
     testcase = ElementTree.Element(
@@ -441,7 +421,7 @@ def _suite_identity(
 
     Both are read from the node-id-sorted first result record, so two runs of one suite attribute
     the document identically whichever worker finished first. A run that recorded only run errors
-    still names its run id, and reports no profile, because no test carried one.
+    still names its run id, and reports no profile.
 
     Args:
         results: The run's result records, already sorted by node id.
@@ -463,9 +443,9 @@ def _suite(
     """Build the ``<testsuite>`` element of a run.
 
     The four counters are exact and never overlap: ``failures`` counts ``failed`` alone, ``errors``
-    counts ``error`` alone and ``skipped`` counts the four outcomes that render a ``<skipped>``.
-    A quarantined failure is therefore counted as skipped, never as a failure, which is what keeps
-    the document agreeing with a run that exits ``0`` under ``quarantine_mode = "report"``.
+    counts ``error`` alone and ``skipped`` counts the four outcomes that render a ``<skipped>``. A
+    quarantined failure is therefore counted as skipped, which keeps the document agreeing with a
+    run that exits ``0`` under ``quarantine_mode = "report"``.
 
     Args:
         results: The run's result records, already sorted by node id.
@@ -501,14 +481,7 @@ def _suite(
 
 
 def _record_sort_key(record: ResultRecord) -> str:
-    """Return the node id a result record is sorted by, which is unique within a session.
-
-    Args:
-        record: The record to key.
-
-    Returns:
-        The node id, so the order is independent of worker count and finish order.
-    """
+    """Return the node id a result record is sorted by, which is unique within a session."""
     return record.nodeid
 
 
@@ -517,12 +490,6 @@ def _run_error_sort_key(error: RunError) -> tuple[str, str]:
 
     ``recorded_at`` is deliberately not the key: the determinism criterion normalises the record
     timestamps and not this element's, so ordering by it would make two runs differ.
-
-    Args:
-        error: The run error to key.
-
-    Returns:
-        The sort pair, both values of which the document renders.
     """
     return (error.worker_id, error.message)
 
@@ -539,12 +506,9 @@ def _partition(
         The result records sorted by node id, and the run errors sorted by worker id and message.
 
     Raises:
-        ElementTypeError: An element is neither a
-            :class:`~foundry.reporting.record.ResultRecord` nor a
-            :class:`~foundry.reporting.record.RunError`. It is a
-            :class:`~foundry.core.exceptions.FoundryError` that subclasses ``TypeError``, so a
-            caller defect surfaces instead of being absorbed into a document that would silently
-            omit a test.
+        ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
+            It subclasses ``TypeError`` and ``FoundryError``, so a caller defect surfaces instead of
+            being absorbed into a document that would silently omit a test.
     """
     results: list[ResultRecord] = []
     errors: list[RunError] = []
@@ -584,9 +548,7 @@ def render(records: Sequence[ResultElement], *, redactor: Redactor | None = None
         empty ``records`` yields a ``<testsuite>`` reporting zero tests.
 
     Raises:
-        ElementTypeError: An element is neither a
-            :class:`~foundry.reporting.record.ResultRecord` nor a
-            :class:`~foundry.reporting.record.RunError`.
+        ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
     """
     scrub = default_redactor() if redactor is None else redactor
     results, errors = _partition(records)
@@ -618,8 +580,6 @@ def write(
         at ``WARNING`` and changes neither an outcome nor the exit code (AAP 0.14.3).
 
     Raises:
-        ElementTypeError: An element is neither a
-            :class:`~foundry.reporting.record.ResultRecord` nor a
-            :class:`~foundry.reporting.record.RunError`.
+        ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
     """
     return write_text(render(records, redactor=redactor), path)

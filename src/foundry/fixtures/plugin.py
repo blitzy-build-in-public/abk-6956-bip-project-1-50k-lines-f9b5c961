@@ -25,24 +25,16 @@ The family, with the scope AAP 0.4.3 publishes for each::
 **This module adds no behaviour.** Every function lives in the sibling module its import names and
 carries its own docstring, scope and dependency wiring there. What stands here is the imports,
 :data:`FIXTURE_NAMES`, ``__all__`` and this docstring: nothing is decorated, wrapped or rebound, no
-import is conditional, no configuration is read and no I/O happens. Importing the module therefore
-defines names only, and costs the plugin's startup budget nothing beyond the ten sibling modules it
-pulls in (AAP 0.14.2, implicit requirement I5).
-
-**Why a module rather than a plugin-list declaration.** Registration belongs to ``foundry.plugin``
-alone (AAP 0.4.8, AAP 0.9.2): listing fixture modules in a non-root conftest is deprecated, and a
-plugin shipped as a distribution registers itself, so this module declares no plugin list and no
-hook.
-
-**Layering.** Every import edge stays inside this package. ``foundry.fixtures`` is the one
-capability rung package permitted to import ``foundry.config`` (AAP 0.4.8); the execution, reporting
-and CLI packages stay out of reach, and the sibling modules are named directly rather than through
-the ``foundry.fixtures`` package barrel, so ``import foundry.fixtures.plugin`` succeeds whatever
+import is conditional, no configuration is read and no I/O happens. Registration belongs to
+``foundry.plugin`` alone -- listing fixture modules in a non-root conftest is deprecated, and a
+plugin shipped as a distribution registers itself -- so this module declares no plugin list and no
+hook. Importing it defines names only, and the sibling modules are named directly rather than
+through the ``foundry.fixtures`` barrel, so ``import foundry.fixtures.plugin`` succeeds whatever
 module is imported first and no cycle is possible.
 
-**Stability.** The twelve names and their scopes are the published contract of AAP 0.4.3 and
-AAP 0.4.9: a consuming suite spells them in test signatures and ``foundry.plugin`` registers them
-under exactly these names, so they may be added to but never renamed or removed.
+**Stability.** The twelve names and their scopes are the published contract: a consuming suite
+spells them in test signatures and ``foundry.plugin`` registers them under exactly these names, so
+they may be added to but never renamed or removed.
 """
 
 from __future__ import annotations

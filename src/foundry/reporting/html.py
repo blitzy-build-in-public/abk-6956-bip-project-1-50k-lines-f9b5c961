@@ -63,9 +63,8 @@ TEMPLATE_NAME: Final[str] = "report.html.j2"
 REPORT_TITLE: Final[str] = "foundry report"
 """The single source of the document's title text, rendered in ``<title>`` and ``<h1>``.
 
-The template reads it as :attr:`ReportContext.title` rather than carrying a literal of its own, so
-the page title has one producer. English-only, light theme, no run id and no timestamp (assumption
-A14).
+The template reads it as :attr:`ReportContext.title`, so the page title has one producer:
+English-only, light theme, no run id and no timestamp (assumption A14).
 """
 
 DEFAULT_LOG_LINES: Final[int] = DEFAULT_LOG_TAIL_LINES
@@ -79,10 +78,8 @@ QUARANTINE_REMOVAL_NOTE: Final[str] = (
 )
 """The recommendation rendered beside a ``quarantine_passed`` entry (assumption A11).
 
-Byte-identical to :data:`foundry.reporting.junit.QUARANTINE_PASSED_NOTE`, the same run's JUnit
-``<system-out>`` note, so both documents carry one recommendation. The bytes are restated
-rather than imported because ``foundry.reporting`` may not import ``foundry.execution``
-(AAP 0.4.8), and a test pins both reporting-side copies equal.
+Byte-identical to :data:`foundry.reporting.junit.QUARANTINE_PASSED_NOTE`, so both documents carry
+one recommendation, and a test pins both reporting-side copies equal.
 """
 
 _UNKNOWN: Final[str] = "unknown"
@@ -145,7 +142,7 @@ class QuarantinedRow:
 
     A quarantined test is a known-flaky one: its failure is listed while the run still succeeds in
     ``report`` mode (AAP 0.4.7); a ``quarantine_passed`` entry carries the removal recommendation
-    instead, because a marked test that passes can lose its marker (assumption A11).
+    instead (assumption A11).
 
     Attributes:
         nodeid: The test's pytest node id, unsanitised.
@@ -187,15 +184,13 @@ class ReportContext:
         run_id: The run's identifier, ``YYYYmmddTHHMMSS-<6 hex>``.
         profile: The active profile name.
         finished_at: The run's finish time, ISO 8601 UTC: the value ``plugin.py`` supplies when it
-            knows the session's own, else the latest ``finished_at`` of the result records, else
-            :data:`_UNKNOWN`. The only date the report renders (AAP 0.4.6, 0.7.4).
-        title: The document title text, which the template renders as the page title and as the
+            knows the session's own, else the latest result record's, else :data:`_UNKNOWN`.
+        title: The document title text, which the template renders as the page title and the
             page heading; :data:`REPORT_TITLE`, as :func:`build_context` fills it.
         total_tests: How many tests the report holds a result record for.
         no_tests: Whether the run collected nothing, rendered as an explicit statement.
         artifacts_disabled: Whether capture was disabled, so the template shows one banner
-            instead of artifact links (AAP 0.4.7): the artifact writer's own flag when
-            ``plugin.py`` supplies it, else whether the run captured no artifact for its tests.
+            instead of artifact links (AAP 0.4.7).
         counts: The nine per-outcome tallies, in :data:`foundry.reporting.record.OUTCOMES` order.
         rows: One row per test, sorted by node id.
         quarantined: The Quarantined section's entries, sorted by node id.
@@ -261,9 +256,7 @@ def _format_duration(milliseconds: float) -> str:
     """Format a millisecond duration for a reader.
 
     Sub-second durations stay in milliseconds; anything longer switches to seconds so a slow test
-    does not render as ``12500.0 ms``. The formatted copy is the only duration a row carries: the
-    result record keeps ``duration_ms``, which ``results.json`` serialises and criterion 14
-    normalises, while the report renders this text.
+    does not render as ``12500.0 ms``.
     """
     if milliseconds < _MILLISECONDS_PER_SECOND:
         return f"{milliseconds:.1f} ms"
@@ -289,8 +282,8 @@ def _row_for(record: ResultRecord) -> ReportRow:
 def _counts(results: Sequence[ResultRecord]) -> tuple[OutcomeCount, ...]:
     """Tally the run's outcomes into the nine summary chips, in outcome declaration order.
 
-    Every outcome is present, zero counts included, and the tallies are counted from the records
-    rather than from a mutable accumulator.
+    Every outcome is present, zero counts included, counted from the records rather than from a
+    mutable accumulator.
 
     Returns:
         Nine :class:`OutcomeCount` entries in :data:`foundry.reporting.record.OUTCOMES` order.
@@ -315,13 +308,12 @@ def _quarantined_rows(results: Sequence[ResultRecord]) -> tuple[QuarantinedRow, 
 
     The records are already sorted by node id, so the section inherits that order, and only the two
     outcomes of :data:`foundry.reporting.record.QUARANTINE_OUTCOMES` are selected. The badge's class
-    comes from :func:`_outcome_css_class`, the one derivation of the stylesheet's
-    ``.outcome-<value>`` rule, rather than being composed again here, so the results table and the
-    Quarantined section cannot disagree.
+    comes from :func:`_outcome_css_class`, so the results table and the Quarantined section cannot
+    disagree.
 
     Returns:
-        One :class:`QuarantinedRow` per quarantined result, in node-id order; empty when nothing was
-        quarantined, which is what makes the template omit the section altogether.
+        One :class:`QuarantinedRow` per quarantined result, in node-id order; an empty tuple when
+        nothing was quarantined, which makes the template omit the section.
     """
     return tuple(
         QuarantinedRow(
@@ -338,8 +330,7 @@ def _quarantined_rows(results: Sequence[ResultRecord]) -> tuple[QuarantinedRow, 
 def _run_id_for(results: Sequence[ResultRecord], override: str | None) -> str:
     """Return the run id the report's header carries.
 
-    ``plugin.py`` knows the run id even when no record exists, which is the zero-tests case the
-    override exists for.
+    ``plugin.py`` knows the run id even when no record exists, which is the zero-tests case.
 
     Returns:
         The override when it is set, else the first record's run id, else :data:`_UNKNOWN`.
@@ -372,8 +363,7 @@ def _finished_at(results: Sequence[ResultRecord], override: str | None) -> str:
 
     ``override`` is what ``plugin.py`` supplies when it knows the session's finish time, which is
     the zero-tests and run-error-only cases where no record carries one; an empty string is treated
-    as absent, as :func:`_run_id_for` does. The clock is never read, so two renders of the same
-    records stay byte-identical, and the header carries no timestamp but this one (criterion 14).
+    as absent. The clock is never read, so two renders of the same records stay byte-identical.
 
     Returns:
         The override when it is set, else the latest record ``finished_at`` as ISO 8601, else
@@ -391,12 +381,11 @@ def _artifacts_disabled(results: Sequence[ResultRecord], explicit: bool | None) 
 
     ``explicit`` is the artifact writer's own ``disabled`` flag, which the caller holding it --
     ``plugin.py`` -- passes down rather than this package reading it out of the writer's state
-    (AAP 0.4.8, 0.13.1); the result record carries no such field (AAP 0.4.6).
+    (AAP 0.4.8, 0.13.1).
 
     Without that signal the banner falls back to the records: a run that captured no artifact for
-    any of its tests. The inference cannot tell a disabled writer from an all-skipped run or one
-    whose captures were pruned, so it is only the fallback for a caller that supplies nothing, not
-    the trigger AAP 0.4.7 names.
+    any of its tests. The inference cannot tell a disabled writer from an all-skipped run, so it is
+    only the fallback for a caller that supplies nothing, not the trigger AAP 0.4.7 names.
     """
     if explicit is not None:
         return explicit
@@ -412,8 +401,7 @@ def _partition(records: Sequence[ResultElement]) -> tuple[list[ResultRecord], li
     """Split the run's elements into its result records and its run errors, each sorted.
 
     The sequence is validated once, here, before any panel is built, so an element of neither kind
-    is the published exception rather than a builtin escaping from a renderer into the session
-    (AAP 0.14.3) -- the partition :func:`foundry.reporting.store.dumps` performs too.
+    is the published exception rather than a builtin escaping into the session (AAP 0.14.3).
 
     Args:
         records: The run's elements in any order.
@@ -424,8 +412,7 @@ def _partition(records: Sequence[ResultElement]) -> tuple[list[ResultRecord], li
     Raises:
         ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
             It subclasses ``TypeError`` and :class:`foundry.core.exceptions.FoundryError`, so a
-            caller catching either documented type still catches it and a caller defect
-            surfaces instead of being absorbed into a report that would silently omit a test.
+            caller defect surfaces instead of being absorbed into a report.
     """
     results: list[ResultRecord] = []
     errors: list[RunError] = []
@@ -461,24 +448,20 @@ def build_context(
     """Assemble the immutable view model one report is rendered from.
 
     Public so a test can assert what the template will see without rendering anything; the builder
-    does no I/O of its own, because reading the captured log tails is
-    :func:`foundry.reporting.panels.build_panels`'s work. The element sequence is validated once,
-    here, so only a result record and a run error reach the document (AAP 0.14.3).
+    does no I/O of its own. The element sequence is validated once, here, so only a result record
+    and a run error reach the document (AAP 0.14.3).
 
     ``run_id``, ``profile``, ``finished_at`` and ``artifacts_disabled`` are the values ``plugin.py``
-    holds even when no record does -- the run id and profile of a zero-tests or run-error-only run,
-    the session's finish time, and the artifact writer's own disabled flag, the signal AAP 0.4.7
-    names for the report's single banner. Each is used when given, else derived from the records,
-    with :data:`_UNKNOWN` as the last resort (AAP 0.4.6, 0.4.7, 0.7.4, 0.13.1). ``report_dir`` is
-    the directory the document will be written into, which every artifact href is relative to;
-    omitted, the link base is the process working directory, where the product writes
-    ``report.html`` (assumption A5).
+    holds even when no record does: the run id and profile of a zero-tests run, the session's finish
+    time, and the artifact writer's own disabled flag, the signal AAP 0.4.7 names for the report's
+    single banner. Each is used when given, else derived from the records, with :data:`_UNKNOWN` as
+    the last resort. ``report_dir`` is the directory the document will be written into, which every
+    artifact href is relative to (assumption A5).
 
-    Determinism (AAP 0.13.1, criterion 14): records are sorted by node id, the run errors by
-    worker id and message, the counts follow the outcome declaration order, and every other
-    collection derives from those. Redaction (AAP 0.3.2): a run error's message is scrubbed
-    here and failure messages and log lines where the panels are built, while contract values
-    are left alone, because redacting one would break ``foundry report compare``.
+    Determinism (criterion 14): records are sorted by node id, the run errors by worker id and
+    message, the counts follow the outcome declaration order. Redaction (AAP 0.3.2): a run error's
+    message is scrubbed here and failure messages and log lines where the panels are built, while
+    contract values are left alone, because redacting one would break ``foundry report compare``.
 
     Returns:
         The context, with every collection sorted and every free-text value redacted.
@@ -530,10 +513,9 @@ _ISOLATION_ERRORS: Final[tuple[type[BaseException], ...]] = (
 )
 """The families a rendering fault raises outside :class:`jinja2.TemplateError`.
 
-AAP 0.1.2 and 0.14.3 make a reporting fault one ``WARNING`` that changes no outcome and no exit
-code, so :func:`_render_document` isolates exactly these -- the set :mod:`foundry.obs.events`
-isolates its own work with -- and not every exception: an interrupt or a ``SystemExit`` is a
-caller's control flow and still propagates.
+AAP 0.14.3 makes a reporting fault one ``WARNING`` that changes no outcome and no exit code, so
+:func:`_render_document` isolates exactly these -- not every exception: an interrupt or a
+``SystemExit`` is a caller's control flow and still propagates.
 """
 
 _ATTRIBUTE_REFERENCE: Final[re.Pattern[str]] = re.compile(
@@ -542,17 +524,14 @@ _ATTRIBUTE_REFERENCE: Final[re.Pattern[str]] = re.compile(
 )
 """One quoted ``href`` or ``src`` attribute of the rendered document, in either quote style.
 
-The scan reads attribute values rather than the whole text: ``autoescape=True`` escapes the
-quotes of a URL a failure message quotes, so that text cannot match here, while an attribute
-the template emits with an external value does, and the leading whitespace keeps ``data-href``
-out.
+The scan reads attribute values rather than the whole text, so an escaped URL in a message cannot
+match. The leading whitespace keeps ``data-href`` out.
 """
 
 _PROTOCOL_RELATIVE_PREFIX: Final[str] = "//"
 """Prefix of a protocol-relative URL, which fetches from another host under the page's own scheme.
 
-``//host/path`` names no scheme for :func:`foundry.reporting.assets.contains_external_reference`
-to recognise, yet it fetches from another host, so the scan checks for it explicitly.
+``//host/path`` names no scheme for the asset scan to recognise, yet it fetches elsewhere.
 """
 
 
@@ -571,12 +550,11 @@ def _first_external_attribute(document: str) -> str | None:
     """Return the first ``href`` or ``src`` in ``document`` that points outside it, or ``None``.
 
     Only the attributes the template controls are inspected, which keeps a failure message that
-    legitimately quotes a URL from reading as an external reference: that message reaches the
-    page escaped and cannot match :data:`_ATTRIBUTE_REFERENCE`.
+    legitimately quotes a URL from reading as an external reference.
 
     Returns:
-        The offending value stripped of surrounding whitespace, or ``None`` when every
-        attribute stays inside the document.
+        The offending value stripped of surrounding whitespace, or ``None`` when every attribute
+        stays inside the document.
     """
     for match in _ATTRIBUTE_REFERENCE.finditer(document):
         value = (match.group("double") or match.group("single") or "").strip()
@@ -590,11 +568,10 @@ def _render_document(context: ReportContext, source: Path, redactor: Redactor) -
 
     Jinja2 is imported here rather than at module scope, because the library's import cost must not
     reach the plugin's startup budget (implicit requirement I5). Marking a value safe is the
-    template's job: its ``safe`` filter keeps the two module-owned asset constants unescaped,
-    while every record value stays escaped by ``autoescape=True``. The finished document is
-    also scanned for a ``href`` or ``src`` value that points outside it (AAP 0.4.6, I10), so a
-    template regression that reintroduces an external asset takes the fallback instead of
-    shipping a report that fetches something when it is opened.
+    template's job: its ``safe`` filter keeps the two module-owned asset constants unescaped, while
+    every record value stays escaped by ``autoescape=True``. The finished document is scanned for a
+    ``href`` or ``src`` value that points outside it, so a template regression that reintroduces an
+    external asset takes the fallback instead of shipping a report that fetches something.
 
     Returns:
         The rendered document, or ``None`` when the template is missing, cannot be rendered,
@@ -655,14 +632,12 @@ def render(
     The document is returned, never written: ``renderers.py`` hands it to
     :func:`foundry.reporting.store.write_text`, this package's only file writer (AAP 0.4.8). The
     header's run-level values and the artifact writer's flag are the caller's to supply, on the
-    terms :func:`build_context` documents (AAP 0.4.6, 0.4.7, 0.7.4).
+    terms :func:`build_context` documents.
 
-    The asset bundle is validated before anything is rendered, so a bundle that reaches outside
-    the document raises rather than shipping a report that cannot open offline. The finished
-    document is scanned too, but at attribute level: autoescape escapes a failure message's
-    quotes, so a URL a message legitimately quotes cannot match an ``href`` or ``src`` while
-    every attribute the template emits is checked. ``report_dir`` reaches
-    :func:`build_context` unchanged, on the terms it documents.
+    The asset bundle is validated before anything is rendered, so a bundle that reaches outside the
+    document raises rather than shipping a report that cannot open offline. The finished document is
+    scanned too, but at attribute level: autoescape escapes a failure message's quotes, so a URL a
+    message legitimately quotes cannot match an ``href`` or ``src``.
 
     Returns:
         The rendered document, or ``None`` when the template is missing, cannot be rendered, or

@@ -1,17 +1,8 @@
 """The one socket-capable transport Foundry builds, and the one live-or-recorded choice.
 
-This module holds the construction site of the transport that can reach a peer, and
-:func:`select_transport`, the choice between it and the transport a cassette session hands out
-(AAP 0.7.1, AAP 0.3.3). It never looks at a mode: the mode table and the capture sink stay in
-:mod:`foundry.cassette.modes`, so no branch here can reach ``httpcore`` on a replay, and one
-greppable construction site is what the offline constraint of AAP 0.14.3 audits.
-
-Redirects are never followed (AAP 0.3.1)
-    A request is issued by calling :meth:`httpx.BaseTransport.handle_request`, never through
-    :class:`httpx.Client`, so a ``3xx`` comes back as an ordinary response.
-
-Closing never changes a test's outcome (AAP 0.1.2, AAP 0.14.3)
-    :func:`close_quietly` reports a transport that fails to close as exactly one ``WARNING``.
+Redirects are never followed, because a request is issued by calling
+:meth:`httpx.BaseTransport.handle_request` and never through a client, and :func:`close_quietly`
+reports a transport that fails to close as exactly one ``WARNING`` (AAP 0.1.2, AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -84,18 +75,10 @@ def timeout_extension(seconds: float) -> dict[str, float]:
 class LiveTransport(httpx.BaseTransport):
     """The one transport Foundry builds that can open a socket, and nothing beyond that.
 
-    It wraps :class:`httpx.HTTPTransport` configured with :data:`NETWORK_RETRIES` and the
-    caller's verification choice, delegating :meth:`handle_request` and :meth:`close` to it.
-    Requests reach it by calling :meth:`handle_request` directly, so no redirect is ever
-    followed (AAP 0.3.1).
-
-    A named class rather than a bare ``HTTPTransport``, for three reasons a bare instance would
-    lose. It is the single, greppable construction site for a socket-capable transport, which is
-    what makes the offline guarantee auditable. It is the seam a test subclasses to prove a
-    replay never reaches the network: a ``replay`` run has to show zero calls here, not merely
-    zero recorded interactions. And it deliberately sets no cassette source tag, so
-    :func:`foundry.http.response.from_httpx` reports ``source == "live"`` for a reply it returns
-    (AAP 0.4.3); tagging here would make that field lie.
+    A named class rather than a bare ``HTTPTransport``, for three reasons: it is the single
+    greppable construction site the offline guarantee is audited at, it is the seam a test
+    subclasses to prove a replay never reaches the network, and it sets no cassette source tag, so a
+    reply it returns reports ``source == "live"`` (AAP 0.4.3).
     """
 
     _transport: httpx.HTTPTransport
@@ -156,17 +139,9 @@ def select_transport(
 ) -> httpx.BaseTransport:
     """Return the transport a request is sent on: the live one, or the cassette's.
 
-    The whole of this module's part in record/replay: a session is asked for the transport its
-    mode calls for and nothing here looks at the mode (AAP 0.7.3), so the mode table, the capture
-    sink and the save at teardown stay in :mod:`foundry.cassette.modes`. ``live`` is a factory
-    rather than an object because the transport that can reach a peer is built only when it is
-    the object a request is sent on: a session that sends on a cassette never builds one, so it
-    holds nothing to close.
-
-    Returns:
-        ``live()`` when ``cassette`` is ``None``; otherwise the transport that session's mode
-        calls for -- the caller's own object in ``off``, a recording wrapper in ``record``, and a
-        replay in ``replay`` and ``passthrough``.
+    Nothing here looks at the mode, so the mode table, the capture sink and the save at teardown
+    stay in :mod:`foundry.cassette.modes`. ``live`` is a factory because a session that sends on a
+    cassette never builds a transport that can reach a peer.
     """
     if cassette is None:
         return live()

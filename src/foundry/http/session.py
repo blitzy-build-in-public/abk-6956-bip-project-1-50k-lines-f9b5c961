@@ -1,13 +1,7 @@
 """The HTTP session: one logical request, composed from the package's collaborators (AAP 0.4.3).
 
-The pipeline is AAP 0.7.3's: closed-session guard, ``join_url`` against ``http.base_url``, the
-header merge, the timeout as a request extension, the transport, the retry loop and
-:func:`foundry.http.response.from_httpx`. Headers merge as ``http.headers``, then the auth
-strategy's pair, then the per-request headers, a later value replacing an earlier one
-case-insensitively. Every status, 3xx and 5xx included, is *returned* as a
-:class:`~foundry.http.response.FoundryResponse`; only transport faults raise. The transport is
-chosen once by :func:`foundry.http.transport.select_transport`, which builds the live one only
-for a session with no cassette to send on, so a replay holds nothing that can reach a peer.
+Every status, ``3xx`` and ``5xx`` included, is returned as a
+:class:`~foundry.http.response.FoundryResponse`; only transport faults raise.
 """
 
 from __future__ import annotations
@@ -277,19 +271,9 @@ class SessionSettings:
 class FoundrySession:
     """One HTTP session: a configured request pipeline, and the responses it returns.
 
-    Built by the ``foundry_http`` and ``foundry_api`` fixtures (AAP 0.4.3), and usable directly by a
-    caller without pytest. A status is always a value and a caller's unusable argument is a
-    :class:`~foundry.core.exceptions.ConfigError` naming it; a cassette miss is a ``FoundryError``
-    the retry loop deliberately does not catch (AAP 0.4.7).
-
-    No client, and nothing a client would add
-        There is no cookie jar, no redirect following and no proxy discovery, because no
-        ``httpx.Client`` is built: ``handle_request`` is called directly (AAP 0.3.1). The session
-        holds no state a request can change, so two identical requests send identical bytes.
-
-    ``close()`` is the whole teardown
-        The fixture that owns a session calls :meth:`close` and must not also call the cassette
-        session's ``finish()``; :meth:`close` is idempotent and never raises (AAP 0.14.3).
+    No ``httpx.Client`` is built, so there is no cookie jar, no redirect following and no proxy
+    discovery, and the session holds no state a request can change. :meth:`close` is the whole
+    teardown, is idempotent and never raises.
     """
 
     _settings: SessionSettings
@@ -325,20 +309,8 @@ class FoundrySession:
 
         Nothing is sent and no socket is opened here: a cassette session builds the transport its
         mode calls for, and a live transport is built only when it is the object this session sends
-        on.
-
-        Args:
-            settings: The resolved ``http.*`` values, as plain primitives.
-            cassette: The test's cassette session, or ``None`` when the run keeps no cassette.
-            transport: A transport to send on instead of the one this session would build; when
-                given, this session builds none.
-            sleep: The callable that performs a backoff wait, injected by a test that asserts it.
-            environ: The environment a credential is read from; ``None`` is the process environment.
-
-        Raises:
-            ConfigError: ``http.base_url`` is absent or unusable where it is required, or a
-                variable an auth strategy names is missing. Each message names the key or variable.
-            FoundryError: The cassette session cannot produce the transport its mode calls for.
+        on. An absent or unusable ``http.base_url``, or a credential variable a strategy names that
+        the environment does not supply, raises :class:`ConfigError`.
         """
         self._settings = settings
         # A base URL the caller declares mandatory is resolved here, not at the first request:
@@ -404,28 +376,12 @@ class FoundrySession:
     ) -> FoundryResponse:
         """Issue one logical request and return the response, whatever its status.
 
-        The steps are AAP 0.7.3's, in the order the numbered comments in the body follow; ``path``
-        is resolved against ``http.base_url``, which lets ``foundry_http`` take absolute URLs while
-        ``foundry_api`` takes relative paths. ``params`` goes to :class:`httpx.Request`, merging
-        it with any query already in ``path`` and lets the parameters win; this module does not sort
-        them, because order-insensitive comparison belongs to the cassette matcher.
-
-        Args:
-            method: The HTTP method. Any verb is accepted and upper-cased.
-            path: An absolute ``http``/``https`` URL, or a path relative to ``http.base_url``.
-            params: Query parameters, as a mapping or a sequence of pairs.
-            json: A JSON-serialisable body, or ``None`` for a request without one.
-            headers: Per-request headers, which win over ``http.headers`` and the auth header.
-            timeout: A deadline for this request, replacing ``http.timeout``, still in its range.
-
-        Returns:
-            The response for the status the peer sent, ``elapsed_ms`` measured across every attempt.
-
-        Raises:
-            FoundryError: The session is closed.
-            ConfigError: An argument this session cannot use, or a timeout outside its range.
-            TransportError: A transport fault the retry policy does not retry.
-            RetryExhaustedError: Every attempt failed with a fault the policy does retry.
+        ``path`` is resolved against ``http.base_url``, so ``foundry_http`` can issue absolute URLs
+        while ``foundry_api`` takes relative paths, and ``params`` is not sorted here because
+        order-insensitive comparison belongs to the cassette matcher. A closed session raises
+        ``FoundryError``, an unusable argument or a timeout outside its range raises
+        :class:`ConfigError`, a fault the policy does not retry raises ``TransportError``, and an
+        exhausted retry raises ``RetryExhaustedError``.
         """
         # 1. A closed session has no transport left and no cassette left to save.
         if self._closed:

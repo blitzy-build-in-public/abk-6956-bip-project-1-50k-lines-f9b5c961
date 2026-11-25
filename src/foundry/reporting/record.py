@@ -62,8 +62,8 @@ class Outcome(StrEnum):
         XFAILED: A failure pytest reported as expected (``xfail``).
         XPASSED: An unexpected pass of a test marked ``xfail``.
         ERROR: A setup or teardown error, which pytest reports apart from a failure.
-        QUARANTINED_FAILED: A test marked ``foundry_quarantine`` failed; ``report`` mode keeps
-            the run succeeding and ``strict`` mode fails it.
+        QUARANTINED_FAILED: A marked test failed; ``report`` mode keeps the run succeeding and
+            ``strict`` mode fails it.
         QUARANTINE_PASSED: A marked test passed, so the marker can be removed.
         NOT_RUN: The item never executed because the session stopped or a worker was lost.
     """
@@ -84,20 +84,18 @@ class Outcome(StrEnum):
 
 
 OUTCOMES: Final[tuple[Outcome, ...]] = tuple(Outcome)
-"""All nine :class:`Outcome` values in declaration order.
+"""All nine :class:`Outcome` values in declaration order, which is the summary strip's order.
 
-Derived from the enum rather than restated, so a member and the summary strip that renders it
-can never drift apart. The order is the display order: the report's summary strip and the
-terminal counts iterate it, reading from a successful outcome towards the regressions.
+Derived from the enum rather than restated, so a member and the strip that renders it can never
+drift apart.
 """
 
 FAILING_OUTCOMES: Final[frozenset[Outcome]] = frozenset({Outcome.FAILED, Outcome.ERROR})
 """The outcomes that count against a run: the single definition the comparator, the JUnit
-writer and the exit code share, so "did this run fail" is answered one way.
+writer and the exit code share.
 
-The quarantine outcomes are deliberately excluded: quarantine exists so that a known-flaky
-failure does not fail the run in ``report`` mode (AAP 0.4.7), and counting a quarantined
-failure here would report it as a regression and contradict that exit code.
+The quarantine outcomes are deliberately excluded, so a known-flaky failure does not fail the run
+in ``report`` mode (AAP 0.4.7) or read as a regression in ``foundry report compare``.
 """
 
 QUARANTINE_OUTCOMES: Final[frozenset[Outcome]] = frozenset(
@@ -108,11 +106,9 @@ QUARANTINE_OUTCOMES: Final[frozenset[Outcome]] = frozenset(
 PROFILE_NAMES: Final[tuple[str, ...]] = ("default", "local", "ci", "staging")
 """The four profile names a result record can carry, in cascade order.
 
-These mirror ``foundry.config.enums.ProfileName`` and are restated because the layering
-contract (AAP 0.4.8) forbids ``foundry.reporting`` from importing ``foundry.config``: reporting
-consumes frozen records and depends on neither the configuration models nor their settings
-machinery. ``tests/unit/test_reporting.py`` cross-checks the two lists, so a profile added to
-the enum without being added here fails the build rather than producing unlabelled records.
+These mirror ``foundry.config.enums.ProfileName`` and are restated because the layering contract
+(AAP 0.4.8) forbids ``foundry.reporting`` from importing ``foundry.config``. A test cross-checks
+the two lists, so a profile added to the enum but not here fails the build.
 """
 
 # --- Record base and shared validation -------------------------------------
@@ -144,8 +140,7 @@ def _normalise_relative_path(value: str, *, field: str) -> str:
     """Check that a recorded path stays inside the run directory, and normalise it.
 
     A record's paths are what the report links to, so an absolute path or a ``..`` segment would
-    turn a link into a read outside the run (AAP 0.7.2); backslashes become forward slashes so two
-    spellings of one file compare equal across runs.
+    turn a link into a read outside the run (AAP 0.7.2); backslashes become forward slashes.
 
     Returns:
         The path with every backslash replaced by a forward slash, otherwise unchanged.
@@ -167,8 +162,7 @@ def _normalise_timestamp(value: object) -> datetime:
     """Return a timestamp field's value as a timezone-aware UTC datetime.
 
     A record is compared and rendered, so its timestamps must be absolute: a naive value is read as
-    UTC, the rule :func:`foundry.core.ids.to_iso8601` applies when it renders one, and any other
-    offset is converted. Text goes through ``parse_iso8601`` so one reader owns that shape.
+    UTC and any other offset is converted, the rule ``to_iso8601`` applies when it renders one.
 
     Returns:
         The instant, timezone-aware and in UTC.
@@ -388,7 +382,7 @@ class ResultRecord(_FrozenRecord):
         """Return whether the record carries a failure entry to render.
 
         A quarantined failure carries one too: it is a failure a person has to see, even when it
-        does not fail the run. ``True`` when ``failures`` is non-empty.
+        does not fail the run.
         """
         return bool(self.failures)
 
@@ -405,7 +399,7 @@ class ResultRecord(_FrozenRecord):
         """Return the record as the JSON-ready object ``results.json`` holds.
 
         Built field by field in the order AAP 0.4.6 tabulates, because ``model_dump`` would emit a
-        datetime where the document carries the text :func:`foundry.core.ids.to_iso8601` writes.
+        datetime where the document carries the text ``to_iso8601`` writes.
         """
         return {
             "record_type": self.record_type,
@@ -476,9 +470,8 @@ class RunError(_FrozenRecord):
 ResultElement: TypeAlias = Annotated[ResultRecord | RunError, Field(discriminator="record_type")]
 """One element of a ``results.json`` array: a result record or a run error.
 
-Discriminated on ``record_type`` rather than resolved by shape, so an element missing the key,
-or carrying one this release does not know, is rejected outright instead of being matched to
-whichever model happens to accept its fields.
+Discriminated on ``record_type`` rather than resolved by shape, so an element missing the key, or
+carrying one this release does not know, is rejected outright.
 """
 
 RESULT_ELEMENT_ADAPTER: Final[TypeAdapter[ResultElement]] = TypeAdapter(
@@ -498,9 +491,8 @@ def _first_error(exc: ValidationError) -> tuple[str, str]:
     """Return the location and message of a validation failure's first error.
 
     Returns:
-        The dotted location of the reported error, or ``"<document>"`` when it concerns the
-        document as a whole -- a missing discriminator is reported with an empty location --
-        followed by pydantic's own message.
+        The dotted location of the reported error, or ``"<document>"`` when it concerns the whole
+        document, followed by pydantic's own message.
     """
     errors = exc.errors()
     if not errors:
@@ -517,9 +509,6 @@ def parse_element(payload: Mapping[str, object], *, source: Path) -> ResultEleme
     same documents, and a document that is not a Foundry result document surfaces as
     :class:`foundry.core.exceptions.DataError` naming the file and the first error location --
     which is what the command line turns into exit code ``2`` (AAP 0.4.4).
-
-    Returns:
-        The validated element, narrowed to :class:`ResultRecord` or :class:`RunError`.
 
     Raises:
         DataError: The payload is not a valid element. Both the message and ``file`` name the
@@ -540,9 +529,5 @@ def parse_element(payload: Mapping[str, object], *, source: Path) -> ResultEleme
 
 
 def element_to_dict(element: ResultElement) -> dict[str, object]:
-    """Serialise either element kind back to its JSON-ready object.
-
-    Both kinds carry ``to_dict``, so a caller holding a :data:`ResultElement` never has to narrow
-    the union to write a document.
-    """
+    """Serialise either element kind back to its JSON-ready object, without narrowing the union."""
     return element.to_dict()

@@ -1,35 +1,17 @@
 """The ``foundry.execution`` package: retries, quarantine, timeouts, sharding and the run's state.
 
-The coordination rung of the architecture: the attempt loop that ``plugin.py``'s
-``pytest_runtest_protocol`` delegates to (:mod:`foundry.execution.coordinator`), the retry policy
-that decides whether a failed attempt is repeated (:mod:`foundry.execution.retry`), the quarantine
-verdict that keeps a known-flaky failure out of the exit code
-(:mod:`foundry.execution.quarantine`), the per-item timer derived from ``execution.timeout``
-(:mod:`foundry.execution.timeout`), the worker ledgers that prove a sharded run collected what the
-serial run collected (:mod:`foundry.execution.sharding`), the session bootstrap and the payload
-assembly that crosses a worker boundary (:mod:`foundry.execution.session`), and the typed stash keys
-with the ``user_properties`` wire format every other module reads
-(:mod:`foundry.execution.state`).
-
-Two rules shape what may live here. State is held only in ``pytest.Stash`` entries keyed by the
-:class:`pytest.StashKey` values :mod:`foundry.execution.state` declares -- never in a module-level
-global, and never in an attribute attached to a ``pytest.Item`` -- and everything that must reach
-the controller from an ``pytest-xdist`` worker is JSON-serialisable, because a worker's reports are
-the only channel back (AAP 0.4.8). Imports run one way: this package may import ``core``, ``obs``,
-``config``, ``http``, ``cassette`` and ``data``, and must never import ``reporting``, ``cli`` or
-``plugin``.
+Per-test state is held only in ``pytest.Stash`` entries keyed by the :class:`pytest.StashKey` values
+:mod:`foundry.execution.state` declares -- never in a module-level global, and never in an attribute
+attached to a ``pytest.Item`` -- and everything that must reach the controller from an
+``pytest-xdist`` worker is JSON-serialisable, because a worker's reports are the only channel back
+(AAP 0.4.8). Imports run one way: this package may import ``core``, ``obs``, ``config``, ``http``,
+``cassette`` and ``data``, and must never import ``reporting``, ``cli`` or ``plugin``.
 
 The names below are re-exported lazily through the PEP 562 :func:`__getattr__` rather than imported
-eagerly, because ``src/foundry/plugin.py`` imports :mod:`foundry.execution.state` at module scope
-and importing a submodule executes this file first: a single eager sibling import here would land
-on the 150 ms plugin-startup budget (AAP 0.14.2), and :mod:`foundry.execution.session` alone would
-drag ``pydantic`` in through ``foundry.config``. The table is an immutable intent record, so this
-module defines names only -- no I/O, no environment read, no logger configuration at import
-(AAP 0.4.8).
-
-Each published name is one a sibling module defines, so the barrel mirrors reality rather than a
-plan sketch: :data:`__all__` and :data:`_LAZY_IMPORTS` are kept in sync and in the same order, and a
-name outside the table raises ``AttributeError``, which is what lets a statement such as
+eagerly, because ``plugin.py`` imports :mod:`foundry.execution.state` at module scope and importing
+a submodule executes this file first: one eager sibling import here would land on the 150 ms
+plugin-startup budget (AAP 0.14.2). :data:`__all__` and :data:`_LAZY_IMPORTS` are kept in sync and
+in the same order, and a name outside the table raises ``AttributeError``, which is what lets
 ``from foundry.execution import quarantine`` fall through to importing that submodule.
 """
 
@@ -153,21 +135,17 @@ _LAZY_IMPORTS: Final[Mapping[str, str]] = MappingProxyType(
 )
 """Which module defines each name of :data:`__all__`, for :func:`__getattr__` to import.
 
-An immutable intent record rather than module state: it is never written after import, its keys are
-exactly the published names in :data:`__all__`'s order, and it is read-only through
-:class:`~types.MappingProxyType`, which keeps this module free of the mutable module-level state
-AAP 0.4.8 prohibits.
+Read-only through :class:`~types.MappingProxyType` and never written after import, so this module
+keeps no mutable module-level state (AAP 0.4.8).
 """
 
 
 def __getattr__(name: str) -> object:
     """Resolve one published name on first access, importing its defining module at that point.
 
-    A name outside :data:`_LAZY_IMPORTS` raises the ``AttributeError`` PEP 562 expects, which is
-    what lets a ``from foundry.execution import state`` statement fall through to importing that
-    submodule. The module import is served from ``sys.modules`` after the first touch, and nothing
-    is written back into the module globals, so a second access costs one dictionary lookup, stays
-    free of post-import mutation, and returns the very same object.
+    A name outside :data:`_LAZY_IMPORTS` raises the ``AttributeError`` PEP 562 expects. Nothing is
+    written back into the module globals, so a second access costs one dictionary lookup and returns
+    the very same object.
     """
     module_name = _LAZY_IMPORTS.get(name)
     if module_name is None:

@@ -54,23 +54,10 @@ def cassette_filename(nodeid: str) -> str:
 def cassette_path(nodeid: str, *, cassette_dir: str | Path = DEFAULT_CASSETTE_DIR) -> Path:
     """Return the resolved path of the cassette document that holds ``nodeid``'s recording.
 
-    ``cassette_dir`` may be absolute or relative; a relative one is resolved against the current
-    working directory. The result passes through :func:`~foundry.core.paths.resolve_under`, so it is
-    inside the resolved cassette directory, and resolution is non-strict, so a ``record`` run can
-    name a file it is about to create. The keyword-only directory keeps this package free of the
-    configuration layer (AAP 0.4.8).
-
-    Args:
-        nodeid: The pytest node id of the item whose cassette path is requested.
-        cassette_dir: The cassette directory to resolve the document against.
-
-    Returns:
-        The resolved absolute path of the document.
-
-    Raises:
-        FoundryError: If ``nodeid`` is empty or whitespace-only.
-        ArtifactError: If the resolved path is outside the cassette directory, carrying the rejected
-            path as ``attempted_path`` and the resolved cassette directory as ``run_dir``.
+    A relative ``cassette_dir`` is resolved against the current working directory, and the result
+    passes through :func:`~foundry.core.paths.resolve_under`, so it stays inside the resolved
+    cassette directory; resolution is non-strict, so a ``record`` run can name a file it is about to
+    create.
     """
     return resolve_under(Path(cassette_dir), cassette_filename(nodeid))
 
@@ -79,16 +66,6 @@ def cassette_relpath(nodeid: str) -> str:
     """Return the cassette's location relative to the invocation directory, for messages.
 
     A message that names the recording must not carry the absolute path of the machine that produced
-    it, so the form is always ``cassettes/<name>.json`` with a forward slash. A caller that needs to
-    open the document uses :func:`cassette_path`.
-
-    Args:
-        nodeid: The pytest node id of the item whose cassette location is described.
-
-    Returns:
-        ``f"{DEFAULT_CASSETTE_DIR}/{cassette_filename(nodeid)}"``.
-
-    Raises:
-        FoundryError: If ``nodeid`` is empty or whitespace-only.
+    it, so the form is always ``cassettes/<name>.json`` with a forward slash.
     """
     return f"{DEFAULT_CASSETTE_DIR}/{cassette_filename(nodeid)}"

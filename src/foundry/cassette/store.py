@@ -1,10 +1,7 @@
 """The cassette store: the one module that turns captured interactions into a file and back.
 
-:class:`CassetteStore` reads and writes the document AAP 0.4.6 fixes and is the one place a capture
-is redacted before it reaches disk (AAP 0.3.2, AAP 0.4.8).
-A denied header value becomes the marker, a header no deny-list names has its value scrubbed as
-free text, a JSON body is scrubbed structure-first, and a query parameter whose name the engine
-redacts is stored as the marker and named in ``redacted_keys`` (AAP 0.2.1, AAP 0.14.3).
+:class:`CassetteStore` is the one place a capture is redacted before it reaches disk, so no secret
+arrives in a cassette (AAP 0.3.2, AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -69,25 +66,11 @@ fault is a fault in Foundry's own plumbing, so it may not change a test's outcom
 def _redact_headers(
     headers: Mapping[str, str], redactor: Redactor, *, found: set[str]
 ) -> dict[str, str]:
-    """Return ``headers`` with every secret-bearing header masked, and no secret left anywhere else.
+    """Return ``headers`` with every secret-bearing header masked, and no secret left elsewhere.
 
-    A name the redactor considers secret-bearing holds :data:`~foundry.obs.redaction.REDACTED` --
-    the exact form the acceptance criteria require in every produced file -- and one it does not
-    recognise still has its value scrubbed as free text by
-    :meth:`~foundry.obs.redaction.Redactor.header`, because a deny-list cannot enumerate every
-    header a peer invents: a credential a peer echoes back in an unlisted header reaches no file
-    (AAP 0.3.2 "Security architecture", AAP 0.14.3). A value that holds no credential is stored
-    exactly as it was captured.
-
-    The replacement and the recording of the scrubbed name happen in one loop, so a name is never
-    reported as redacted without being redacted. What counts as secret is asked of the redactor,
-    never restated here, ``found`` gains a name whenever the engine changed its value - masked
-    whole or scrubbed in part - and names are recorded case-folded because a header name's
-    case is not significant.
-
-    Returns:
-        A new mapping of the same header names, case-insensitively ordered, with every
-        secret-bearing value replaced and every other value free-text scrubbed.
+    A name the redactor considers secret-bearing holds the redaction marker, and one it does not
+    recognise still has its value scrubbed as free text, because a deny-list cannot enumerate every
+    header a peer invents. What counts as secret is asked of the redactor and never restated here.
     """
     redacted: dict[str, str] = {}
     for name in sorted(headers, key=str.casefold):
@@ -423,23 +406,11 @@ class CassetteStore:
     def save_document(self, nodeid: str, document: CassetteDocument) -> Path | None:
         """Redact ``document``, write it as ``nodeid``'s cassette and return its path.
 
-        This is the single write funnel and therefore the single redaction point: the document's
-        interactions go through :func:`redact_interactions` here, before serialisation, so no public
-        write path can store an unredacted capture (implicit requirement I4, AAP 0.3.2).
-
-        The written ``redacted_keys`` is the sorted, de-duplicated union of the names this pass
-        scrubbed and the names the incoming document already carried, so the file can never disagree
-        with the record written beside it (AAP 0.4.6, AAP 0.13.1). The directory is created when it
-        does not exist, and the text comes from the single serialiser in
-        :mod:`foundry.cassette.models`. A redaction fault and an ``OSError`` each produce exactly
-        one ``WARNING`` and a ``None`` return instead of raising (AAP 0.1.2, AAP 0.14.3).
-
-        Returns:
-            The path the document was written to, or ``None`` when it could not be written.
-
-        Raises:
-            FoundryError: ``nodeid`` is empty or whitespace-only.
-            ArtifactError: The resolved path escapes the cassette directory.
+        This is the single write funnel and therefore the single redaction point, so no public write
+        path can store an unredacted capture (implicit requirement I4). The written
+        ``redacted_keys`` is the sorted union of the names this pass scrubbed and the names the
+        document already carried. A redaction fault and an ``OSError`` each produce one ``WARNING``
+        and a ``None`` return.
         """
         path = self.path_for(nodeid)
         try:

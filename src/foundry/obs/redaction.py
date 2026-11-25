@@ -1,9 +1,8 @@
 """Redaction engine: the single place where Foundry scrubs secrets out of values.
 
-Every sink that persists or displays data passes its values through a :class:`Redactor` *before*
-serialisation (AAP 0.3.2). Standard library only, no state, no I/O, no ``foundry`` import; keys
-arrive as names, and a secret is recognised by name or credential shape. Every method is total,
-because a redaction fault must never change a test's outcome or an exit code.
+Every sink passes its values through a :class:`Redactor` *before* serialisation (AAP 0.3.2); a
+secret is recognised by name or credential shape. Standard library only, no state, no I/O, no
+``foundry`` import, and every method is total, so a redaction fault never changes an outcome.
 """
 
 import re
@@ -35,8 +34,7 @@ TRUNCATION_MARKER: Final[str] = "... [truncated]"
 MAX_EXCERPT_BYTES: Final[int] = 200
 
 #: Recursion guard for bodies and for the ``name: value`` pairs a line of text carries, so a cyclic
-#: or hostile structure cannot exhaust the stack. A failure message holds many pairs, each one
-#: costing a descent, so this is also the depth at which a scan stops and marks what it left.
+#: or hostile structure cannot exhaust the stack; a scan at this depth marks what it left behind.
 MAX_DEPTH: Final[int] = 32
 
 #: What a scan leaves where it stopped: text dropped, not a value scrubbed, so the two never read
@@ -118,8 +116,7 @@ _HEADER_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?P<name>[A-Za-z0-9][A-Za-z0-9\-_.]{0,63})(?P<sep>[ \t]*:[ \t]*)(?P<value>[^\r\n]+)"
 )
 
-#: A URL embedded in free text, so a logged request line is scrubbed like a recorded one; a quoted
-#: run inside it is matched whole, and a lone quote after it ends the match rather than joining it.
+#: A URL embedded in free text, so a logged request line is scrubbed like a recorded one.
 _URL_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"[A-Za-z][A-Za-z0-9+.\-]*://(?:\"[^\"]*\"|'[^']*'|[^\s\"'<>`\\()])+"
 )
@@ -139,12 +136,10 @@ _KEY_VALUE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r")"
 )
 
-#: A quoted pair-list entry, ``["token", "value"]`` or ``['token', 'value']``: the shape a decoded
-#: query or header pair list takes once it is printed or recorded rather than walked structurally.
-#: The ``name=value`` pass cannot reach it, a pair carrying no separator, so the value of a pair
-#: whose name :meth:`Redactor.redacts` is replaced here while every other pair is left whole. Both
-#: quotes are backreferences and the value admits a raw quote only when it is escaped, so the scan
-#: stays linear and cannot run across a line break inside the value.
+#: A quoted pair-list entry, ``["token", "value"]``: the shape a decoded query or header pair list
+#: takes once it is printed rather than walked. The ``name=value`` pass cannot reach it, a pair
+#: carrying no separator, so the value of a pair whose name :meth:`Redactor.redacts` is replaced
+#: here while every other pair is left whole. The quotes are backreferences, so the scan is linear.
 _QUOTED_PAIR_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?P<name_quote>[\"'])(?P<name>[A-Za-z0-9][A-Za-z0-9_.\-]{0,63})(?P=name_quote)"
     r"(?P<sep>[ \t\r\n]{0,8},[ \t\r\n]{0,8})"
@@ -152,36 +147,27 @@ _QUOTED_PAIR_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 
 #: Further header lines one multipart part may carry below the line whose ``name`` parameter the
-#: scan resolves. RFC 7578 gives a part only MIME headers, so a part a real encoder writes holds
-#: ``Content-Disposition`` and at most ``Content-Type``, ``Content-Transfer-Encoding`` and
-#: ``Content-ID``; eight covers those with room to spare. The cap is one of the two reasons the scan
-#: is linear in the length of the text: a candidate reads at most this many lines below its own and
-#: the walk then moves on, so a line is read by at most this many candidates and the whole scan
-#: stays a constant factor of the text's length.
+#: scan resolves. RFC 7578 gives a part only MIME headers, so ``Content-Disposition`` plus at most
+#: ``Content-Type``, ``Content-Transfer-Encoding`` and ``Content-ID``; eight covers those. Along
+#: with the per-line search it is what keeps the scan linear in the length of the text.
 _MAX_PART_HEADER_LINES: Final[int] = 8
 
-#: Pre-check for the multipart scan, run twice: once over the whole value, so text that names no
-#: part skips the walk before it starts, and once per line, so a line that names none is never
-#: sliced. A part header always names its field through a ``name`` parameter, which no other shape
-#: holds, so a value this pattern does not find cannot carry a part. The blanks it admits are read
-#: once each, at the one ``name`` occurrence that owns them, which keeps the search linear.
+#: Pre-check for the multipart scan, run over the whole value and again per line, so text naming no
+#: part skips the walk. A part header always names its field through a ``name`` parameter, a shape
+#: no other line holds, so a value this pattern does not find cannot carry a part.
 _MULTIPART_HINT_PATTERN: Final[re.Pattern[str]] = re.compile(r"name[ \t]*=", re.IGNORECASE)
 
 #: The ``name`` parameter that names a multipart part, matched inside one line: at the line's start
-#: or after the ``;`` that separates parameters, so ``filename=`` is never read as a name; the quote
-#: is optional and must close the way it opened. A multipart body defeats the ``name=value`` pass
-#: twice: the name is a ``Content-Disposition`` parameter, so the value is not on that line, and the
-#: value is the part body, which no line-oriented pass joins back to its name. Recognising that this
-#: line names a part is all this pattern decides; whether the line is a part header at all -- a
-#: blank line below it is the terminator that says so -- is :func:`_part_spans`'s question.
+#: or after the ``;`` separating parameters, so ``filename=`` is never read as a name. Whether the
+#: line is a part header at all -- a blank line below it is the terminator that says so -- is
+#: :func:`_part_spans`'s question.
 _MULTIPART_NAME_PARAM_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:^|;)[ \t]*(?i:name)[ \t]*=[ \t]*"
     r"(?P<quote>[\"']?)(?P<name>[A-Za-z0-9][A-Za-z0-9_.\-]{0,63})(?P=quote)"
 )
 
-#: The three line breaks the scan treats as one. A multipart body is framed by exactly these, and
-#: ``str.splitlines`` would additionally break on ``\v``, ``\f`` and the Unicode separators, which
-#: would read a part header terminator into text that holds none.
+#: The three line breaks the scan treats as one. ``str.splitlines`` would additionally break on
+#: ``\v``, ``\f`` and the Unicode separators, reading a terminator into text that holds none.
 _LINE_BREAK_PATTERN: Final[re.Pattern[str]] = re.compile(r"\r\n|\n|\r")
 
 #: Re-scan pre-check: without ``=``, ``:`` or ``Bearer``/``Basic`` a span cannot hold a pair.
@@ -277,11 +263,10 @@ def _part_spans(text: str, line_end: int, next_start: int) -> _PartSpans | None:
     """Return the body spans of the part whose ``name`` parameter line ends at ``line_end``.
 
     ``next_start`` is where the line below that one begins. The part header ends at a blank line --
-    two line breaks with only blanks between them, so a blank line carrying trailing spaces still
-    ends the headers while a single break does not -- and at most :data:`_MAX_PART_HEADER_LINES`
-    further header lines are read looking for that terminator, which is what bounds the work one
-    candidate costs. The body then runs from below the blank line to the line opening with ``--``,
-    the boundary of the next part, so the break before that boundary stays in place.
+    two line breaks with only blanks between them -- and at most :data:`_MAX_PART_HEADER_LINES`
+    further header lines are read looking for that terminator, which bounds the work one candidate
+    costs. The body runs from below the blank line to the line opening with ``--``, the next part's
+    boundary, so the break before that boundary stays in place.
 
     Args:
         text: The whole value being scrubbed; the spans are offsets into it.
@@ -370,16 +355,12 @@ class Redactor:
     def header(self, name: str, value: str) -> str:
         """Return a header value masked by name and then scrubbed as free text.
 
-        A name :meth:`redacts` recognises loses its whole value to :data:`REDACTED`, whatever the
-        value is. A name it does not recognise keeps a value that still passes through
-        :meth:`text`, because the deny-lists cannot enumerate every header a peer invents: a
-        credential echoed back in an unlisted header such as ``x-echo: token=...`` loses its value
-        before the header reaches a dump, a cassette or a terminal, which is the AAP 0.3.2
-        "Security architecture" rule that one engine stands in front of every sink, and the
-        AAP 0.14.3 rule that no secret reaches a file. An ordinary value -- a media type, a date, an
-        identifier -- comes back unchanged, and a value already scrubbed comes back as it stands, so
-        a sink that re-scans its own output changes nothing. Total, like every method here: a value
-        the scrub cannot read becomes the marker rather than an exception (AAP 0.14.3).
+        A name :meth:`redacts` recognises loses its whole value to :data:`REDACTED`. Any other name
+        keeps a value that still passes through :meth:`text`, because the deny-lists cannot
+        enumerate every header a peer invents, so a credential echoed back as ``x-echo: token=...``
+        loses its value before the header reaches a dump, a cassette or a terminal (AAP 0.3.2,
+        AAP 0.14.3). An ordinary value comes back unchanged, and a value already scrubbed comes
+        back as it stands, so a sink that re-scans its own output changes nothing.
 
         Args:
             name: The header name, in any case.
@@ -400,9 +381,7 @@ class Redactor:
         """Return a redacted copy of ``headers``, ordered by case-folded name.
 
         Every value goes through :meth:`header`, so a secret-bearing name renders as the marker and
-        a value under any other name is free-text scrubbed rather than trusted: the header a peer
-        echoes a credential in is usually one no deny-list names (AAP 0.3.2, AAP 0.14.3). A header
-        whose value holds no credential is kept exactly as it was supplied.
+        a value under any other name is free-text scrubbed rather than trusted (AAP 0.3.2).
         """
         try:
             pairs = _name_value_pairs(headers)
@@ -416,10 +395,8 @@ class Redactor:
     def query(self, params: Mapping[str, str] | Sequence[tuple[str, str]]) -> dict[str, str]:
         """Return a redacted copy of query parameters, ordered by case-folded name.
 
-        Only the name decides here, as the URL-parameter deny-list of AAP 0.3.2 states it: a
-        parameter whose name :meth:`redacts` recognises renders as the marker and every other value
-        is kept as it was supplied. :meth:`header` is the method that goes further and scrubs a
-        value it keeps, and :meth:`text` the one that scrubs a whole line or body.
+        Only the name decides here, as the URL-parameter deny-list of AAP 0.3.2 states it; unlike
+        :meth:`header`, a value kept under any other name is not scrubbed.
         """
         result: dict[str, str] = {}
         for name, value in sorted(_name_value_pairs(params), key=_pair_sort_key):
@@ -507,10 +484,9 @@ class Redactor:
             return self._redact_mapping(value, depth)
         if isinstance(value, list | tuple):
             if len(value) == 2 and isinstance(value[0], str) and self.redacts(value[0]):
-                # A two-element ``[name, value]`` pair is how a decoded query or header list
-                # arrives: the name is the key, so only the value is secret and the name stays
-                # readable, which is the form the free-text pair pass produces as well. Any other
-                # sequence recurses element by element, so a plain array of two values is untouched.
+                # A two-element ``[name, value]`` pair arrives thus from a decoded query or header
+                # list: the name is the key, so only the value is secret. Any other sequence
+                # recurses element by element, so a plain array of two values is untouched.
                 return [value[0], REDACTED]
             return [self._redact_value(item, depth + 1) for item in value]
         if isinstance(value, set | frozenset):
@@ -576,19 +552,12 @@ class Redactor:
     def _scrub_multipart_parts(self, value: str, *, nested: int = 0) -> str:
         """Replace the body of every multipart part named by a secret-bearing ``name`` parameter.
 
-        One left-to-right walk, linear in the length of ``value``: the text is read line by line,
-        each line is searched once for the ``; name=`` parameter that names a part, and the lines
-        below a candidate are bounded by :data:`_MAX_PART_HEADER_LINES`, so a line is read by at
-        most that many candidates and the walk stays a constant factor of the text's length. The
-        single regular expression this replaces could not promise that -- it gave back the rest of
-        a line at every candidate on it before its attempt failed, which cost time quadratic in the
-        length of a line holding many ``name`` parameters.
-
-        The part header is kept as it was written, because it is what tells a reader which field
-        lost its body, and so are the further header lines a part may carry. A part whose name is
-        not secret keeps its body, but that body is scrubbed in turn, because a multipart body
-        nested inside it is a shape no other pass reads; ``nested`` carries the depth of that
-        descent, which :data:`MAX_DEPTH` bounds, and the scan then resumes below the body it passed.
+        One left-to-right walk, linear in the length of ``value``: each line is searched once for
+        the ``; name=`` parameter naming a part, and the lines below a candidate are bounded by
+        :data:`_MAX_PART_HEADER_LINES`, so a line is read by at most that many candidates. The part
+        header is kept, because it tells a reader which field lost its body. A part whose name is
+        not secret keeps a body scrubbed in turn, since a multipart body nested inside it is a
+        shape no other pass reads; ``nested`` carries the depth of that descent.
         """
         if _MULTIPART_HINT_PATTERN.search(value) is None:
             return value
@@ -599,8 +568,7 @@ class Redactor:
         while position < length:
             line_end, line_next = _next_line_end(value, position)
             if _MULTIPART_HINT_PATTERN.search(value, position, line_end) is not None:
-                # The line is sliced rather than searched in place so that the pattern's ``^`` is
-                # the line's own start, which is one of the two positions a part name may take.
+                # Sliced rather than searched in place so the pattern's ``^`` is the line's start.
                 parameter = _MULTIPART_NAME_PARAM_PATTERN.search(value[position:line_end])
                 part = None if parameter is None else _part_spans(value, line_end, line_next)
                 if parameter is not None and part is not None:
@@ -636,7 +604,7 @@ class Redactor:
         """Return the substitute for the value of a secret-bearing header line.
 
         Only a credential the engine resolves is replaced alone, keeping its diagnostics; the rest
-        loses all of it, with :data:`TRUNCATION_MARKER` saying so, and a value that already begins
+        loses all of it, with :data:`TRUNCATION_MARKER` saying so, and a value already beginning
         with the marker is left as it is, so re-scanning redacted text changes nothing.
         """
         tokens = value.split()
@@ -678,9 +646,8 @@ class Redactor:
     def _redact_quoted_pair(self, match: re.Match[str]) -> str:
         """Replace the value of a quoted ``["name", "value"]`` pair, keeping the name readable.
 
-        Everything before the value -- the name's quotes, the name itself and the comma that
-        separates the two -- is returned as it was written, so a second pass over masked text
-        produces it again unchanged.
+        Everything before the value -- the name's quotes, the name and the comma -- is returned as
+        it was written, so a second pass over masked text produces it again unchanged.
         """
         if not self.redacts(match.group("name")):
             return match.group(0)

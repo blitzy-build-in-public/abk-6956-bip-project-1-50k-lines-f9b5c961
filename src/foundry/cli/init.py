@@ -1,30 +1,27 @@
 """``foundry init``: scaffold a project that runs green with no network.
 
-AAP 0.4.4 fixes the command -- ``foundry init PATH``, ``--template minimal|api``, ``--force``, exit
-``0`` when the scaffold is written and ``2`` when the target or a destination is refused -- and
-AAP 0.7.4 fixes the layout it writes: a ``foundry.toml`` holding every setting as a commented
-default, a ``tests/test_smoke.py`` that requests ``foundry_config`` and passes, ``testdata/`` with
-one CSV and the JSON Schema of a row of it, an ``artifacts/`` directory with its ignore entry, and a
+The command exits ``0`` when the scaffold is written and ``2`` when the target or a destination is
+refused. The layout it writes is a ``foundry.toml`` holding every setting as a commented default, a
+``tests/test_smoke.py`` that requests ``foundry_config`` and passes, ``testdata/`` with one CSV and
+the JSON Schema of a row of it, an ``artifacts/`` directory with its ignore entry, and a
 ``README.md`` naming the commands to run. ``--template api`` adds ``tests/test_api.py`` and a
 ``cassettes/`` directory, with a ``foundry.toml`` that selects ``replay`` so the first HTTP test
-opens no socket. Both scaffolds must run green offline (implicit requirement I11, success criterion
-10), which is why the minimal smoke test touches nothing but the configuration fixture and the api
-template ships the recorded interaction its test looks up.
+opens no socket. Both scaffolds must run green offline, which is why the minimal smoke test touches
+nothing but the configuration fixture and the api template ships the recorded interaction its test
+looks up.
 
 Two rules hold whatever goes wrong. A refusal creates nothing: the target is checked, and every
 destination is resolved through :func:`foundry.core.paths.resolve_under`, before the first byte is
 written, so a path that is not a directory, a directory that is not empty without ``--force``, or a
 destination that would escape the target leaves the filesystem as it was. And ``init`` resolves no
-project configuration, so it takes none of the ``--foundry-*`` options AAP 0.4.4 gives the commands
-that do.
+project configuration, so it takes none of the ``--foundry-*`` options the other commands do.
 
-The scaffold sources are package data under this package, read through :mod:`importlib.resources`
-so they resolve identically from a source checkout and from an installed wheel (AAP 0.4.1), and
-copied as bytes so no template's text ever reaches a parser (AAP 0.3.2). The tables below are
-immutable constants rather than a registration table, nothing here reads the clock, sleeps, opens a
-socket or reads the environment, and the created paths print through
-:func:`foundry.cli.render.render_lines` in plan order, so two runs of one command write the same
-lines (AAP 0.13.1).
+The scaffold sources are package data read through :mod:`importlib.resources`, so they resolve
+identically from a source checkout and from an installed wheel, and copied as bytes so no template's
+text ever reaches a parser. The tables below are immutable constants rather than a registration
+table, nothing here reads the clock, sleeps, opens a socket or reads the environment, and the
+created paths print through :func:`foundry.cli.render.render_lines` in plan order, so two runs of
+one command write the same lines.
 """
 
 from __future__ import annotations

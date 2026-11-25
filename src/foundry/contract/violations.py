@@ -36,7 +36,7 @@ PathPart: TypeAlias = str | int
 RedactorCallable: TypeAlias = Callable[[str], str]
 """A text-scrubbing callable, normally ``foundry.obs.redaction.Redactor.text``.
 
-A caller that holds the configured ``secrets.redact_keys`` injects its own redactor here, so a
+A caller holding the configured ``secrets.redact_keys`` injects its own redactor here, so a
 secret-bearing JSON key the configuration adds is scrubbed out of a violation message.
 """
 
@@ -66,12 +66,7 @@ def _pointer_part(part: PathPart) -> str:
 
 
 def _part_suffix(part: PathPart) -> str:
-    """Render one JSON path step as the fragment that follows the previous one.
-
-    Returns:
-        ``.key`` for an identifier-shaped key, ``['key']`` for any other key and ``[3]`` for an
-        index.
-    """
+    """Render one JSON path step: ``.key``, ``['key']`` or ``[3]`` as the step requires."""
     if isinstance(part, int):
         return f"[{int(part)}]"
     if _IDENTIFIER_KEY_PATTERN.fullmatch(part) is not None:
@@ -88,14 +83,6 @@ def json_path_from_parts(parts: Sequence[PathPart]) -> str:
     Returns:
         ``$`` for the document root, then one fragment per step: ``.key`` for an identifier,
         ``['key']`` for any other key, and ``[3]`` for an index.
-
-    Examples:
-        >>> json_path_from_parts(())
-        '$'
-        >>> json_path_from_parts(("items", 2, "price"))
-        '$.items[2].price'
-        >>> print(json_path_from_parts(("a.b",)))
-        $['a.b']
     """
     return "$" + "".join(_part_suffix(part) for part in parts)
 
@@ -106,12 +93,6 @@ def format_schema_path(parts: Sequence[PathPart]) -> str:
     Returns:
         ``#`` for the schema root, otherwise ``#/`` followed by the escaped steps joined with
         ``/``.
-
-    Examples:
-        >>> format_schema_path(())
-        '#'
-        >>> format_schema_path(("properties", "items", "type"))
-        '#/properties/items/type'
     """
     if not parts:
         return "#"
@@ -131,10 +112,7 @@ class Violation:
     through :meth:`render`, :func:`render_violation`, :func:`to_contract_error` or :func:`excerpt`.
 
     Attributes:
-        json_path: The path Foundry reports, such as ``$.items[2].price``, from :attr:`path_parts`.
-        schema_path: The schema location as a ``#``-rooted pointer.
-        validator: The keyword that rejected the instance, or ``""`` when none was reported.
-        message: The validator's message, unredacted.
+        json_path: The path Foundry reports, rendered from :attr:`path_parts`.
         path_parts: The path steps as reported, so :mod:`foundry.data` can name a column.
     """
 
@@ -149,18 +127,11 @@ class Violation:
 
         ``redact`` is the callable that scrubs secrets out of the message, normally the redactor
         built from ``secrets.redact_keys``; ``None`` applies the built-in deny-lists.
-
-        Returns:
-            The rendered ``<json_path>: <message> (schema path: ..., validator: ...)`` line.
         """
         return render_violation(self, redact=redact)
 
     def __str__(self) -> str:
-        """Return :meth:`render` with the built-in redaction applied.
-
-        Returns:
-            The rendered violation.
-        """
+        """Return :meth:`render` with the built-in redaction applied."""
         return self.render()
 
 
@@ -261,19 +232,10 @@ def _resolve_redactor() -> RedactorCallable:
     """Return the deny-list-only redactor that serves a caller holding no configured keys.
 
     This package may not import :mod:`foundry.config` (AAP 0.4.8), so the engine built from
-    ``secrets.redact_keys`` cannot be constructed here: every caller that holds those keys -- the
-    data-file loader, the response validator, the schema assertion -- supplies its own redactor
-    through the ``redact`` argument of :func:`render_violation`, :func:`to_contract_error`,
-    :func:`excerpt` and :meth:`Violation.render`.
-
-    This is the only place in :mod:`foundry.contract` that touches :mod:`foundry.obs.redaction`, and
-    the import sits inside the function because a module-scope import would put the engine on the
-    plugin's startup path. The edge is this package's sanctioned exception to the permitted-import
-    column of AAP 0.4.8, kept function-scope at each use and required by the single redaction engine
-    AAP 0.14.3 makes authoritative.
-
-    Returns:
-        A callable that scrubs secrets out of free text using the built-in deny-lists.
+    ``secrets.redact_keys`` cannot be constructed here: every caller holding those keys supplies its
+    own redactor through the ``redact`` argument. The import sits inside the function because a
+    module-scope one would put the engine on the plugin's startup path; the edge is this package's
+    sanctioned exception to AAP 0.4.8 and serves the single redaction engine of AAP 0.14.3.
     """
     from foundry.obs.redaction import default_redactor
 
@@ -286,9 +248,6 @@ def _redact_text(text: str, redact: RedactorCallable | None) -> str:
     ``redact`` is the caller's redactor, or ``None`` for the built-in deny-lists. One that raises
     falls back to them rather than propagating, because a redaction fault must not change a test's
     outcome or the run's exit code; that the fallback happened is the one ``DEBUG`` record emitted.
-
-    Returns:
-        The scrubbed text.
     """
     if redact is None:
         return _resolve_redactor()(text)
@@ -312,9 +271,6 @@ def _single_line(text: str) -> str:
 
     A validator message can embed a multi-line instance value and a body excerpt can be anything;
     escaping backslashes too keeps a literal ``\n`` distinguishable from a real newline.
-
-    Returns:
-        The text with ``\`` doubled and every control character escaped, on one line.
     """
     pieces: list[str] = []
     for character in text:
@@ -334,10 +290,7 @@ def _single_line(text: str) -> str:
 
 
 def _decode(payload: bytes | str) -> str:
-    """Decode a body to text, tolerating any byte sequence.
-
-    Bytes are decoded as UTF-8, with undecodable bytes replaced rather than raising.
-    """
+    """Decode a body to text, undecodable bytes replaced rather than raising."""
     if isinstance(payload, str):
         return payload
     try:
@@ -409,8 +362,8 @@ def excerpt(
     and ``redact`` is the caller's redactor, or ``None`` for the built-in deny-lists.
 
     Returns:
-        At most ``limit`` bytes of UTF-8, redacted, with control characters escaped so the excerpt
-        occupies exactly one line, followed by ``...`` when anything was cut.
+        At most ``limit`` bytes of UTF-8, redacted and on one line, followed by ``...`` when
+        anything was cut.
     """
     budget = max(0, limit)
     scrubbed = _single_line(_redact_text(_decode(payload), redact))

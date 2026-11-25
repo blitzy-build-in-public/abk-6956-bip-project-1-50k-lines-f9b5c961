@@ -1,12 +1,11 @@
 """``foundry report compare``: which tests regressed between two result documents.
 
-The command prints the three node-id sets of AAP 0.4.4 -- Newly failing, Newly passing and Still
-failing, in that fixed order (AAP 0.7.4) -- and ``--json`` prints the one document of AAP 0.7.3
-instead. Exit codes are AAP 0.4.4's: ``0``, ``1`` for a newly failing test, and ``2`` for an
-unreadable document, which raises :class:`foundry.core.exceptions.DataError` here and is mapped by
-:func:`foundry.cli.main.main` alone. The comparison itself comes from
-:func:`foundry.reporting.compare.diff_files` and the printing from :mod:`foundry.cli.render`; no
-project configuration is read (AAP 0.4.8).
+The command prints the three node-id sets -- Newly failing, Newly passing and Still failing, in that
+fixed order -- and ``--json`` prints one document instead. The exit codes are ``0``, ``1`` for a
+newly failing test and ``2`` for an unreadable document, which raises
+:class:`foundry.core.exceptions.DataError` here and is mapped to that code by the command line entry
+point alone. The comparison itself comes from :func:`foundry.reporting.compare.diff_files`; no
+project configuration is read.
 """
 
 from __future__ import annotations
@@ -24,8 +23,7 @@ from foundry.reporting.compare import ComparisonDiff, diff_files
 __all__: Final[tuple[str, ...]] = ("compare_command", "comparison_exit_code", "report_group")
 
 _JSON_INDENT: Final[int] = 2
-"""Indent width of the ``--json`` document: two spaces per nesting depth, the width
-``results.json`` uses, so two documents a person reads side by side are formatted the same way."""
+"""Indent width of the ``--json`` document: two spaces, the width ``results.json`` uses."""
 
 _JSON_UNESCAPED: Final[bool] = False
 """``ensure_ascii`` of the ``--json`` document: a non-ASCII node id is written as itself, so a
@@ -39,17 +37,16 @@ class _ExitCodeGroup(click.Group):
     """A click group that publishes the exit status its subcommand returned.
 
     Click discards a callback's return value, so the status ``report compare`` computes is published
-    here through :meth:`click.Context.exit`, the route click honours: :func:`compare_command` stays
-    a plain function returning the documented code, and ``CliRunner`` and ``standalone_mode=False``
-    observe the same number (AAP 0.4.9).
+    through :meth:`click.Context.exit`: :func:`compare_command` stays a plain function returning the
+    documented code, and ``CliRunner`` observes the same number.
     """
 
     def invoke(self, ctx: click.Context) -> object:
         """Invoke the selected subcommand, then exit with the status it returned.
 
-        Returns the subcommand's value when it is not an ``int``, which click's own machinery
-        ignores; a returned exit status does not return at all, because :meth:`click.Context.exit`
-        ends the invocation with it.
+        A non-``int`` value is returned, which click's own machinery ignores; a returned exit
+        status does not return at all, because :meth:`click.Context.exit` ends the invocation with
+        it.
         """
         result = super().invoke(ctx)
         if isinstance(result, int):

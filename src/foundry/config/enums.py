@@ -1,8 +1,8 @@
-"""Enumerations naming the accepted values of Foundry's enum-typed settings.
+"""Enumerations naming the accepted values of Foundry's six enum-typed settings.
 
-Six enums cover the six enum-typed keys of AAP 0.4.5 -- ``profile``, ``http.auth.strategy``,
-``http.retries.retry_on``, ``cassette.mode``, ``execution.quarantine_mode`` and ``logging.level`` --
-and each ``StrEnum`` member serialises as its plain value. Values are a compatibility promise.
+``profile``, ``http.auth.strategy``, ``http.retries.retry_on``, ``cassette.mode``,
+``execution.quarantine_mode`` and ``logging.level`` each accept one of these ``StrEnum`` members,
+which serialise as their plain value. Values are a compatibility promise.
 """
 
 from __future__ import annotations
@@ -33,8 +33,7 @@ __all__ = [
 class ProfileName(StrEnum):
     """Names accepted by the ``profile`` key, selecting the active profile.
 
-    A profile's ``[profiles.<name>]`` table is merged over the base file and below the environment
-    and CLI layers, so it overrides the file's values but never an operator's.
+    A profile's table is merged over the base file and stays below the environment and CLI layers.
     """
 
     DEFAULT = "default"
@@ -46,8 +45,8 @@ class ProfileName(StrEnum):
 class AuthStrategy(StrEnum):
     """Credential strategies accepted by the ``http.auth.strategy`` key.
 
-    The strategy decides how :mod:`foundry.http.auth` attaches credentials for ``foundry_api``. No
-    secret appears here: each reads its credential from the variable a companion key names.
+    Each reads its credential from the variable a companion key names at session start, so no
+    secret value is ever held here.
     """
 
     NONE = "none"
@@ -57,11 +56,7 @@ class AuthStrategy(StrEnum):
 
 
 class RetryPredicate(StrEnum):
-    """Predicates accepted as elements of the ``http.retries.retry_on`` list.
-
-    The environment form is comma separated, for example
-    ``FOUNDRY_HTTP__RETRIES__RETRY_ON=timeout,status_429``, so :func:`parse_enum` reads each one.
-    """
+    """Predicates accepted as elements of the ``http.retries.retry_on`` list."""
 
     TIMEOUT = "timeout"
     CONNECT = "connect"
@@ -73,7 +68,7 @@ class CassetteMode(StrEnum):
     """Record/replay modes accepted by the ``cassette.mode`` key.
 
     ``RECORD`` writes one cassette per test, ``REPLAY`` serves them and opens no socket,
-    ``PASSTHROUGH`` replays a match and otherwise uses the live transport, ``OFF`` bypasses them.
+    ``PASSTHROUGH`` replays a match and otherwise goes live, and ``OFF`` bypasses the store.
     """
 
     OFF = "off"
@@ -86,7 +81,7 @@ class QuarantineMode(StrEnum):
     """Modes accepted by the ``execution.quarantine_mode`` key.
 
     ``REPORT`` records a quarantined failure without failing the run; ``STRICT`` lets it count
-    against the run. The exit-code decision belongs to :mod:`foundry.execution.quarantine`.
+    against the run.
     """
 
     REPORT = "report"
@@ -107,8 +102,7 @@ def _values(enum_type: type[Enum]) -> tuple[str, ...]:
     return tuple(str(member.value) for member in enum_type)
 
 
-# Accepted-value tuples for the enum-typed keys, each derived from its enum and held in
-# declaration order because every error message, help text and document iterates it that way.
+# Accepted-value tuples for the enum-typed keys, each derived from its enum in declaration order.
 PROFILE_NAMES: tuple[str, ...] = _values(ProfileName)
 AUTH_STRATEGIES: tuple[str, ...] = _values(AuthStrategy)
 RETRY_PREDICATES: tuple[RetryPredicate, ...] = tuple(RetryPredicate)
@@ -118,20 +112,15 @@ LOG_LEVELS: tuple[str, ...] = _values(LogLevel)
 
 
 def accepted_values_text(enum_type: type[Enum]) -> str:
-    """Render ``enum_type``'s accepted values for an error or help message.
-
-    The member values in declaration order, joined by ``", "``. Purely declarative: it suggests no
-    nearest match, which is :func:`foundry.config.keys.closest_key`'s job.
-    """
+    """Render ``enum_type``'s member values for an error or help message, joined by ``", "``."""
     return ", ".join(str(member.value) for member in enum_type)
 
 
 def parse_enum(enum_type: type[_EnumT], raw: str) -> _EnumT | None:
     """Match ``raw`` against ``enum_type``'s member values, ignoring case.
 
-    Environment variables arrive in whatever case an operator wrote them, so ``FOUNDRY_PROFILE=CI``
-    resolves as ``ci`` does. Returns the member, or ``None`` when none matches: the caller builds
-    the ``ConfigError``, which keeps this module free of a ``foundry.core`` import.
+    Returns the member, or ``None`` when none matches: the caller builds the ``ConfigError``, which
+    keeps this module free of a ``foundry.core`` import.
     """
     if not isinstance(raw, str):
         return None

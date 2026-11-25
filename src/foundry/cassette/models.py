@@ -1,7 +1,8 @@
 """The persisted shapes of a record/replay cassette.
 
-One JSON document per test: ``recorded_at``, ``redacted_keys`` and ordered ``{request, response}``
-entries, with the field names AAP 0.4.6 and AAP 0.7.2 publish; none may be renamed (AAP 0.4.9).
+One JSON document per test holds ``recorded_at``, ``redacted_keys`` and ordered
+``{request, response}`` entries, with the field names AAP 0.4.6 and AAP 0.7.2 publish; none may be
+renamed (AAP 0.4.9).
 """
 
 from __future__ import annotations
@@ -58,19 +59,8 @@ def normalise_query(
     """Return a query in any stored form as decoded pairs sorted by name and then value.
 
     One normaliser serves capture and replay, which is what makes parameter order and
-    percent-encoding irrelevant to matching (AAP 0.2.1, AAP 0.4.6).
-
-    Args:
-        value: The query as ``httpx.URL.query`` bytes, a query string with or without its leading
-            ``?``, a mapping of parameter names to values, or decoded ``(name, value)`` pairs.
-
-    Returns:
-        The pairs sorted by name and then value, with blank values kept because ``?flag=`` is a
-        present parameter.
-
-    Raises:
-        FoundryError: The text cannot be parsed as a query string, or an entry is not a two-element
-            sequence of strings. No message quotes the query, which may carry a protected value.
+    percent-encoding irrelevant to matching. Blank values are kept because ``?flag=`` is a present
+    parameter, and a fault is a ``FoundryError`` whose message never quotes the query.
     """
     if isinstance(value, bytes):
         # A query is percent-encoded ASCII in practice; a stray byte becomes U+FFFD rather than
@@ -329,13 +319,6 @@ class RecordedRequest:
 
     Only what matching needs is stored; ``headers_subset`` is kept for a reader and never matched,
     because a header the client adds for itself would make a recording unplayable elsewhere.
-
-    Attributes:
-        method: The request method, upper-cased at construction so ``get`` and ``GET`` record alike.
-        path: The request path without its query string, as the recorded URL carried it.
-        query: The decoded pairs sorted by name and then value, with blank values kept.
-        body_sha256: The lowercase hexadecimal SHA-256 of the body, or ``None`` when it was empty.
-        headers_subset: The kept request headers, every secret-bearing value already redacted.
     """
 
     method: str
@@ -384,12 +367,7 @@ class RecordedRequest:
         """Build a request from the ``request`` object of a cassette document.
 
         Keys beyond the documented five are ignored, so a cassette written by a later release still
-        loads (AAP 0.4.9). ``where`` names the location in an error message.
-
-        Raises:
-            FoundryError: A documented key is missing, the object is not a mapping, the query is not
-            a list
-                of pairs or a header is not a string.
+        loads (AAP 0.4.9), and ``where`` names the location in an error message.
         """
         fields = _require_mapping(data, where=where)
         method = _require_str(fields, "method", where=where)
@@ -567,12 +545,8 @@ class CassetteDocument:
         """Build a document from a stored cassette object.
 
         Keys beyond the documented three are ignored, so a cassette written by a later release still
-        loads (AAP 0.4.9).
-
-        Raises:
-            FoundryError: A documented key is missing, ``recorded_at`` is not an ISO 8601 timestamp,
-                ``redacted_keys`` is not a list of names, or an interaction is malformed. That error
-                names the interaction's 1-based position.
+        loads (AAP 0.4.9). A malformed document raises ``FoundryError`` naming the interaction's
+        1-based position.
         """
         fields = _require_mapping(data, where=_DOCUMENT)
         recorded_at = parse_iso8601(_require_str(fields, "recorded_at", where=_DOCUMENT))

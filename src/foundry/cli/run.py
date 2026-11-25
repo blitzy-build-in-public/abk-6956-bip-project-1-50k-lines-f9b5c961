@@ -3,11 +3,10 @@
 ``run`` translates the ``--foundry-*`` options this command parsed into the canonical spellings
 :mod:`foundry.plugin` registers, appends the caller's pytest arguments unchanged and in order, and
 hands the list to :func:`pytest.main`, so a bare ``pytest`` invocation and ``foundry run`` end
-identically (AAP 0.4.4, AAP 0.7.1, AAP 0.4.9). The one code Foundry produces itself is ``2``: the
-configuration is resolved once here, ahead of :func:`pytest.main`, so a usage or configuration fault
-reaches :func:`foundry.cli.main.main` before a test is collected or a report written (AAP 0.4.7).
-Nothing here activates the plugin, no argument the caller did not supply is added, and ``pytest`` is
-imported inside :func:`run` so the other commands never pay for it (AAP 0.4.2, AAP 0.4.8).
+identically. The configuration is resolved once here, ahead of :func:`pytest.main`, so a usage or
+configuration fault ends the run with the one code Foundry produces itself, ``2``, before a test is
+collected or a report written. Nothing here activates the plugin, and ``pytest`` is imported inside
+:func:`run` so the other commands never pay for it.
 """
 
 from __future__ import annotations
@@ -50,39 +49,26 @@ def build_pytest_argv(
 ) -> list[str]:
     """Return the argument list that carries ``foundry_options`` and ``pytest_args`` to pytest.
 
-    The translation this command exists for: every supplied Foundry option becomes the canonical
-    ``--foundry-<dotted.key>`` spelling :mod:`foundry.plugin` registers (AAP 0.4.4), followed by
-    its value unless it is one of the two switches, and the caller's own pytest arguments are
-    appended afterwards, unchanged and in the order given. The result therefore contains no
-    plugin selector and no argument the caller did not supply.
+    Every supplied Foundry option becomes the canonical ``--foundry-<dotted.key>`` spelling
+    :mod:`foundry.plugin` registers, followed by its value unless it is one of the two switches, and
+    the caller's own pytest arguments are appended afterwards, unchanged and in the order given. The
+    result therefore contains no plugin selector and no argument the caller did not supply.
 
     The order is fixed rather than incidental, so two runs and two xdist workers build identical
-    argument lists (AAP 0.13.1): options are emitted in the registry order of
+    argument lists: options are emitted in the registry order of
     :data:`foundry.config.keys.KEY_SPECS`, then the four
     :data:`foundry.config.cli_layer.SPECIAL_OPTIONS` in their documented order, then
-    ``pytest_args``. The function is pure -- no environment, no filesystem, no clock, no mutation
-    of its arguments -- which is what lets a unit test assert the whole list.
+    ``pytest_args``. The function is pure -- no environment, no filesystem, no clock, no mutation of
+    its arguments -- which is what lets a unit test assert the whole list.
 
-    A supplied option is recognised by its dotted key (``http.timeout``), by a named alias word
-    (``timeout``, ``retries``), or by an option spelling (``--foundry-http.timeout``,
-    ``--foundry-config``); whichever form arrived is emitted in the one canonical spelling, so
-    the argument list does not depend on how the caller named the option. A value of ``None``
-    means the option was not supplied and is skipped -- the same reading
+    An option is recognised by its dotted key, by a named alias word or by an option spelling, and
+    whichever form arrived is emitted in the one canonical spelling. A value of ``None`` means the
+    option was not supplied and is skipped -- the same reading
     :func:`foundry.config.cli_layer.from_mapping` applies.
-
-    Args:
-        foundry_options: The supplied Foundry options, keyed by option spelling, alias word or
-            dotted key. Values may already be typed (``bool``, ``int``, ``float``, ``Path``, an
-            enum member) or still be the text a parser produced.
-        pytest_args: The arguments the caller passed through, in the order they were typed. They
-            are appended verbatim: never reordered, rewritten, deduplicated or shell-quoted.
-
-    Returns:
-        The complete argument list for :func:`pytest.main`.
 
     Raises:
         foundry.core.exceptions.ConfigError: When an entry names no documented option or key, in
-            which case the caller has a spelling to fix. Exit code 2 (AAP 0.4.4).
+            which case the caller has a spelling to fix.
     """
     values: dict[str, str] = {}
     switches: set[str] = set()
@@ -126,32 +112,21 @@ def run(pytest_args: tuple[str, ...], **foundry_options: object) -> int:
     """Run the suite under pytest and return pytest's own exit code.
 
     ``context_settings`` makes this command a faithful wrapper: every argument Foundry does not
-    define is collected into ``pytest_args`` untouched and reaches pytest in the order it was
-    typed (AAP 0.4.4). ``@override_options`` is the shared ``--foundry-*`` option group of
-    :mod:`foundry.cli.config_cmd`, applied here exactly as on every other subcommand that
-    resolves project configuration.
+    define is collected into ``pytest_args`` untouched and reaches pytest in the order it was typed.
+    ``@override_options`` is the shared ``--foundry-*`` option group of
+    :mod:`foundry.cli.config_cmd`, applied here exactly as on every other subcommand that resolves
+    project configuration.
 
-    The configuration is resolved before pytest starts, for the reason the module docstring
-    gives: a usage or configuration fault must end the run with exit 2 and no collection and no
-    report file (AAP 0.4.7). pytest itself is imported only at that point, so a command that
-    never runs tests is not charged for it.
-
-    Nothing is caught: pytest handles its own exceptions and ``KeyboardInterrupt``, while a
-    :class:`~foundry.core.exceptions.ConfigError` raised here passes through to
-    :func:`foundry.cli.main.main` unchanged, which is what maps it onto exit code 2.
-
-    Args:
-        pytest_args: The arguments to hand to pytest, unchanged and in order.
-        **foundry_options: The ``--foundry-*`` options ``@override_options`` declared, with the
-            value each was given, or ``None`` for one that was not supplied.
-
-    Returns:
-        The exit code to publish -- ``pytest.main``'s own code, with ``None`` normalised to ``0``
-        by :func:`foundry.cli.exit_codes.passthrough`.
+    The configuration is resolved before pytest starts, for the reason the module docstring gives,
+    and pytest itself is imported only at that point, so a command that never runs tests is not
+    charged for it. Nothing is caught: pytest handles its own exceptions and ``KeyboardInterrupt``,
+    and the exit code published is ``pytest.main``'s own, with ``None`` normalised to ``0`` by
+    :func:`foundry.cli.exit_codes.passthrough`.
 
     Raises:
-        foundry.core.exceptions.ConfigError: When this command line, the configuration file or
-            the environment cannot be resolved into a valid configuration.
+        foundry.core.exceptions.ConfigError: When this command line, the configuration file or the
+            environment cannot be resolved into a valid configuration. It passes through to the
+            entry point unchanged, which is what maps it onto exit code 2.
     """
     supplied = _supplied_options(foundry_options)
     # Resolving here is the pre-start validation of AAP 0.4.7, not a substitute for the session's
@@ -169,22 +144,12 @@ def run(pytest_args: tuple[str, ...], **foundry_options: object) -> int:
 def _supplied_options(parameters: Mapping[str, object]) -> dict[str, object]:
     """Translate the command's parsed parameters into canonical option spellings.
 
-    A ``click`` command receives one parameter per declared option, named after the option
-    spelling or after the dotted key it sets. Both the command-line layer and the argument
-    builder work in the one canonical vocabulary of :func:`build_pytest_argv`, so the values are
-    keyed by that spelling here and nowhere else: the record and replay switches keep their own
-    spelling because they configure a mode rather than a value, and every other option is keyed
-    by the ``--foundry-<dotted.key>`` form of the key it sets.
-
-    Parameters whose value is ``None`` are dropped, which is how ``click`` reports an option that
-    was not supplied, so nothing downstream has to distinguish absent from taken.
-
-    Args:
-        parameters: The parameter names and values ``click`` parsed.
-
-    Returns:
-        The supplied values keyed by canonical option spelling, in sorted parameter order so the
-        mapping is the same on every run and every worker.
+    Both the command-line layer and the argument builder work in the one canonical vocabulary of
+    :func:`build_pytest_argv`, so the values are keyed by that spelling here and nowhere else: the
+    record and replay switches keep their own spelling, and every other option is keyed by the
+    ``--foundry-<dotted.key>`` form of the key it sets. Parameters whose value is ``None`` are
+    dropped, which is how click reports an option that was not supplied. Iteration follows sorted
+    parameter order, so the mapping is the same on every run and every worker.
 
     Raises:
         foundry.core.exceptions.ConfigError: When a parameter names no documented option, rather
@@ -206,20 +171,10 @@ def _option_spelling(name: str) -> str | None:
     """Return the canonical ``--foundry-*`` spelling a parameter name or mapping key stands for.
 
     One name can arrive in several forms and all of them mean the same option: the spelling an
-    operator typed (``--foundry-http.timeout``), the name ``click`` derives from it, the dotted
-    key the configuration registry publishes (``http.timeout``), a named alias word
-    (``timeout``), or the ``dest`` :mod:`foundry.plugin` gives the option
-    (``foundry__http__timeout``). :data:`_PARAMETER_TABLE` holds each of them, so this function
-    is a lookup with a fallback for a spelling the table does not carry.
-
-    Args:
-        name: The parameter name or mapping key to translate.
-
-    Returns:
-        The spelling :mod:`foundry.plugin` registers -- ``--foundry-http.timeout`` for a key, and
-        the option's own spelling for one of the four
-        :data:`foundry.config.cli_layer.SPECIAL_OPTIONS` -- or ``None`` when the name configures no
-        documented option.
+    operator typed, the name click derives from it, the dotted configuration key, a named alias word
+    or the ``dest`` :mod:`foundry.plugin` gives the option. :data:`_PARAMETER_TABLE` holds each of
+    them, so this is a lookup with a fallback for a spelling the table does not carry. ``None``
+    means the name configures no documented option.
     """
     trimmed = name.strip()
     if not trimmed:
@@ -286,15 +241,8 @@ def _switch_on(value: object) -> bool:
 def _unmappable(name: str) -> ConfigError:
     """Return the error for a parameter or mapping key that names no documented option.
 
-    Reported rather than skipped: an override that quietly disappears is the failure mode this
-    guard exists to prevent, and exit code 2 with the name in it is something the caller can act
-    on (AAP 0.4.4).
-
-    Args:
-        name: The parameter name or mapping key that could not be translated.
-
-    Returns:
-        The :class:`~foundry.core.exceptions.ConfigError` the caller raises.
+    Reported rather than skipped: an override that quietly disappears is the failure mode this guard
+    exists to prevent, and exit code 2 with the name in it is something the caller can act on.
     """
     return ConfigError(
         f"the foundry run command cannot pass {name} on to pytest",
@@ -306,17 +254,11 @@ def _unmappable(name: str) -> ConfigError:
 def _parameter_table() -> Mapping[str, str]:
     """Build the index from every way an option can be named to its canonical spelling.
 
-    Both vocabularies of AAP 0.4.4 are covered without respelling either of them: the generic
-    ``--foundry-<dotted.key>`` of every scalar key in
-    :data:`foundry.config.keys.KEY_SPECS`, its named aliases, the dotted key itself, and the
-    ``dest`` conventions the plugin and the command line already share
-    (:func:`foundry.config.keys.option_dest` and
-    :func:`foundry.config.cli_layer.alias_dest`), plus the four special options. A name is
-    indexed only once -- the first spelling that claims it wins -- so a lookup cannot depend on
-    the order the table was built in.
-
-    Returns:
-        A read-only mapping from each accepted name to the option spelling that is emitted.
+    Both vocabularies are covered without respelling either of them: the generic
+    ``--foundry-<dotted.key>`` of every scalar key in :data:`foundry.config.keys.KEY_SPECS`, its
+    named aliases, the dotted key itself, the ``dest`` conventions the plugin and the command line
+    already share, and the four special options. A name is indexed only once -- the first spelling
+    that claims it wins -- so a lookup cannot depend on the order the table was built in.
     """
 
     def remember(entries: dict[str, str], names: tuple[str, ...], spelling: str) -> None:

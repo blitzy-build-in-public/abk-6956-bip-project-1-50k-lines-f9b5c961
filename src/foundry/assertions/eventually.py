@@ -2,8 +2,8 @@
 
 :func:`eventually` calls ``fn`` until it returns a truthy value, which it returns unchanged; falsy
 values and raised exceptions keep it polling, and an expired deadline raises ``AssertionError``
-naming the last outcome and the poll count (AAP 0.4.3). Deadline time comes from the monotonic clock
-or a supplied clock, and every wait goes through the injected ``sleep`` (AAP 0.7.1, AAP 0.14.3).
+naming the last outcome and the poll count (AAP 0.4.3). Time comes from the monotonic clock or an
+injected clock, and every wait goes through the injected ``sleep`` (AAP 0.7.1, AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -28,30 +28,22 @@ _PREFIX: Final[str] = "foundry.assertions.eventually"
 _POLL_BUDGET_MARGIN: Final[int] = 2
 """Polls the safety net allows beyond ``timeout / interval`` before the clock is called stalled.
 
-Two is enough for the poll whose own duration carries the clock past the deadline and for the
-one that observes it, so a healthy run never touches the budget and a frozen clock still stops
-promptly.
+Two covers the poll whose own duration carries the clock past the deadline and the poll that
+observes it, so a healthy run never touches the budget and a frozen clock still stops promptly.
 """
 
 
 class _Missing:
     """Type of the sentinel that marks "no value was ever returned by the polled callable".
 
-    A private sentinel is used instead of ``None`` because ``None`` is a legitimate falsy
-    result: the failure message has to be able to say ``last value: None`` and a sentinel of
-    ``None`` could not tell that apart from "the callable only ever raised".
+    A private sentinel, not ``None``, because ``None`` is a legitimate falsy result the failure
+    message has to be able to report as ``last value: None``.
     """
 
     __slots__ = ()
 
     def __repr__(self) -> str:
-        """Return the sentinel's spelling.
-
-        Returns:
-            ``"<missing>"``. It is never interpolated into a user-facing message -- the
-            renderer checks the identity first -- and exists so a debugger shows something
-            readable.
-        """
+        """Return the sentinel's spelling; no user-facing message interpolates it."""
         return "<missing>"
 
 
@@ -60,29 +52,15 @@ _MISSING: Final[_Missing] = _Missing()
 
 
 def _misuse(detail: str) -> AssertionError:
-    """Build the assertion raised when :func:`eventually` is called with an unusable argument.
-
-    Args:
-        detail: The requirement the argument broke together with the value that broke it.
-
-    Returns:
-        A fresh :class:`AssertionError` carrying the module prefix, which the caller raises.
-    """
+    """Build the assertion raised when :func:`eventually` is called with an unusable argument."""
     return AssertionError(f"{_PREFIX}: {detail}")
 
 
 def _format_seconds(value: float) -> str:
     """Render a number of seconds the way every message in this module renders it.
 
-    ``%g`` style is used so a deadline reads ``0.5`` rather than ``0.5000000000000001``: the
-    figure comes from configuration or from a monotonic difference, and neither should leak
-    floating-point noise into a message a person reads or a test matches.
-
-    Args:
-        value: A number of seconds.
-
-    Returns:
-        The shortest faithful decimal spelling of ``value``, without a unit suffix.
+    ``%g`` style, so a deadline reads ``0.5`` rather than ``0.5000000000000001``: the figure comes
+    from configuration or a monotonic difference, and neither may leak noise into a message.
     """
     return f"{value:g}"
 
@@ -90,15 +68,8 @@ def _format_seconds(value: float) -> str:
 def _poll_word(polls: int) -> str:
     """Render a poll count with the noun agreeing with it.
 
-    The count reaches a message a person reads and a test matches, and a single poll is a
-    common outcome -- ``timeout=0`` polls exactly once -- so a fixed plural would read
-    ``1 polls`` on the most easily reproduced failure there is.
-
-    Args:
-        polls: How many times the polled callable has been called.
-
-    Returns:
-        ``"1 poll"`` for a single poll, and ``"<n> polls"`` for every other count.
+    ``timeout=0`` polls exactly once, so a fixed plural would read ``1 polls`` on the most easily
+    reproduced failure there is, in a message a person reads and a test matches.
     """
     return f"{polls} poll" if polls == 1 else f"{polls} polls"
 
@@ -106,14 +77,8 @@ def _poll_word(polls: int) -> str:
 def _as_finite_seconds(value: object) -> float | None:
     """Return ``value`` as a finite ``float``, or ``None`` when it is not a usable duration.
 
-    Args:
-        value: The value to coerce. Only ``int`` and ``float`` are accepted; ``bool`` is
-            rejected even though it subclasses ``int``, because ``timeout=True`` is a mistake
-            rather than a one-second timeout. ``NaN`` and the infinities are rejected too, as
-            they would poison every comparison the loop makes.
-
-    Returns:
-        ``value`` as a finite ``float``, or ``None`` when it is not a finite real number.
+    Only ``int`` and ``float`` are accepted: ``bool`` is rejected although it subclasses ``int``,
+    and so are ``NaN`` and the infinities, as they would poison every comparison the loop makes.
     """
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
@@ -124,16 +89,10 @@ def _as_finite_seconds(value: object) -> float | None:
 
 
 def _require_timeout(timeout: object, redactor: Redactor | None = None) -> float:
-    """Validate the deadline argument.
+    """Validate the deadline argument and return it as a ``float``.
 
-    Args:
-        timeout: The caller's ``timeout``, which must be a finite number of seconds of zero
-            or more. Zero is accepted and means "call the function once, then fail".
-        redactor: The run's redaction engine, applied to the rejected value this message quotes,
-            or ``None`` to build one carrying only the built-in deny-lists.
-
-    Returns:
-        The deadline as a ``float``.
+    ``timeout`` must be a finite number of seconds of zero or more; zero is accepted and means
+    "call the function once, then fail". ``redactor`` scrubs the rejected value the message quotes.
 
     Raises:
         AssertionError: When ``timeout`` is not a finite real number or is negative.
@@ -146,17 +105,10 @@ def _require_timeout(timeout: object, redactor: Redactor | None = None) -> float
 
 
 def _require_interval(interval: object, redactor: Redactor | None = None) -> float:
-    """Validate the poll interval argument.
+    """Validate the poll interval argument and return it as a ``float``.
 
-    Args:
-        interval: The caller's ``interval``, which must be a finite number of seconds greater
-            than zero. A zero interval would spin the loop without ever yielding, and a
-            negative one would make the sleep clamp meaningless.
-        redactor: The run's redaction engine, applied to the rejected value this message quotes,
-            or ``None`` to build one carrying only the built-in deny-lists.
-
-    Returns:
-        The interval as a ``float``.
+    ``interval`` must be a finite number of seconds greater than zero: a zero interval would spin
+    the loop without ever yielding, and a negative one would make the sleep clamp meaningless.
 
     Raises:
         AssertionError: When ``interval`` is not a finite real number or is not positive.
@@ -169,13 +121,7 @@ def _require_interval(interval: object, redactor: Redactor | None = None) -> flo
 
 
 def _require_pollable(fn: Callable[[], T]) -> Callable[[], T]:
-    """Validate the polled callable.
-
-    Args:
-        fn: The zero-argument callable to poll.
-
-    Returns:
-        ``fn`` itself, so the caller can use the validated value.
+    """Validate the polled callable, returning ``fn`` itself for the caller to use.
 
     Raises:
         AssertionError: When ``fn`` is not callable.
@@ -186,17 +132,10 @@ def _require_pollable(fn: Callable[[], T]) -> Callable[[], T]:
 
 
 def _require_sleep(sleep: Sleep) -> Sleep:
-    """Validate the injected sleeper.
+    """Validate the injected sleeper, returning it for the caller to use.
 
-    The value is checked here rather than at the first wait so that a mistake in a test's
-    fixture fails at the top of the call, with the same ``AssertionError`` type as every other
-    misuse, instead of surfacing as a ``TypeError`` from inside the loop.
-
-    Args:
-        sleep: The callable that performs a wait of the given number of seconds.
-
-    Returns:
-        ``sleep`` itself, so the caller can use the validated value.
+    Checked here rather than at the first wait, so a mistake in a test's fixture fails at the top
+    of the call with the same ``AssertionError`` as every other misuse.
 
     Raises:
         AssertionError: When ``sleep`` is not callable.
@@ -209,34 +148,19 @@ def _require_sleep(sleep: Sleep) -> Sleep:
 def _clock_misuse(clock: object) -> AssertionError:
     """Build the assertion raised when the supplied clock breaks the time-source contract.
 
-    One builder serves both halves of the contract -- a reader that is not callable and a
-    reader whose result is not a ``datetime`` -- so the message has a single source.
-
-    Args:
-        clock: The value the caller passed as ``clock``. Its type is named in the message,
-            because that is the object the caller has to fix.
-
-    Returns:
-        A fresh :class:`AssertionError` carrying the module prefix, which the caller raises.
+    One builder serves both halves -- a reader that is not callable and a reading that is not a
+    ``datetime`` -- so the message has a single source. The message names the caller's type.
     """
     return _misuse(f"clock must provide now() returning a datetime, got {type(clock).__name__}")
 
 
 def _require_clock(clock: ClockLike | None) -> ClockLike | None:
-    """Validate the supplied time source.
-
-    Args:
-        clock: ``None`` to use the monotonic clock, or an object implementing
-            :class:`foundry.core.types.ClockLike`.
-
-    Returns:
-        ``clock`` unchanged, or ``None`` when the monotonic clock is to be used.
+    """Validate the supplied time source, returning it or ``None`` for the monotonic clock.
 
     Raises:
         AssertionError: When ``clock`` is neither ``None`` nor an object exposing a callable
             ``now()`` that returns a ``datetime``. This function checks that the reader is
-            present; :func:`_read_instant` enforces the returned type on every read, and
-            raises the same message when it does not hold.
+            present; :func:`_read_instant` enforces the returned type on every read.
     """
     if clock is None:
         return None
@@ -318,18 +242,8 @@ def _excerpt(rendered: str, redactor: Redactor | None = None) -> str:
     """Redact, bound and flatten a rendered outcome for inclusion in a message.
 
     Redaction runs before truncation, inside :meth:`foundry.obs.redaction.Redactor.text`, so a
-    secret straddling the cut cannot leave its prefix behind; the excerpt is then collapsed to
-    one line.
-
-    Args:
-        rendered: The text to quote, already converted to ``str``.
-        redactor: The run's redaction engine, normally the one built from
-            ``secrets.redact_keys``, or ``None`` to build one carrying only the built-in
-            deny-lists.
-
-    Returns:
-        The excerpt, bounded by :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes plus its
-        truncation marker, containing no newline.
+    secret straddling the cut cannot leave its prefix behind; the result is one line, bounded by
+    :data:`foundry.obs.redaction.MAX_EXCERPT_BYTES` plus its truncation marker.
     """
     engine = default_redactor() if redactor is None else redactor
     excerpt = engine.body_excerpt(rendered, limit=MAX_EXCERPT_BYTES)
@@ -339,13 +253,8 @@ def _excerpt(rendered: str, redactor: Redactor | None = None) -> str:
 def _render_value(value: object) -> str:
     """Render a falsy polled value for the failure message.
 
-    Args:
-        value: The last value the polled callable returned. ``repr`` is used rather than
-            ``str`` so that ``None``, ``False``, ``0`` and ``""`` stay distinguishable in the
-            message.
-
-    Returns:
-        The value's ``repr``, or a placeholder naming its type when ``repr`` itself fails.
+    ``repr`` rather than ``str``, so ``None``, ``False``, ``0`` and ``""`` stay distinguishable;
+    a value whose ``repr`` raises is named by its type.
     """
     try:
         return repr(value)
@@ -358,17 +267,9 @@ def _outcome_text(
 ) -> str:
     """Render the trailing clause of a failure message, naming the last poll outcome.
 
-    Exactly one of the two outcomes is always set once the loop has polled at least once, and
-    the two are mutually exclusive because a poll either returns or raises.
-
-    Args:
-        last_error: The exception the last poll raised, or ``None`` when it returned.
-        last_value: The value the last poll returned, or the sentinel when it raised.
-        redactor: The run's redaction engine, applied to the quoted outcome, or ``None`` to
-            build one carrying only the built-in deny-lists.
-
-    Returns:
-        ``last exception <Type>(<message>)`` or ``last value: <repr>``, redacted and bounded.
+    Exactly one of the two outcomes is set once the loop has polled once, and the two are mutually
+    exclusive because a poll either returns or raises. The result is ``last exception
+    <Type>(<message>)`` or ``last value: <repr>``, redacted and bounded.
     """
     if last_error is not None:
         rendered = f"{type(last_error).__name__}({last_error!s})"
@@ -393,14 +294,6 @@ def eventually(
     one or a raised exception is remembered and polling continues. When the deadline passes, or the
     poll budget ends a stalled clock, ``AssertionError`` names the last outcome and the poll count
     (AAP 0.4.3); ``clock`` and ``redactor`` are additive over AAP 0.4.3 (AAP 0.4.9).
-
-    Example:
-        Poll an endpoint until the order it describes is ready, without spending real time::
-
-            def order_is_ready() -> bool:
-                return client.get("/orders/7").json()["status"] == "ready"
-
-            order = eventually(order_is_ready, timeout=5.0, interval=0.25, sleep=fake_sleep)
     """
     poll = _require_pollable(fn)
     limit = _require_timeout(timeout, redactor)

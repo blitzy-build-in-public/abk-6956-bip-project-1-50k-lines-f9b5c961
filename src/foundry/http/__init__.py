@@ -1,8 +1,4 @@
-"""The sync-only HTTP/API layer: the session, its responses, its retry policy and its auth.
-
-AAP 0.4.3 and AAP 0.7.3: every status is returned as a ``FoundryResponse``, never raised, and replay
-is a transport, so a replay never reaches ``httpcore`` (AAP 0.4.8).
-"""
+"""The sync-only HTTP/API layer: the session, its responses, its retry policy and its auth."""
 
 from __future__ import annotations
 

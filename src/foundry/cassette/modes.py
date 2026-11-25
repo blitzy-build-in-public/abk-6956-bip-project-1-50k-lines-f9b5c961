@@ -171,22 +171,10 @@ def _live_transport_for(
 class CassetteSession:
     """One test's cassette lifecycle: the transport its mode calls for, and the file it saves.
 
-    AAP 0.4.6 gives a cassette to one test, so this object binds the node id, the mode and the store
-    and answers what the record and replay paths ask: which transport to send on
-    (:meth:`transport`), what was captured (:meth:`session_requests`), whether to write it
-    (:meth:`finish`) and how to let go of it (:meth:`close`). ``replay`` holds no live transport
-    whatever the caller passes, so offline replay is a property of this object (AAP 0.2.1), and the
-    transport is built once, on first use.
-
-    Attributes:
-        _nodeid: The pytest node id of the test whose cassette this is.
-        _behaviour: The row of :data:`BEHAVIOURS` the session runs under.
-        _store: The store the document is loaded from and saved to.
-        _live_transport: The transport the caller offered, kept only for a network mode.
-        _transport: The transport :meth:`transport` built, or ``None`` before the first call.
-        _interactions: The exchanges captured so far, in the order the test issued them.
-        _saved: Whether :meth:`finish` has already attempted its one write.
-        _closed: Whether :meth:`close` has already run, which is what makes it idempotent.
+    It binds the node id, the mode and the store, and answers which transport to send on, what was
+    captured, whether to write it and how to let go of it. ``replay`` holds no live transport
+    whatever the caller passes, so offline replay is a property of this object, and the transport is
+    built once, on first use.
     """
 
     _nodeid: str
@@ -208,21 +196,8 @@ class CassetteSession:
     ) -> None:
         """Bind the session to a test, a mode and a store, and demand what the mode needs.
 
-        Args:
-            nodeid: The pytest node id of the test. It names the cassette document, so a blank one
-            is
-                refused here rather than at teardown.
-            mode: The resolved ``cassette.mode``, as a plain string: this module never imports the
-            enum.
-            store: The store holding the cassette directory and the redaction engine.
-            live_transport: The transport requests are sent on; required by every mode with a
-            network and
-                dropped by ``replay``.
-
-        Raises:
-            FoundryError: ``nodeid`` is blank, ``mode`` names no mode of the table, or a mode with a
-            network
-                was given no transport.
+        A blank node id, a mode the table does not name and a mode with a network given no transport
+        each raise ``FoundryError``.
         """
         if not nodeid.strip():
             raise FoundryError(
@@ -316,18 +291,9 @@ class CassetteSession:
     def finish(self) -> Path | None:
         """Save the capture as this test's cassette, at most once, and return the file written.
 
-        A session writes only when its mode writes and something was recorded: an ``off``,
-        ``replay`` or ``passthrough`` run saves nothing (assumption A8), and a ``record`` run whose
-        test issued no request leaves any previous document in place. A capture fault does not raise
-        (AAP 0.1.2, AAP 0.14.3): the store reports it as one ``WARNING`` on the ``foundry`` logger
-        and answers ``None``.
-
-        Returns:
-            The path the document was written to, or ``None`` when nothing was written.
-
-        Raises:
-            FoundryError: The session's node id is blank.
-            ArtifactError: The resolved cassette path escapes the cassette directory.
+        Only a writing mode that recorded something saves, so a ``record`` run whose test issued no
+        request leaves any previous document in place. A capture fault does not raise (AAP 0.1.2,
+        AAP 0.14.3): the store reports it as one ``WARNING`` and answers ``None``.
         """
         if self._saved or not self._behaviour.writes or not self._interactions:
             return None

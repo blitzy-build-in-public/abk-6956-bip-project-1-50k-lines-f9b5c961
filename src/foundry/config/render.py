@@ -1,13 +1,10 @@
 """The three renderings ``foundry config show`` prints: the table and the two documents.
 
-AAP 0.3.2 gives this module the display side of a resolved configuration: one row of Key, Value and
-Source per key (AAP 0.7.4), the JSON document ``{"resolved": ..., "sources": ...}`` and the TOML
-document carrying the same values with a companion ``[sources]`` table (AAP 0.4.5). Each
-machine-readable form is one document and nothing else, printed verbatim by
-:mod:`foundry.cli.config_cmd` (AAP 0.7.3). Every value passes through
-:class:`foundry.obs.redaction.Redactor` before it is rendered (AAP 0.3.2); every collection is
-sorted first so two runs are byte-identical (AAP 0.13.1); no table layout lives here, widths and
-colours belonging to :mod:`foundry.cli.render`, which consumes :func:`rows`.
+One row of Key, Value and Source per key, the JSON document ``{"resolved": ..., "sources": ...}``
+and the TOML document carrying the same values with a companion ``[sources]`` table, each printed
+verbatim by :mod:`foundry.cli.config_cmd`. Every value passes through
+:class:`foundry.obs.redaction.Redactor` first and every collection is sorted, so two runs are
+byte-identical; no table layout lives here, that belonging to :mod:`foundry.cli.render`.
 """
 
 from __future__ import annotations
@@ -56,7 +53,7 @@ RESOLVED_SECTION: Final[str] = "resolved"
 NOT_APPLIED_SECTION: Final[str] = "not applied"
 """The heading of the table naming overrides a run without ``--resolved`` did not apply.
 
-AAP 0.4.4 requires those overrides to be listed apart from the resolution the run reports.
+Those overrides are listed apart from the resolution the run reports.
 """
 
 NOT_APPLIED_SOURCE_PREFIX: Final[str] = "not-applied:"
@@ -121,9 +118,8 @@ class ConfigRow:
 def redactor_for(config: FoundryConfig) -> Redactor:
     """Return the redactor every rendering of ``config`` passes its values through.
 
-    One engine serves every sink (AAP 0.3.2), built from the resolved ``secrets.redact_keys`` plus
-    the deny-lists it adds itself, so a project that widens the list widens what ``config show``
-    prints without a change here.
+    One engine serves every sink, built from the resolved ``secrets.redact_keys`` plus the
+    deny-lists it adds itself, so a project that widens the list widens what ``config show`` prints.
     """
     return Redactor(config.secrets.redact_keys)
 
@@ -133,13 +129,12 @@ def render_value(spec: keys.KeySpec, value: object, redactor: Redactor) -> str:
 
     The shape of the value decides the rendering: a boolean as the configuration file spells it, an
     enumeration by the member's value rather than its name, a path in POSIX form, a number in its
-    shortest exact form, a list comma-joined in the order it was authored -- the environment layer's
-    form (assumption A3) -- and a header table as ``name=value`` pairs sorted by name.
+    shortest exact form, a list comma-joined in the order it was authored, and a header table as
+    ``name=value`` pairs sorted by name.
 
-    Two shapes can carry a credential, and both are redacted here rather than by the caller: the
-    ``http.headers`` table through :meth:`foundry.obs.redaction.Redactor.header`, and the text a
-    ``str``- or ``path``-kind key holds through ``Redactor.text``, which drops URL userinfo and
-    redacts deny-listed query parameters (AAP 0.2.1, AAP 0.3.2).
+    Two shapes can carry a credential and both are redacted here: the ``http.headers`` table through
+    :meth:`foundry.obs.redaction.Redactor.header`, and the text a ``str``- or ``path``-kind key
+    holds through ``Redactor.text``, which drops URL userinfo and redacts deny-listed parameters.
 
     Returns:
         The value as text for the table, ``<unset>`` for ``None``.
@@ -172,10 +167,9 @@ def rows(config: FoundryConfig, *, not_applied: CliInput | None = None) -> tuple
     does not declare has no row even if the settings model holds a value for it, and each Source
     cell is :meth:`foundry.config.sources.ConfigSource.label`.
 
-    ``not_applied`` carries the overrides of a command that resolved without them: AAP 0.4.4 has
-    those listed separately rather than folded into the resolution, so their rows come after every
-    resolved row and their Source cell reads ``not-applied:<--option>``, which no layer label can be
-    mistaken for.
+    ``not_applied`` carries the overrides of a command that resolved without them: those are listed
+    separately rather than folded into the resolution, so their rows come after every resolved row
+    and their Source cell reads ``not-applied:<--option>``, which no layer label resembles.
 
     Returns:
         One row per leaf key in sorted key order, then one row per not-applied override.
@@ -209,9 +203,8 @@ def not_applied_values(cli: CliInput, *, redactor: Redactor | None = None) -> di
 
     The shared source of the not-applied section in all three renderings, so the table, the JSON
     document and the TOML document list the same keys in the same order with the same values. An
-    override is a scalar -- no header table has a single-token CLI form -- so a configured key name
-    cannot apply to one, and callers that hold a configuration pass its redactor anyway, so every
-    value a run renders goes through one engine.
+    override is a scalar, so no configured key name applies to one, and a caller holding a
+    configuration passes its redactor so every rendered value goes through one engine.
     """
     scrub = default_redactor() if redactor is None else redactor
     rendered: dict[str, str] = {}
@@ -231,10 +224,9 @@ def not_applied_values(cli: CliInput, *, redactor: Redactor | None = None) -> di
 def sources_document(config: FoundryConfig) -> dict[str, dict[str, str]]:
     """Return the provenance document: one ``{"layer", "detail"}`` record per leaf key.
 
-    The shape AAP 0.4.5 publishes. Both values are names -- the layer, and the file path,
-    environment variable, option spelling or profile name behind it -- so no configuration value
-    can reach the document, which is what lets it be printed and recorded without a redaction step
-    of its own (implicit requirement I9).
+    Both values are names -- the layer, and the file path, variable, option spelling or profile name
+    behind it -- so no configuration value can reach the document, which is what lets it be printed
+    and recorded without a redaction step of its own.
     """
     return {dotted: config.source_of(dotted).as_dict() for dotted in sorted(keys.leaf_keys())}
 
@@ -248,9 +240,8 @@ def resolved_document(config: FoundryConfig) -> dict[str, object]:
 
     Values are rendered for a document rather than a terminal: an unset key stays ``None``, an
     enumeration becomes its value, a path its POSIX string, a header table a mapping of redacted
-    values, and text is scrubbed (AAP 0.3.2). ``layers.flatten`` of the result yields exactly the
-    keys of :func:`foundry.config.keys.leaf_keys`, which keeps the published key set and the
-    rendered document in step (AAP 0.4.5).
+    values, and text is scrubbed. ``layers.flatten`` of the result yields exactly the keys of
+    :func:`foundry.config.keys.leaf_keys`.
     """
     redactor = redactor_for(config)
     values = _leaf_values(config)
@@ -265,11 +256,10 @@ def to_json_document(
 ) -> dict[str, object]:
     """Return the object ``foundry config show --format json`` serialises.
 
-    AAP 0.4.5 fixes the two members ``resolved`` and ``sources``, and AAP 0.4.4 requires a run
-    without ``--resolved`` to report the overrides it did not apply. Those overrides ride a third
-    member, ``not_applied``, that appears only when the command supplied at least one: adding a
-    member leaves the documented shape intact for a consumer that reads the two it was promised
-    (AAP 0.4.9), while rewriting them would not.
+    The two members ``resolved`` and ``sources`` are fixed, and a run without ``--resolved`` reports
+    the overrides it did not apply: those ride a third member, ``not_applied``, that appears only
+    when the command supplied at least one, which keeps the documented shape intact for a consumer
+    that reads the two it was promised.
     """
     document: dict[str, object] = {
         RESOLVED_SECTION: resolved_document(config),
@@ -285,10 +275,9 @@ def to_json_document(
 def to_json_text(config: FoundryConfig, *, not_applied: CliInput | None = None) -> str:
     """Return the JSON text ``foundry config show --format json`` writes to stdout.
 
-    One document and nothing else (AAP 0.7.3): keys sorted at every level, two-space indentation,
-    non-ASCII text left readable, and exactly one trailing newline. Sorting is also what places
-    ``resolved`` and ``sources`` first whenever no override was deferred, and what makes two
-    invocations with the same configuration byte-identical (AAP 0.13.1).
+    One document and nothing else: keys sorted at every level, two-space indentation, non-ASCII text
+    left readable, and exactly one trailing newline. Sorting also places ``resolved`` and
+    ``sources`` first whenever no override was deferred, and makes two invocations byte-identical.
 
     Args:
         config: The resolved configuration to document.
@@ -310,14 +299,11 @@ def to_toml_text(config: FoundryConfig, *, not_applied: CliInput | None = None) 
     """Return the TOML text ``foundry config show --format toml`` writes to stdout.
 
     The resolved values are written as the document they nest into, followed by the companion
-    ``[sources]`` table AAP 0.4.5 requires and, when the command deferred overrides, a
-    ``[not_applied]`` table. A key with no value is dropped rather than written, because TOML has no
-    null.
+    ``[sources]`` table and, when the command deferred overrides, a ``[not_applied]`` table. A key
+    with no value is dropped rather than written, because TOML has no null.
 
     ``tomli-w`` writes the values, imported inside this function so a run that never renders TOML
-    never imports it. It renders a nested table as a ``[sources."<key>"]`` section rather than the
-    inline table the document publishes, so the source table is composed from the same quoting it
-    applies -- one escaper, no second implementation of TOML strings.
+    never imports it, and the source table is composed from its quoting so one escaper serves both.
     """
     import tomli_w
 
@@ -334,15 +320,14 @@ def _leaf_values(config: FoundryConfig) -> dict[str, object]:
     """Return the resolved values by the registry's leaf keys.
 
     The settings model knows its own fields; the registry knows the published surface. Selecting by
-    the registry keeps a field that no key declares out of every rendering, which is the same rule
+    the registry keeps a field that no key declares out of every rendering, the same rule
     :func:`rows` follows for its keys.
 
     Args:
         config: The resolved configuration to read.
 
     Returns:
-        One entry per leaf key, holding the value the model resolved or ``None`` when the selected
-        layers left it unset.
+        One entry per leaf key, holding the resolved value or ``None`` when no layer set it.
     """
     values = config.leaf_values()
     return {spec.dotted: values.get(spec.dotted) for spec in keys.KEY_SPECS}
@@ -374,17 +359,16 @@ def _document_value(value: object, redactor: Redactor) -> object:
     """Return one resolved value in the shape a document holds it.
 
     The document form is not the table form: a value keeps its type where the document can carry it
-    (a number stays a number, a boolean stays a boolean) and loses it only where the format has no
-    equivalent -- an enumeration becomes its value, a path its POSIX string, a header table a
-    mapping of redacted values.
+    and loses it only where the format has no equivalent -- an enumeration becomes its value, a path
+    its POSIX string, a header table a mapping of redacted values.
 
     Args:
         value: The resolved value, or ``None`` for a key no layer set.
         redactor: The redactor to scrub credentials through.
 
     Returns:
-        ``None``, a boolean, a number, a string, a list or a mapping, ready for
-        :func:`json.dumps` or ``tomli-w``.
+        ``None``, a boolean, a number, a string, a list or a mapping, ready for :func:`json.dumps`
+        or ``tomli-w``.
     """
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -406,8 +390,7 @@ def _ordered(value: Iterable[object]) -> tuple[object, ...]:
 
     A list or a tuple keeps the order it was authored in, which is the order the environment layer
     sets and the document publishes. An unordered collection is sorted, so rendering cannot depend
-    on hashing (AAP 0.13.1); the settings model parses both list-valued keys into lists, so this
-    is a guard rather than the usual path.
+    on hashing; the settings model parses both list-valued keys into lists, so this is a guard.
 
     Args:
         value: The collection to order.
@@ -425,14 +408,8 @@ def _element_text(element: object) -> str:
 
     Both list-valued keys hold names -- ``http.retries.retry_on`` names predicates and
     ``secrets.redact_keys`` names the keys to redact -- so an element is rendered as its value and
-    is deliberately not passed through the redactor, which would replace the deny-list's own
-    entries in the row that publishes them.
-
-    Args:
-        element: One element of the list.
-
-    Returns:
-        The element as text, in the same spelling the table uses for a scalar.
+    is deliberately not passed through the redactor, which would replace the deny-list's own entries
+    in the row that publishes them. The text is the spelling the table uses for a scalar.
     """
     if element is None:
         return _UNSET
@@ -450,15 +427,8 @@ def _header_pairs(table: Mapping[object, object], redactor: Redactor) -> str:
 
     The pairs are ordered by case-folded name by
     :meth:`foundry.obs.redaction.Redactor.headers`, so the cell reads the same on two runs whatever
-    order the file or the environment supplied the headers in (AAP 0.13.1), and a name in
-    ``secrets.redact_keys`` or in the deny-list prints ``***`` (AAP 0.3.2).
-
-    Args:
-        table: The header table, name to value.
-        redactor: The redactor that decides which values are printed.
-
-    Returns:
-        The pairs joined for a table cell, or an empty string for a table with no header.
+    order the file or the environment supplied the headers in, and a name in ``secrets.redact_keys``
+    or in the deny-list prints ``***``. A table with no header yields an empty cell.
     """
     redacted = redactor.headers(_header_table(table))
     return _PAIR_SEPARATOR.join(f"{name}={value}" for name, value in redacted.items())
@@ -467,12 +437,8 @@ def _header_pairs(table: Mapping[object, object], redactor: Redactor) -> str:
 def _header_table(table: Mapping[object, object]) -> dict[str, str]:
     """Return a header table as the ``str``-to-``str`` mapping the redactor accepts.
 
-    Args:
-        table: The header table as the settings model holds it.
-
-    Returns:
-        A fresh mapping whose names and values are text; a name or value of another type is
-        rendered rather than dropped, so the row still shows that the header exists.
+    A name or value of another type is rendered rather than dropped, so the row still shows that the
+    header exists.
     """
     return {_text_of(name): _text_of(value) for name, value in table.items()}
 
@@ -500,12 +466,6 @@ def _toml_ready(document: Mapping[str, object]) -> dict[str, object]:
     TOML has no null, so a key no layer set -- an unset ``http.base_url`` or credential name -- is
     absent from the document rather than written empty. A table is kept even when the drop empties
     it, so the document keeps the shape of the configuration.
-
-    Args:
-        document: The nested document :func:`resolved_document` produced.
-
-    Returns:
-        The same nesting without any value that is ``None``.
     """
     ready: dict[str, object] = {}
     for key, value in document.items():
@@ -536,18 +496,10 @@ def _toml_scalar(value: object) -> object:
 def _with_sources_table(rendered: str, sources: Mapping[str, Mapping[str, str]]) -> str:
     """Append the companion ``[sources]`` table to a rendered TOML document.
 
-    AAP 0.4.5 publishes one line per attributed key, ``"http.timeout" = { layer = "env", detail =
-    "FOUNDRY_HTTP__TIMEOUT" }``, and ``tomli-w`` writes a nested table as a ``[sources."<key>"]``
-    section instead of an inline table, so the table is composed here from the quoting it applies
-    (:func:`_toml_string`). The entries are sorted by key, so two runs print the rows in the same
-    order (AAP 0.13.1).
-
-    Args:
-        rendered: The document ``tomli-w`` produced for the resolved values.
-        sources: The provenance document, key to ``{"layer", "detail"}``.
-
-    Returns:
-        The document followed by the source table, ending with one newline.
+    One line per attributed key, ``"http.timeout" = { layer = "env", detail =
+    "FOUNDRY_HTTP__TIMEOUT" }``. ``tomli-w`` writes a nested table as a ``[sources.<key>]`` section
+    instead of an inline table, so the table is composed here from the quoting it applies. The
+    entries are sorted by key, so two runs print the rows in the same order.
     """
     lines = [f"[{SOURCES_TABLE}]"]
     for dotted in sorted(sources):
@@ -562,7 +514,7 @@ def _with_sources_table(rendered: str, sources: Mapping[str, Mapping[str, str]])
 def _toml_string(value: str) -> str:
     """Return ``value`` as a quoted, escaped TOML basic string.
 
-    ``tomli-w`` is the declared TOML writer, so instead of growing a second implementation of the
+    ``tomli-w`` is the declared TOML writer, so rather than growing a second implementation of the
     format's escaping the value is rendered as the value of a probe document and the quoted literal
     is taken from it. A key containing a dot and a path containing a quote or a backslash therefore
     come out as TOML's own grammar spells them.
