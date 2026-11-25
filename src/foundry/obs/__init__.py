@@ -31,10 +31,12 @@ from .events import event_line as event_line
 from .events import log_event as log_event
 from .logging import LOGGER_NAME as LOGGER_NAME
 from .logging import NULL_HANDLER as NULL_HANDLER
+from .logging import RedactionFilter as RedactionFilter
 from .logging import attach_handler as attach_handler
 from .logging import configure as configure
 from .logging import detach_handler as detach_handler
 from .logging import get_logger as get_logger
+from .logging import install_redaction_filter as install_redaction_filter
 from .logging import level_for as level_for
 from .manifest import MANIFEST_FILENAME as MANIFEST_FILENAME
 from .manifest import MANIFEST_SCHEMA_VERSION as MANIFEST_SCHEMA_VERSION
@@ -68,6 +70,7 @@ __all__ = (
     "ManifestEntry",
     "NULL_HANDLER",
     "REDACTED",
+    "RedactionFilter",
     "Redactor",
     "attach_handler",
     "build_document",
@@ -87,6 +90,7 @@ __all__ = (
     "event_line",
     "format_record",
     "get_logger",
+    "install_redaction_filter",
     "level_for",
     "log_event",
     "node_dir",

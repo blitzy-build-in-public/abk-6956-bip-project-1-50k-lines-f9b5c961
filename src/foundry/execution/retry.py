@@ -16,9 +16,10 @@ budget.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from foundry.core.exceptions import ConfigError
 from foundry.core.limits import (
@@ -30,7 +31,14 @@ from foundry.core.limits import (
 )
 from foundry.core.types import Phase
 from foundry.execution.state import AttemptPayload
-from foundry.http.retries import classify
+from foundry.execution.timeout import TIMEOUT_MARKER
+
+if TYPE_CHECKING:
+    import pytest
+
+# foundry.http is imported inside retry_label rather than here: importing the package pulls httpx
+# and its transport stack (~80 ms measured) into every pytest startup, and this module needs it
+# only to label an attempt that has already ended (AAP 0.14.2's startup budget, requirement I5).
 
 __all__: Final[tuple[str, ...]] = (
     "ExecutionRetries",
@@ -43,6 +51,9 @@ __all__: Final[tuple[str, ...]] = (
     "RETRYABLE_PHASES",
     "describe_attempts",
     "exhausted_message",
+    "failure_text",
+    "first_line",
+    "label_for_text",
     "retry_label",
     "should_retry",
 )
@@ -250,6 +261,8 @@ def retry_label(excinfo: BaseException | None, *, status_code: int | None = None
         classification names a predicate; :data:`LABEL_ASSERTION` for an :class:`AssertionError`;
         :data:`LABEL_ERROR` for any other exception; and ``None`` when there is nothing to classify.
     """
+    from foundry.http.retries import classify
+
     if excinfo is not None:
         predicate = classify(excinfo, None)
         if predicate is not None:
@@ -320,3 +333,92 @@ def exhausted_message(nodeid: str, payloads: Sequence[AttemptPayload]) -> str:
     if not payloads:
         return f"{subject}: retries exhausted with no attempt recorded"
     return f"{subject}: retries exhausted after {describe_attempts(payloads)}"
+
+
+# --- Reading a rendered failure for its label ------------------------------
+
+_TIMEOUT_LABEL: Final[str] = "timeout"
+"""``AttemptRecord.retry_on`` for a test-level timeout, spelled as the retry predicate is.
+
+Used only when :func:`retry_label` cannot name the ending, because a pytest-timeout failure is
+pytest's own ``Failed`` and carries no fault the predicates classify.
+"""
+
+_TIMEOUT_ERROR_NAME: Final[str] = "ReadTimeout"
+"""An ``httpx`` timeout exception, used to obtain the predicate spelling from ``retry_label``.
+
+No exception is recoverable from a rendered timeout, so a representative fault is classified.
+"""
+
+_ERROR_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\b([A-Z][A-Za-z0-9_]{2,}(?:Error|Exception|Timeout|Exit|Warning))\b"
+)
+"""An exception class name in a rendered failure: ``AssertionError``, ``ConnectError``, ``Failed``.
+
+A report carries rendered text rather than the exception, and the capitalised exception-shaped token
+is what keeps prose and paths out of the match.
+"""
+
+
+def failure_text(report: pytest.TestReport) -> str:
+    """Return a report's rendered failure, preferring the crash line over the whole traceback.
+
+    ``reprcrash.message`` is the one line pytest prints after the traceback. A ``longrepr`` that
+    cannot be rendered is read as no message rather than raising (AAP 0.1.2).
+    """
+    longrepr: object = report.longrepr
+    crash: object = getattr(longrepr, "reprcrash", None)
+    message: object = getattr(crash, "message", None)
+    if isinstance(message, str) and message.strip():
+        return message
+    if longrepr is None:
+        return ""
+    try:
+        return str(longrepr)
+    except Exception:
+        # Failure-isolation rule: an unrenderable traceback yields no message, never an exception.
+        return ""
+
+
+def first_line(text: str) -> str:
+    """Return the first non-empty line of ``text`` with its whitespace collapsed, or ``""``."""
+    for line in text.splitlines():
+        collapsed = " ".join(line.split())
+        if collapsed:
+            return collapsed
+    return ""
+
+
+def label_for_text(text: str) -> str:
+    """Return the label a rendered failure names, from the vocabulary this engine owns.
+
+    The label is diagnostic only, so reading it differently from the HTTP engine changes a word,
+    never a verdict.
+    """
+    if TIMEOUT_MARKER in text:
+        return retry_label(_recovered_error(_TIMEOUT_ERROR_NAME)) or _TIMEOUT_LABEL
+    for match in _ERROR_NAME_PATTERN.finditer(text):
+        recovered = _recovered_error(match.group(1))
+        if recovered is not None:
+            return retry_label(recovered) or LABEL_ERROR
+    return LABEL_ERROR
+
+
+def _recovered_error(name: str) -> BaseException | None:
+    """Return a representative exception for a class name a failure names, or ``None``.
+
+    :func:`retry_label` classifies an exception object while a report carries only rendered text,
+    and ``httpx`` is imported here because only a failing attempt asks for a label.
+    """
+    if name == "AssertionError":
+        return AssertionError()
+    try:
+        import httpx
+    except ImportError:
+        # httpx is a declared dependency; without it no predicate name can be recovered at all.
+        return None
+    candidate: object = getattr(httpx, name, None)
+    if isinstance(candidate, type) and issubclass(candidate, Exception):
+        error_type: type[Exception] = candidate
+        return error_type(name)
+    return None

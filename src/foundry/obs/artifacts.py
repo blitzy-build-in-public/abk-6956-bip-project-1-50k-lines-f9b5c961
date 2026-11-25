@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import types
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Final
@@ -34,7 +35,9 @@ __all__: Final[tuple[str, ...]] = (
     "ArtifactRef",
     "ArtifactWriter",
     "KEPT_WHEN_PASSED",
+    "active_writer",
     "node_dir",
+    "set_active_writer",
 )
 
 ARTIFACT_FILENAMES: Final[Mapping[ArtifactKind, str]] = types.MappingProxyType(
@@ -370,6 +373,41 @@ class ArtifactWriter:
             return
         self._state.warned = True
         emit_plumbing_failure("artifacts", message, exc=exc)
+
+
+# --- The test whose artifacts a request may record into ---------------------
+
+_ACTIVE_WRITER: Final[ContextVar[ArtifactWriter | None]] = ContextVar(
+    "foundry_active_artifact_writer", default=None
+)
+"""The writer of the test currently executing, for a caller that holds no item (AAP 0.4.8).
+
+A :class:`~contextvars.ContextVar` rather than a module global: it is per execution context, so two
+worker processes and any later threaded runner keep their own, it needs no lock, and there is no
+import-time state to reset. The value is the *bound* writer of the test in flight, so a requesting
+module writes into that test's directory without knowing its node id.
+"""
+
+
+def set_active_writer(writer: ArtifactWriter | None) -> None:
+    """Make ``writer`` the writer of the test in flight, or unbind with ``None``.
+
+    Called by the driver that runs one item (``foundry.execution.coordinator``) before its first
+    attempt and with ``None`` once its attempts are done, so nothing another test writes can land in
+    this test's directory. Overwriting rather than resetting a token is deliberate: the driver runs
+    the items of one process one after another, and a writer bound for a test that never finished
+    would be worse than losing the token stack.
+    """
+    _ACTIVE_WRITER.set(writer)
+
+
+def active_writer() -> ArtifactWriter | None:
+    """Return the writer of the test in flight, or ``None`` when no test is capturing.
+
+    ``None`` is the ordinary answer outside a test and for a run whose artifact directory could not
+    be created, and every caller treats it as "record nothing" rather than as a fault.
+    """
+    return _ACTIVE_WRITER.get()
 
 
 def _decode(data: str | bytes) -> str:

@@ -18,7 +18,7 @@ from typing import Final
 
 from foundry.core.exceptions import DataError, ElementTypeError
 from foundry.obs.events import emit_plumbing_failure, emit_report_written
-from foundry.obs.redaction import Redactor, default_redactor
+from foundry.obs.redaction import REDACTED, Redactor, default_redactor
 from foundry.reporting.record import (
     ArtifactRecord,
     FailureRecord,
@@ -49,6 +49,11 @@ _DOCUMENT_HINT: Final[str] = (
     "regenerate it with a Foundry run"
 )
 """Next step offered with every :class:`DataError` raised by :func:`loads`."""
+
+_REDACTION_FAULT: Final[str] = (
+    "could not redact a value, so the document carries the redaction marker instead"
+)
+"""Logged when scrubbing one value raised; the value is replaced rather than written (AAP 0.1.2)."""
 
 
 def dumps(elements: Sequence[ResultElement], *, redactor: Redactor | None = None) -> str:
@@ -241,6 +246,21 @@ def _run_error_sort_key(error: RunError) -> tuple[str, str]:
 # --- Redaction -------------------------------------------------------------
 
 
+def _scrubbed(scrub: Redactor, text: str) -> str:
+    """Return ``text`` redacted, or the redaction marker when the scrubber itself raised.
+
+    The document is the run's machine-readable record, so one unscrubbable value costs that value
+    and one ``WARNING`` rather than the whole file: the value is replaced, and nothing the scrubber
+    could not clean is written anywhere (AAP 0.1.2, 0.14.3).
+    """
+    try:
+        return scrub.text(text)
+    except Exception as error:
+        # Failure-isolation rule: an unscrubbable value is replaced, never written as it stands.
+        emit_plumbing_failure(_COMPONENT, _REDACTION_FAULT, exc=error)
+        return REDACTED
+
+
 def _redact_record(record: ResultRecord, scrub: Redactor) -> dict[str, object]:
     """Return ``record``'s serialised form with every free-text value redacted.
 
@@ -258,9 +278,9 @@ def _redact_record(record: ResultRecord, scrub: Redactor) -> dict[str, object]:
 def _redact_failure(failure: FailureRecord, scrub: Redactor) -> dict[str, object]:
     """Return one failure entry with its message and its traceback path redacted."""
     payload = failure.to_dict()
-    payload["message"] = scrub.text(failure.message)
+    payload["message"] = _scrubbed(scrub, failure.message)
     if failure.traceback_path is not None:
-        payload["traceback_path"] = scrub.text(failure.traceback_path)
+        payload["traceback_path"] = _scrubbed(scrub, failure.traceback_path)
     return payload
 
 
@@ -271,14 +291,14 @@ def _redact_artifact(artifact: ArtifactRecord, scrub: Redactor) -> dict[str, obj
     the path is scrubbed like any other text before it reaches the document.
     """
     payload = artifact.to_dict()
-    payload["path"] = scrub.text(artifact.path)
+    payload["path"] = _scrubbed(scrub, artifact.path)
     return payload
 
 
 def _redact_run_error(error: RunError, scrub: Redactor) -> dict[str, object]:
     """Return one run-error element with its message redacted."""
     payload = error.to_dict()
-    payload["message"] = scrub.text(error.message)
+    payload["message"] = _scrubbed(scrub, error.message)
     return payload
 
 

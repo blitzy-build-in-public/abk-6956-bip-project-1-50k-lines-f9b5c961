@@ -128,11 +128,12 @@ class _XdistNode(typing.Protocol):
 def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginManager) -> None:
     """Declare the whole ``--foundry-*`` option surface, with no configuration file read.
 
-    Historic hook, so it is called for an entry-point plugin before any argument is parsed, which is
-    why every option can be declared without a ``conftest.py`` (AAP 0.4.2). Two families are
-    registered: the named aliases AAP 0.4.4 publishes, and a generic
-    ``--foundry-<dotted.key>`` for every *scalar* key in :data:`foundry.config.keys.KEY_SPECS`, so
-    criterion 4's ``--foundry-http.timeout 1.0`` and the table's ``--foundry-timeout`` both exist.
+    Historic hook, so it is called before any argument is parsed, for an entry-point plugin too: no
+    ``conftest.py`` is needed to declare anything (AAP 0.4.2). Two families are registered -- the
+    aliases AAP 0.4.4 publishes and a generic ``--foundry-<dotted.key>`` for every *scalar* key of
+    :data:`foundry.config.keys.KEY_SPECS`, so criterion 4's ``--foundry-http.timeout 1.0`` and the
+    table's ``--foundry-timeout`` both exist. A misspelt spelling gains a placeholder option, since
+    AAP 0.4.7 answers an unknown key in any layer with exit 2 while pytest's parser answers 4.
     Nothing is read from the parsed namespace, so ``--help`` is safe.
     """
     from foundry.config import cli_layer, keys
@@ -166,6 +167,7 @@ def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginMa
                 help_text=f"{spec.dotted} ({spec.constraint})",
                 kind=spec.kind,
             )
+    cli_layer.register_unregistered_options(parser, pluginmanager)
 
 
 def _add_option(
@@ -218,7 +220,7 @@ def pytest_configure(config: pytest.Config) -> None:
     try:
         state = _boot(config)
     except exceptions.FoundryError as exc:
-        pytest.exit(str(exc), returncode=_CONFIG_EXIT)
+        pytest.exit(exc.format_message(), returncode=_CONFIG_EXIT)
     session.stash_session(config, state)
     _seed_timeout(config, state)
 
@@ -380,8 +382,9 @@ def _stamp(item: pytest.Item, report: pytest.TestReport) -> None:
     decision = item.stash.get(exec_state.ITEM_QUARANTINE, None) or state.quarantine.decide(
         quarantined=quarantine.is_quarantined(markers), outcome=outcome
     )
-    ring = item.stash.get(exec_state.ITEM_LOG_RING, None)
-    writer = item.stash.get(exec_state.ITEM_ARTIFACTS, None)
+    artifacts, log_tail = coordinator.capture_artifacts(
+        item, tuple(reports), final=report.when == "teardown"
+    )
     payload = session.assemble_payload(
         state=state,
         nodeid=item.nodeid,
@@ -389,8 +392,8 @@ def _stamp(item: pytest.Item, report: pytest.TestReport) -> None:
         reports=tuple(reports),
         attempts=(*attempts, _in_flight(item, outcome)),
         quarantine=decision,
-        artifacts=() if writer is None else writer.manifest,
-        log_tail=() if ring is None else ring.tail(),
+        artifacts=artifacts,
+        log_tail=log_tail,
         started_at=item.stash.get(exec_state.ITEM_STARTED_AT, state.started_at),
         finished_at=ids.utc_now(),
     )

@@ -8,7 +8,7 @@ and the option spelling that supplied it, which ``foundry config show --resolved
 from __future__ import annotations
 
 import types
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, TypeVar
@@ -29,6 +29,8 @@ __all__: Final[tuple[str, ...]] = (
     "alias_dest",
     "collect_from_pytest",
     "from_mapping",
+    "register_unregistered_options",
+    "unregistered_spellings",
 )
 
 GENERIC_OPTION_PREFIX: Final[str] = keys.GENERIC_OPTION_PREFIX
@@ -55,6 +57,16 @@ _CASSETTE_MODE_KEY: Final[str] = "cassette.mode"
 
 _PATH_EXPECTED: Final[str] = "a path"
 """Expected type named when a path-valued option carries something that is not a path."""
+
+_CONFIG_PLUGIN_NAME: Final[str] = "pytestconfig"
+"""The name pytest registers its own :class:`pytest.Config` under, which carries the argument list.
+
+``pytest_addoption`` receives the parser and the plugin manager but no arguments, so the one
+placeholder registration reads the list the ``Config`` already holds.
+"""
+
+_UNREGISTERED_HELP_TEMPLATE: Final[str] = "{spelling} configures no Foundry key and is rejected"
+"""The help text of a placeholder option, which only a run's own ``--help`` could ever show."""
 
 _FLAG_OFF_WORDS: Final[frozenset[str]] = frozenset({"", "false", "0", "no", "off"})
 """The spellings of a supplied-but-disabled flag.
@@ -190,6 +202,82 @@ def alias_dest(option: str) -> str:
     return _ALIAS_DEST_PREFIX + spelling.replace("-", "_")
 
 
+def _is_registered_option(spelling: str) -> bool:
+    """Report whether :mod:`foundry.plugin` registers an ``argparse`` option for ``spelling``.
+
+    The plugin registers three families: the four :data:`SPECIAL_OPTIONS`, the generic spelling of
+    every scalar key and each declared alias. A list- or table-valued key therefore has no option of
+    its own -- ``--foundry-http.headers`` is carried by the file layer alone -- and
+    :func:`from_mapping` refuses it with :func:`foundry.config.errors.option_not_settable` once the
+    placeholder below has made the token parseable.
+    """
+    if spelling in _SPECIAL_BY_SPELLING:
+        return True
+    dotted = keys.option_to_key(spelling)
+    spec = keys.spec_for(dotted) if dotted is not None else None
+    return spec is not None and keys.is_scalar(spec)
+
+
+def unregistered_spellings(args: Iterable[str]) -> tuple[str, ...]:
+    """Return the ``--foundry-*`` spellings in ``args`` that no registered option answers.
+
+    Every token starting with :data:`GENERIC_OPTION_PREFIX` is examined, in the order it was typed
+    and once each, with an inline value dropped, so what comes back is the spelling alone.
+
+    Two consumers, one scan: :func:`register_unregistered_options` registers a placeholder for each
+    spelling before pytest parses the command line, and :func:`collect_from_pytest` reads the value
+    back through it so the configuration layer can reject the key.
+    """
+    found: list[str] = []
+    for token in args:
+        if not token.startswith(GENERIC_OPTION_PREFIX):
+            continue
+        spelling = token.partition(_OPTION_VALUE_SEPARATOR)[0]
+        if _is_registered_option(spelling) or spelling in found:
+            continue
+        found.append(spelling)
+    return tuple(found)
+
+
+def _placeholder_dest(spelling: str) -> str:
+    """Return the pytest ``dest`` a placeholder option stores its value under.
+
+    The generic convention again: the dotted key the spelling names with each ``.`` folded to
+    ``__``, so :func:`collect_from_pytest` reads the value back by the rule the option was
+    registered with rather than by a second one.
+    """
+    dotted = spelling.partition(_OPTION_VALUE_SEPARATOR)[0].removeprefix(GENERIC_OPTION_PREFIX)
+    return keys.option_dest(dotted)
+
+
+def register_unregistered_options(
+    parser: pytest.Parser, pluginmanager: pytest.PytestPluginManager
+) -> None:
+    """Register a placeholder ``argparse`` option for each misspelt ``--foundry-*`` spelling.
+
+    pytest refuses an option it was never told about with its usage-error code 4, before
+    ``pytest_configure`` runs, while AAP 0.4.5 and AAP 0.4.7 publish exit 2 for an unknown key in
+    *any* layer, the command line included. Registering the spelling exactly as it was typed keeps
+    the token parseable; :func:`collect_from_pytest` then hands its value to :func:`from_mapping`,
+    which rejects the key naming ``difflib``'s nearest valid spelling and ends the session at exit 2
+    through the ordinary configuration-error path. Nothing is applied: the option exists to be
+    refused. Called from :func:`foundry.plugin.pytest_addoption`, the one registration point.
+    """
+    config = pluginmanager.get_plugin(_CONFIG_PLUGIN_NAME)
+    if config is None:
+        return
+    typed = getattr(getattr(config, "invocation_params", None), "args", ())
+    for spelling in unregistered_spellings(typed):
+        parser.addoption(
+            spelling,
+            dest=_placeholder_dest(spelling),
+            default=None,
+            type=str,
+            metavar="VALUE",
+            help=_UNREGISTERED_HELP_TEMPLATE.format(spelling=spelling),
+        )
+
+
 def from_mapping(raw: Mapping[str, object], *, cwd: Path | None = None) -> CliInput:
     """Collect the ``--foundry-*`` overrides a command line supplied.
 
@@ -295,6 +383,8 @@ def collect_from_pytest(config: pytest.Config) -> CliInput:
         _remember(
             raw, special.spelling, config.getoption(alias_dest(special.spelling), default=None)
         )
+    for spelling in unregistered_spellings(config.invocation_params.args):
+        _remember(raw, spelling, config.getoption(_placeholder_dest(spelling), default=None))
     return from_mapping(raw)
 
 

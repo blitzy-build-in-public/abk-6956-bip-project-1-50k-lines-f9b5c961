@@ -22,7 +22,6 @@ Elapsed time comes from :func:`time.monotonic` alone, and the clock enters throu
 
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -33,7 +32,9 @@ from foundry.core.types import PHASES, AttemptRecord, Phase
 from foundry.execution import quarantine, retry, timeout
 from foundry.execution.session import SessionState, session_state
 from foundry.execution.state import (
+    ITEM_ARTIFACTS,
     ITEM_ATTEMPTS,
+    ITEM_LOG_RING,
     ITEM_QUARANTINE,
     ITEM_STARTED_AT,
     ITEM_STARTED_MONOTONIC,
@@ -46,9 +47,12 @@ from foundry.obs.redaction import MAX_EXCERPT_BYTES, Redactor
 if TYPE_CHECKING:
     import pytest
 
+    from foundry.obs.artifacts import ArtifactRef, ArtifactWriter
+
 __all__: Final[tuple[str, ...]] = (
     "AttemptLedger",
     "EMPTY_LEDGER",
+    "capture_artifacts",
     "classify_reports",
     "final_outcome",
     "first_failure_message",
@@ -78,28 +82,6 @@ _FAILURE_OUTCOMES: Final[tuple[OutcomeValue, ...]] = ("failed", "error")
 _CALL_PHASE: Final[Phase] = "call"
 """The phase an attempt with no failing report is attributed to, for the retry decision alone."""
 
-_LABEL_TIMEOUT: Final[str] = "timeout"
-"""``AttemptRecord.retry_on`` for a test-level timeout, spelled as the retry predicate is.
-
-Used only when :func:`foundry.execution.retry.retry_label` cannot name the ending, because a
-pytest-timeout failure is pytest's own ``Failed`` and carries no fault the predicates classify.
-"""
-
-_TIMEOUT_ERROR_NAME: Final[str] = "ReadTimeout"
-"""An ``httpx`` timeout exception, used to obtain the predicate spelling from ``retry_label``.
-
-No exception is recoverable from a rendered timeout, so a representative fault is classified.
-"""
-
-_ERROR_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\b([A-Z][A-Za-z0-9_]{2,}(?:Error|Exception|Timeout|Exit|Warning))\b"
-)
-"""An exception class name in a rendered failure: ``AssertionError``, ``ConnectError``, ``Failed``.
-
-A report carries rendered text rather than the exception, and the capitalised exception-shaped token
-is what keeps prose and paths out of the match.
-"""
-
 _MISSING_STATE_MESSAGE: Final[str] = (
     "the retry driver found no session state, so the item ran once as pytest would run it"
 )
@@ -124,6 +106,16 @@ _QUARANTINE_MESSAGE: Final[str] = (
     "the retry driver could not take the quarantine decision, so the default verdict applies"
 )
 """Logged when the quarantine verdict could not be decided or stored (AAP 0.1.2)."""
+
+_CAPTURE_MESSAGE: Final[str] = (
+    "per-test artifact capture faulted, so this test's artifacts are incomplete"
+)
+"""Logged when the item's writer or log ring could not be bound or written (AAP 0.1.2)."""
+
+_MESSAGE_FAULT: Final[str] = (
+    "the retry driver could not redact a failure message, so this attempt carries none"
+)
+"""Logged when scrubbing a failure message raised; the attempt is still recorded (AAP 0.1.2)."""
 
 _KeyT = TypeVar("_KeyT")
 
@@ -268,10 +260,26 @@ def first_failure_message(reports: Sequence[pytest.TestReport], redactor: Redact
     report = _first_failure(reports)
     if report is None:
         return None
-    line = _first_line(_failure_text(report))
+    line = retry.first_line(retry.failure_text(report))
     if not line:
         return None
     return redactor.text(line, limit=MAX_EXCERPT_BYTES)
+
+
+def _failure_message(reports: Sequence[pytest.TestReport], redactor: Redactor) -> str | None:
+    """Return the first failure's redacted message, isolating a redaction fault to one warning.
+
+    :func:`first_failure_message` scrubs before the excerpt is kept, so a scrubber that raises would
+    otherwise end the run rather than cost one attempt its label. The message is dropped rather than
+    kept unscrubbed: a redaction fault must never become the leak the scrubber exists to prevent
+    (AAP 0.1.2, 0.14.3).
+    """
+    try:
+        return first_failure_message(reports, redactor)
+    except Exception as error:
+        # Failure-isolation rule: a redaction fault may not change an outcome or an exit code.
+        events.emit_plumbing_failure(_COMPONENT, _MESSAGE_FAULT, exc=error)
+        return None
 
 
 def run_attempts(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
@@ -289,13 +297,17 @@ def run_attempts(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
     if state is None:
         return _plain_pass(item, nextitem)
     _prepare_item(item)
+    _start_capture(item, state)
     ihook = item.ihook
     ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
-    reports = _attempt_loop(item, nextitem, state)
-    if not reports:
-        # No attempt survived Foundry's own plumbing, so the item runs once more, unretried: the
-        # outcome the test earns is then the outcome the run reports, unchanged (AAP 0.1.2).
-        reports = _plain_run(item, nextitem)
+    try:
+        reports = _attempt_loop(item, nextitem, state)
+        if not reports:
+            # No attempt survived Foundry's own plumbing, so the item runs once more, unretried: the
+            # outcome the test earns is then the outcome the run reports, unchanged (AAP 0.1.2).
+            reports = _plain_run(item, nextitem)
+    finally:
+        _stop_capture(item)
     _stamp_quarantine(item, state, reports)
     for report in reports:
         ihook.pytest_runtest_logreport(report=report)
@@ -342,7 +354,7 @@ def _attempt_loop(
                 outcome=outcome,
                 elapsed_ms=elapsed_ms,
                 retry_on=label,
-                message=first_failure_message(reports, state.redactor),
+                message=_failure_message(reports, state.redactor),
             ),
         )
         if not retry.should_retry(
@@ -392,6 +404,144 @@ def _record_attempt(item: pytest.Item, record: AttemptRecord) -> None:
         events.emit_plumbing_failure(_COMPONENT, _LEDGER_MESSAGE, exc=error)
         return
     events.emit_attempt(nodeid=item.nodeid, attempt=record.number, outcome=record.outcome)
+
+
+# --- Per-test artifact capture ---------------------------------------------
+
+
+def _start_capture(item: pytest.Item, state: SessionState) -> None:
+    """Bind this item's artifact writer and its bounded log ring before the first attempt.
+
+    AAP 0.4.6 gives every collected test one directory under ``artifacts/<run_id>/`` and AAP 0.14.2
+    bounds its log tail at ``logging.capture_lines``, so both are created here, once per item, and
+    published on the typed item stash :func:`capture_artifacts` reads. The ring is attached for the
+    whole protocol -- setup, every attempt and teardown -- which makes the tail a complete answer
+    to "what did this test log", and the writer is also made the process's active one so the HTTP
+    layer records the exchange the test made (AAP 0.4.6, requirement I5).
+
+    A fault is one ``WARNING`` and leaves the test with no artifacts rather than a new outcome; a
+    run whose artifact directory could not be created binds no writer at all (AAP 0.4.7).
+    """
+    try:
+        from foundry.obs.artifacts import set_active_writer
+        from foundry.obs.capture import LogRing
+
+        writer = state.writer.for_node(item.nodeid)
+        item.stash[ITEM_ARTIFACTS] = writer
+        ring = LogRing(capacity=state.capture_lines)
+        if ring.capacity > 0:
+            ring.attach()
+        item.stash[ITEM_LOG_RING] = ring
+        set_active_writer(writer if state.artifacts_enabled else None)
+    except Exception as error:
+        # Failure-isolation rule: capture may not change a test's outcome (AAP 0.1.2).
+        events.emit_plumbing_failure(_COMPONENT, _CAPTURE_MESSAGE, exc=error)
+
+
+def _stop_capture(item: pytest.Item) -> None:
+    """Detach the log ring and unbind the writer once the item's attempts are over.
+
+    Detaching matters as much as attaching: a ring left on the ``foundry`` logger would collect the
+    next test's records into this test's tail, and a writer left bound would let any later request
+    land in this test's directory (AAP 0.4.8).
+    """
+    try:
+        from foundry.obs.artifacts import set_active_writer
+
+        set_active_writer(None)
+        ring = item.stash.get(ITEM_LOG_RING, None)
+        if ring is not None:
+            ring.detach()
+    except Exception as error:
+        # Failure-isolation rule: capture may not change a test's outcome (AAP 0.1.2).
+        events.emit_plumbing_failure(_COMPONENT, _CAPTURE_MESSAGE, exc=error)
+
+
+def capture_artifacts(
+    item: pytest.Item,
+    reports: Sequence[pytest.TestReport],
+    *,
+    final: bool,
+) -> tuple[tuple[ArtifactRef, ...], tuple[str, ...]]:
+    """Write one test's artifacts on its last phase and return its manifest and log tail.
+
+    ``plugin.py`` stamps every phase's report and the teardown phase is the one whose payload the
+    controller keeps, so the files are written there: ``stdout.log`` and ``stderr.log`` from the
+    sections pytest captured, ``traceback.txt`` from the first failing phase, ``log_tail.log`` from
+    the bounded ring, then ``manifest.json`` through
+    :meth:`foundry.obs.artifacts.ArtifactWriter.finalize`, which also leaves a passing test with
+    only its manifest (AAP 0.4.5, AAP 0.4.6). The request and response dumps are written by the HTTP
+    layer as the test makes its request, so a panel links the exchange the test itself produced.
+
+    Returns:
+        ``(artifacts, log_tail)``: the manifest as the record lists it, and the newest captured log
+        lines -- the same lines the report's panel reads back from ``log_tail.log``. Both are empty
+        for a phase that is not the last one, and for a test that captured nothing.
+    """
+    ring = item.stash.get(ITEM_LOG_RING, None)
+    log_tail = () if ring is None else ring.tail()
+    writer = item.stash.get(ITEM_ARTIFACTS, None)
+    if writer is None:
+        return (), log_tail
+    if not final:
+        return writer.manifest, log_tail
+    try:
+        _write_captured(reports, writer, log_tail)
+    except Exception as error:
+        # Failure-isolation rule: a capture fault may not change an outcome or an exit code.
+        events.emit_plumbing_failure(_COMPONENT, _CAPTURE_MESSAGE, exc=error)
+    return writer.manifest, log_tail
+
+
+def _write_captured(
+    reports: Sequence[pytest.TestReport], writer: ArtifactWriter, log_tail: Sequence[str]
+) -> None:
+    """Write the four captured artifacts of one test and finalise its manifest.
+
+    An empty stream writes no file rather than an empty one, so the record lists only the artifacts
+    the test really produced and the panel links only what a reader can open (AAP 0.4.7).
+    """
+    stdout = _captured_stream(reports, "stdout")
+    stderr = _captured_stream(reports, "stderr")
+    if stdout:
+        writer.write_text("stdout", stdout)
+    if stderr:
+        writer.write_text("stderr", stderr)
+    failure = _first_failure(reports)
+    if failure is not None:
+        rendered = _rendered_traceback(failure)
+        if rendered:
+            writer.write_text("traceback", rendered)
+    writer.write_log_tail(log_tail)
+    writer.finalize(passed=final_outcome(reports) == _PASSED)
+
+
+def _captured_stream(reports: Sequence[pytest.TestReport], stream: str) -> str:
+    """Return the text pytest captured on ``stream`` across the phases of one attempt.
+
+    pytest 8 carries captured output as per-phase sections rather than as a ``capstdout`` attribute,
+    and each report holds only its own phase's section, so the phases of one attempt are joined in
+    setup-call-teardown order without repeating a section.
+    """
+    prefix = f"Captured {stream}"
+    return "".join(
+        content
+        for report in reports
+        for title, content in report.sections
+        if title.startswith(prefix)
+    )
+
+
+def _rendered_traceback(report: pytest.TestReport) -> str:
+    """Return a failing report's whole rendered traceback, or ``""`` when it cannot be rendered."""
+    longrepr: object = report.longrepr
+    if longrepr is None:
+        return ""
+    try:
+        return str(longrepr)
+    except Exception:
+        # Failure-isolation rule: an unrenderable traceback yields no file, never an exception.
+        return ""
 
 
 def _stamp_quarantine(
@@ -465,71 +615,7 @@ def _failing_phase(reports: Sequence[pytest.TestReport]) -> Phase:
     return _CALL_PHASE
 
 
-def _failure_text(report: pytest.TestReport) -> str:
-    """Return a report's rendered failure, preferring the crash line over the whole traceback.
-
-    ``reprcrash.message`` is the one line pytest prints after the traceback. A ``longrepr`` that
-    cannot be rendered is read as no message rather than raising (AAP 0.1.2).
-    """
-    longrepr: object = report.longrepr
-    crash: object = getattr(longrepr, "reprcrash", None)
-    message: object = getattr(crash, "message", None)
-    if isinstance(message, str) and message.strip():
-        return message
-    if longrepr is None:
-        return ""
-    try:
-        return str(longrepr)
-    except Exception:
-        # Failure-isolation rule: an unrenderable traceback yields no message, never an exception.
-        return ""
-
-
-def _first_line(text: str) -> str:
-    """Return the first non-empty line of ``text`` with its whitespace collapsed, or ``""``."""
-    for line in text.splitlines():
-        collapsed = " ".join(line.split())
-        if collapsed:
-            return collapsed
-    return ""
-
-
 def _failure_label(reports: Sequence[pytest.TestReport]) -> str:
     """Return the diagnostic label describing how an attempt ended."""
     report = _first_failure(reports)
-    return _label_for("" if report is None else _failure_text(report))
-
-
-def _label_for(text: str) -> str:
-    """Return the label a rendered failure names, from the vocabulary the retry engine shares.
-
-    The label is diagnostic only, so reading it differently from the HTTP engine changes a word,
-    never a verdict.
-    """
-    if timeout.TIMEOUT_MARKER in text:
-        return retry.retry_label(_recovered_error(_TIMEOUT_ERROR_NAME)) or _LABEL_TIMEOUT
-    for match in _ERROR_NAME_PATTERN.finditer(text):
-        recovered = _recovered_error(match.group(1))
-        if recovered is not None:
-            return retry.retry_label(recovered) or retry.LABEL_ERROR
-    return retry.LABEL_ERROR
-
-
-def _recovered_error(name: str) -> BaseException | None:
-    """Return a representative exception for a class name a failure names, or ``None``.
-
-    ``retry.retry_label`` classifies an exception object while a report carries only rendered text,
-    and ``httpx`` is imported here because only a failing attempt asks for a label.
-    """
-    if name == "AssertionError":
-        return AssertionError()
-    try:
-        import httpx
-    except ImportError:
-        # httpx is a declared dependency; without it no predicate name can be recovered at all.
-        return None
-    candidate: object = getattr(httpx, name, None)
-    if isinstance(candidate, type) and issubclass(candidate, Exception):
-        error_type: type[Exception] = candidate
-        return error_type(name)
-    return None
+    return retry.label_for_text("" if report is None else retry.failure_text(report))

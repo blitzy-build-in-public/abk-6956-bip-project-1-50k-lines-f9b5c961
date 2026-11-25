@@ -41,8 +41,10 @@ from foundry.execution.state import (
 )
 from foundry.execution.timeout import TimeoutPolicy
 from foundry.obs.artifacts import ArtifactRef, ArtifactWriter
-from foundry.obs.events import emit_run_start
-from foundry.obs.redaction import Redactor
+from foundry.obs.events import emit_plumbing_failure, emit_run_start
+from foundry.obs.logging import configure as configure_logging
+from foundry.obs.logging import install_redaction_filter
+from foundry.obs.redaction import REDACTED, Redactor
 
 if TYPE_CHECKING:
     import pytest
@@ -99,6 +101,14 @@ settings the controller never had.
 
 _UNRANKED: Final[int] = len(PHASES)
 """Rank for a report whose ``when`` names no phase: it sorts last and is skipped."""
+
+_COMPONENT: Final[str] = "execution.session"
+"""The component name every plumbing warning from this module carries, matching its dotted path."""
+
+_REDACTION_FAULT: Final[str] = (
+    "could not redact a failure message, so its entry carries the redaction marker instead"
+)
+"""Logged when scrubbing one failure message raised; the record keeps its phase (AAP 0.1.2)."""
 
 
 class PhaseReport(Protocol):
@@ -206,7 +216,7 @@ def create_state(
         keep_passed=config.artifacts.keep_passed,
         created_at=to_iso8601(moment),
     )
-    return SessionState(
+    state = SessionState(
         run_id=identifier,
         profile=profile,
         config=config,
@@ -221,6 +231,16 @@ def create_state(
         timeout=TimeoutPolicy.from_config(config.execution.timeout),
         started_at=moment,
     )
+    # ``logging.level`` applies to the ``foundry`` logger and nothing else (AAP 0.4.5, AAP 0.4.8).
+    # It is applied once per process because the resolved level is what lets an ``INFO`` record from
+    # the suite reach the capture ring and the report's log tail (requirement I7).
+    configure_logging(config.logging.level)
+    # The run's engine masks every record the suite logs through the ``foundry`` logger before any
+    # handler renders it, so pytest's captured-log block, the terminal and the log tail carry the
+    # marker rather than the value (AAP 0.2.1, AAP 0.3.2, AAP 0.14.3). One bootstrap per process
+    # installs one filter, and a worker rebuilding the controller's state keeps that one.
+    install_redaction_filter(redactor)
+    return state
 
 
 def bootstrap_session(
@@ -591,9 +611,25 @@ def _failure_entries(
         if phase is None or report.outcome != _FAILED:
             continue
         longrepr = report.longrepr
-        message = redactor.text("" if longrepr is None else str(longrepr))
+        message = _scrubbed_message("" if longrepr is None else str(longrepr), redactor)
         entries.append(FailurePayload(phase=phase, message=message, traceback_path=traceback_path))
     return tuple(entries)
+
+
+def _scrubbed_message(text: str, redactor: Redactor) -> str:
+    """Return ``text`` redacted, or the redaction marker when the scrubber itself raised.
+
+    A redaction fault costs one ``WARNING`` and the message, and nothing else: the entry keeps its
+    phase, so the record keeps the outcome the test earned -- a fault that dropped the entry instead
+    would publish a failure as a skip -- and no text the scrubber could not clean is ever written
+    (AAP 0.1.2, 0.14.3).
+    """
+    try:
+        return redactor.text(text)
+    except Exception as error:
+        # Failure-isolation rule: an unscrubbable message is replaced, never written as it stands.
+        emit_plumbing_failure(_COMPONENT, _REDACTION_FAULT, exc=error)
+        return REDACTED
 
 
 def _traceback_path(artifacts: Sequence[ArtifactRef]) -> str | None:

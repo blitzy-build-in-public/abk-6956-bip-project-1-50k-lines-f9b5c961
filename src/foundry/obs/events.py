@@ -221,8 +221,15 @@ def emit_run_start(run_id: str, profile: str, artifacts_root: str | Path) -> Non
 
 
 def emit_resolution(key: str, layer: str, detail: str) -> None:
-    """Record which layer decided a configuration key, at ``DEBUG``, never the value itself."""
-    _emit("config_resolution", LEVEL_DEBUG, _pairs(key=key, layer=layer, detail=detail))
+    """Record which layer decided a configuration key, at ``DEBUG``, never the value itself.
+
+    The key is published as ``option=``, not as ``key=``:
+    :class:`foundry.obs.logging.RedactionFilter` masks the value of any ``name=value`` pair whose
+    name is secret-bearing, and ``key`` is a query-parameter deny-list name, so a field labelled
+    ``key`` would reach the log as ``key=***`` and lose the diagnostic AAP 0.1.2 requires the line
+    to carry. ``layer`` and ``detail`` name no secret, so they keep their own names.
+    """
+    _emit("config_resolution", LEVEL_DEBUG, _pairs(option=key, layer=layer, detail=detail))
 
 
 def emit_no_config_file() -> None:

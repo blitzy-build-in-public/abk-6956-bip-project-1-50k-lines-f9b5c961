@@ -33,6 +33,7 @@ from foundry.http.transport import (
     timeout_extension,
 )
 from foundry.http.url import join_url, require_base_url
+from foundry.obs.artifacts import active_writer
 from foundry.obs.events import emit_cassette_mode, emit_plumbing_failure
 from foundry.obs.redaction import Redactor, default_redactor
 
@@ -110,6 +111,11 @@ for an unparseable target. Nothing else is caught, so a transport fault reaches 
 
 _COMPONENT: Final[str] = "http.session"
 """The component name a plumbing-failure event from this module reports itself under."""
+
+_DUMP_MESSAGE: Final[str] = (
+    "could not record this exchange's request and response dumps, so its artifact files are missing"
+)
+"""Logged at ``WARNING`` when one of the two dumps cannot be written (AAP 0.4.6, AAP 0.1.2)."""
 
 _CLOSE_ERRORS: Final[tuple[type[BaseException], ...]] = (FoundryError, OSError)
 """The faults a cassette save at teardown may raise: a Foundry error or a filesystem fault.
@@ -435,12 +441,37 @@ class FoundrySession:
         outcome = self._runner.execute(send, method=verb, path=path)
         # 7. Wrap the reply together with the request that produced it, so both dumps describe the
         #    attempt whose response is being returned. ``execute`` always sends at least once.
-        return from_httpx(
+        response = from_httpx(
             outcome.response,
             elapsed_ms=outcome.elapsed_ms,
             redactor=self._redactor,
             request=sent[-1],
         )
+        self._capture_exchange(response)
+        return response
+
+    def _capture_exchange(self, response: FoundryResponse) -> None:
+        """Record this exchange as the running test's ``request.json`` and ``response.json``.
+
+        AAP 0.4.6 puts one request dump and one response dump in each test's artifact directory, so
+        the exchange a failure panel links to is the one the test made. The writer is looked up from
+        :func:`foundry.obs.artifacts.active_writer` rather than held on the session, because the
+        session is built by a fixture that sees no item (AAP 0.4.8): outside a test, and for a run
+        whose artifact directory could not be created, no writer is bound and nothing is written.
+
+        A capture fault is isolated (AAP 0.1.2): one ``WARNING`` leaves the response, the outcome
+        and the exit code untouched. Every dump is already redacted by the response's own engine
+        (AAP 0.3.2), so a configured secret has no route onto the disk.
+        """
+        writer = active_writer()
+        if writer is None:
+            return
+        try:
+            writer.write_json("request", response.request_dump())
+            writer.write_json("response", response.response_dump())
+        except Exception as error:
+            # Failure-isolation rule (AAP 0.1.2): a dump fault cannot change a request's result.
+            emit_plumbing_failure(_COMPONENT, _DUMP_MESSAGE, exc=error)
 
     def get(
         self,

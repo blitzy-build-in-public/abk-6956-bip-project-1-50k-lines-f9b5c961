@@ -1,376 +1,396 @@
-"""The example project's own plumbing: the offline guard, an echo server and the configuration.
+"""The example project's own plumbing: the offline guard, a deterministic echo server and the
+``foundry_config`` override that points Foundry at the example's directories.
 
-AAP 0.8.1 gives ``examples/checkout`` this file, and it does the three things the example cannot do
-from a data file: it keeps the run offline, it serves the API tests a real HTTP endpoint, and it
-points Foundry's configuration at the example's own directories.
+Run it with ``pytest examples/checkout`` **from the repository root**: that is what makes the root
+directory the repository root, so node ids read ``examples/checkout/test_*.py::test_*`` -- the form
+the cassettes under ``cassettes/`` are named by -- and the run writes ``artifacts/<run_id>/``,
+``results.json``, ``junit.xml`` and ``report.html`` into the invocation directory. Those outputs are
+the plugin's work (AAP 0.4.2); this file supplies the guard, the server and the settings.
 
-**The example carries no ``foundry.toml``.** The documented command is ``pytest examples/checkout``
-run from the repository root, where configuration discovery looks at the invocation directory and
-would never read a file inside the example (AAP 0.8.1, assumption A9). The ``foundry_config``
-override below -- pytest's documented same-name override of the public session-scoped fixture (AAP
-0.4.3) -- is how ``data.dir``, ``cassette.dir`` and ``http.base_url`` reach the example instead,
-which is also why its data and cassettes sit beside this file. ``artifacts.dir`` keeps its
-default, so ``artifacts/<run_id>/`` appears in the invocation directory as the criterion requires.
+The guard (AAP 0.14.3) is installed at import, before any test module loads, over
+``socket.getaddrinfo``, ``socket.socket.connect`` and ``socket.socket.connect_ex``. Resolution is
+wrapped because a hostname fails there before ``connect`` is reached, so a connect-only guard would
+measure nothing. A loopback target is counted and served; any other is counted and refused with an
+``AssertionError`` naming it, before the syscall runs. The guard publishes the two names
+``foundry.diagnostics.socket_guard`` reads -- ``FOUNDRY_SOCKET_GUARD`` and a live
+``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` -- and a second installation adopts the first one's counters.
 
-**The offline guard** (AAP 0.14.3) patches ``socket.socket.connect`` and
-``socket.socket.connect_ex`` at import and permits only a loopback INET target: every address in
-``127.0.0.0/8``, ``::1``, and an IPv4-mapped loopback such as ``::ffff:127.0.0.1``. Any other
-target is recorded and refused *before* the syscall runs, so a test that tries to reach the network
-fails with a message naming it rather than hanging on it. The module publishes the two names
-``foundry.diagnostics.socket_guard`` reads -- ``FOUNDRY_SOCKET_GUARD`` and the live refusal count
-``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` -- so ``foundry doctor`` and the proof that the count is zero see
-what this guard refused. Installation is idempotent: a second import adopts the first import's
-state instead of wrapping the socket again.
-
-**The echo server** is a real ``http.server.ThreadingHTTPServer`` bound to ``127.0.0.1:0`` and
-served from a daemon thread, so nothing is mocked and every request is a loopback round trip. It
-echoes the request back as JSON, which lets an API test assert on what it actually sent. It is not
-started when the resolved ``cassette.mode`` is ``replay``, because a replay run has to prove it
-opens no socket at all (AAP 0.4.7).
+The server is a stdlib ``ThreadingHTTPServer`` on ``127.0.0.1:0`` serving five routes from a daemon
+thread, started in ``pytest_configure`` and stopped in ``pytest_unconfigure``. A replay run starts
+none, because replay has to prove it opens no socket (AAP 0.4.7). The example ships no configuration
+file (A9), so the same-name override of the public ``foundry_config`` fixture (AAP 0.4.3) supplies
+``http.base_url``, ``data.dir``, ``cassette.dir`` and ``execution.retries``, while
+``artifacts.dir`` keeps its default. The terminal summary carries exactly one line from this file,
+``checkout: socket-guard non-loopback=<n> loopback=<n>``, which is how the end-to-end test observes
+that no non-loopback connection was attempted.
 """
 
 from __future__ import annotations
 
-import ipaddress
+import hashlib
 import json
+import os
 import socket
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Never
-from urllib.parse import parse_qs, urlparse
+from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import urlparse
 
 import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from foundry.config.enums import CassetteMode
+    from _pytest.terminal import TerminalReporter
+
     from foundry.config.models import FoundryConfig
 
-# --- The loopback-only guard ------------------------------------------------
+# --- The example's own locations --------------------------------------------
+HERE: Final[Path] = Path(__file__).resolve().parent
+"""This example's directory, the anchor of the two absolute directory settings below."""
+TESTDATA_DIR: Final[Path] = HERE / "testdata"
+"""Absolute, so a bare data-file name resolves here and not against the invocation directory."""
+CASSETTE_DIR: Final[Path] = HERE / "cassettes"
+"""Absolute, so the committed cassettes are found and a normal run never writes into them."""
+REPLAY_BASE_URL: Final[str] = "http://127.0.0.1:8765"
+"""What a replay run reports: no server runs there, and cassette matching ignores the host (A7)."""
+BASE_URL_KEY: Final[pytest.StashKey[str]] = pytest.StashKey()
+"""This process's base URL: the echo server's, or :data:`REPLAY_BASE_URL` in a replay run."""
 
+_SERVER_KEY: Final[pytest.StashKey[ThreadingHTTPServer]] = pytest.StashKey()
+_THREAD_KEY: Final[pytest.StashKey[threading.Thread]] = pytest.StashKey()
 _INET_FAMILIES: Final[frozenset[int]] = frozenset({socket.AF_INET, socket.AF_INET6})
-"""The families the guard polices: every other family is local by construction."""
+_LOOPBACK_NAMES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
+_LOOPBACK_PREFIXES: Final[tuple[str, ...]] = ("127.", "::ffff:127.")
+_GUARD_MARK: Final[str] = "_foundry_checkout_guard"
+_MAX_BLOCKED: Final[int] = 20
+_OFFLINE_RULE: Final[str] = "the example suite opens no non-loopback socket (AAP 0.14.3)"
+_ECHO_HOST: Final[str] = "127.0.0.1"
+_SHUTDOWN_TIMEOUT: Final[float] = 5.0
+_ORDERS_PATH: Final[str] = "/orders/"
+_RETRIES: Final[int] = 1
+_HEALTH: Final[dict[str, str]] = {"service": "checkout", "status": "ok", "version": "0.1.0"}
 
-_GUARD_MARK: Final[str] = "_foundry_checkout_socket_guard"
-"""Attribute holding this module's state on each wrapper: what makes installation idempotent."""
-
-_OFFLINE_RULE: Final[str] = "AAP 0.14.3"
-"""The constraint the guard is the mechanism for."""
+# --- The loopback-only guard -------------------------------------------------
 
 
 @dataclass
 class CheckoutSocketGuard:
-    """Live state of the example's loopback-only guard: refused targets and their ``host:port``."""
+    """What the guard counted: served loopback calls, refused targets and the hosts behind them."""
 
+    loopback_attempts: int = 0
     non_loopback_attempts: int = 0
-    violations: list[str] = field(default_factory=list)
+    blocked_hosts: list[str] = field(default_factory=list)
+
+    def __getattr__(self, name: str) -> Any:
+        """Serve the two names socket_guard reads, live rather than as an import-time snapshot."""
+        if name == "FOUNDRY_SOCKET_GUARD":
+            return True
+        if name == "FOUNDRY_NON_LOOPBACK_ATTEMPTS":
+            return self.non_loopback_attempts
+        raise AttributeError(name)
 
 
 _GUARD = CheckoutSocketGuard()
-"""The state this module counts into; a re-executed module body adopts the installed one instead."""
 
 FOUNDRY_SOCKET_GUARD = _GUARD
-"""Announces this module to ``foundry.diagnostics.socket_guard`` as the holder of a live guard."""
+"""Announces the guard to :func:`foundry.diagnostics.socket_guard.detect_socket_guard`."""
 
 
 def __getattr__(name: str) -> Any:
-    """Serve ``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` live, so the count is read as it stands now.
-
-    Any other name raises the ``AttributeError`` a module without that attribute raises.
-    """
+    """Serve ``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` live, so the count is read as it stands now."""
     if name == "FOUNDRY_NON_LOOPBACK_ATTEMPTS":
         return _GUARD.non_loopback_attempts
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _is_loopback(host: str) -> bool:
-    """Return True when ``host`` is a loopback IP literal, judged by :mod:`ipaddress`.
-
-    ``127.0.0.0/8`` and ``::1`` are flagged loopback; an IPv4-mapped ``::ffff:127.0.0.1`` is judged
-    by its mapped form. A hostname is refused: resolving it would itself reach a name server.
-    """
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    if address.is_loopback:
-        return True
-    mapped = getattr(address, "ipv4_mapped", None)
-    return bool(mapped is not None and mapped.is_loopback)
-
-
-def _refused_target(family: int, address: object) -> tuple[str, object] | None:
-    """Return the ``(host, port)`` to refuse for ``address``, or ``None`` when it may proceed.
-
-    Only ``AF_INET`` and ``AF_INET6`` are policed: ``AF_UNIX``, every other family and a non-INET
-    address are local by construction. A bytes host is judged as text, so neither spelling of a
-    target slips past the check.
-    """
-    if family not in _INET_FAMILIES:
-        return None
-    if isinstance(address, tuple) and len(address) >= 2:
-        host, port = address[0], address[1]
-    else:
-        host, port = address, 0
+def _host_text(host: object) -> str | None:
+    """Return a host as text when it is a string or a byte string, else ``None``."""
+    if isinstance(host, str):
+        return host
     if isinstance(host, bytes):
-        host = host.decode("ascii", "ignore")
-    if not isinstance(host, str) or _is_loopback(host):
-        return None
-    return host, port
+        return host.decode("ascii", "ignore") or None
+    return None
 
 
-def _refuse(host: str, port: object) -> Never:
-    """Record one refused attempt on the guard and raise the error that names it."""
+def _count(host: object) -> None:
+    """Count a loopback target, or count and refuse any other with the reason it is refused."""
+    text = _host_text(host)
+    if text is None or text in _LOOPBACK_NAMES or text.startswith(_LOOPBACK_PREFIXES):
+        _GUARD.loopback_attempts += 1
+        return
     _GUARD.non_loopback_attempts += 1
-    _GUARD.violations.append(f"{host}:{port}")
-    raise RuntimeError(
-        f"examples/checkout: refused the non-loopback target {host}:{port}. The example opens no "
-        f"non-loopback socket ({_OFFLINE_RULE}): its HTTP calls are served by the in-process echo "
-        "server on 127.0.0.1, or replayed from examples/checkout/cassettes."
+    if len(_GUARD.blocked_hosts) < _MAX_BLOCKED:
+        _GUARD.blocked_hosts.append(text)
+    raise AssertionError(
+        f"examples/checkout: refused the non-loopback host {text!r}: {_OFFLINE_RULE}. Serve the "
+        "request from the in-process echo server on 127.0.0.1, or replay it from cassettes/."
     )
 
 
-# Saved before any patching, so the wrappers can connect without recursing into themselves.
+def _check(family: int, address: object) -> None:
+    """Police a connect target: only an INET address is judged, and only its host."""
+    if family in _INET_FAMILIES:
+        _count(address[0] if isinstance(address, tuple) and address else None)
+
+
+# Saved before the patching below, so the wrappers delegate without recursing into themselves.
+_ORIGINAL_GETADDRINFO = socket.getaddrinfo
 _ORIGINAL_CONNECT = socket.socket.connect
 _ORIGINAL_CONNECT_EX = socket.socket.connect_ex
 
 
+def _guarded_getaddrinfo(
+    host: object, port: object, family: int = 0, type: int = 0, proto: int = 0, flags: int = 0
+) -> list[tuple[int, int, int, str, tuple[Any, ...]]]:
+    """Resolve a loopback host only: any other is refused before the resolver opens a socket."""
+    if host is not None:
+        _count(host)
+    return _ORIGINAL_GETADDRINFO(host, port, family, type, proto, flags)
+
+
 def _guarded_connect(self: socket.socket, address: object) -> None:
-    """Connect to a loopback target only, refusing the rest before the syscall runs."""
-    refused = _refused_target(self.family, address)
-    if refused is not None:
-        _refuse(*refused)
+    """Connect to a loopback target only, refusing any other before the syscall runs."""
+    _check(self.family, address)
     _ORIGINAL_CONNECT(self, address)
 
 
 def _guarded_connect_ex(self: socket.socket, address: object) -> int:
-    """Behave as :meth:`socket.socket.connect_ex` for a loopback target, and refuse any other."""
-    refused = _refused_target(self.family, address)
-    if refused is not None:
-        _refuse(*refused)
+    """Behave as ``socket.socket.connect_ex`` for a loopback target, and refuse any other."""
+    _check(self.family, address)
     return int(_ORIGINAL_CONNECT_EX(self, address))
 
 
 def _install_guard() -> None:
-    """Patch :mod:`socket` once per process, so a second import wraps it exactly once.
-
-    Each wrapper carries the live state under :data:`_GUARD_MARK`, which is both the idempotence
-    marker and how a module body executed a second time finds the counters it adopts: the state is
-    published on the wrapper, so two executions report one count rather than two. A guard another
-    module installed first is left in place beneath these wrappers, since both checks refuse the
-    same targets.
-    """
+    """Patch :mod:`socket` once per process; a second import adopts the first one's counters."""
     global FOUNDRY_SOCKET_GUARD, _GUARD
-    installed = getattr(socket.socket.connect, _GUARD_MARK, None)
-    # The mark holds the state the installed wrappers count into, so a module body executed a
-    # second time adopts that instance rather than measuring a second, empty guard of its own. The
-    # attribute is never set by anything else, and it is not tested with isinstance: a second
-    # execution defines its own CheckoutSocketGuard class, which the first instance is not one of.
-    if installed is not None:
-        _GUARD = installed
-        FOUNDRY_SOCKET_GUARD = installed
+    adopted = getattr(socket.socket.connect, _GUARD_MARK, None)
+    if adopted is not None:
+        _GUARD = FOUNDRY_SOCKET_GUARD = adopted
         return
-    for wrapper in (_guarded_connect, _guarded_connect_ex):
+    for wrapper in (_guarded_getaddrinfo, _guarded_connect, _guarded_connect_ex):
         setattr(wrapper, _GUARD_MARK, _GUARD)
+    socket.getaddrinfo = _guarded_getaddrinfo
     socket.socket.connect = _guarded_connect
     socket.socket.connect_ex = _guarded_connect_ex
 
 
 _install_guard()
 
-# --- The in-process echo server ---------------------------------------------
+# --- The in-process echo server ----------------------------------------------
 
-_ECHO_HOST: Final[str] = "127.0.0.1"
-"""The only address the example serves from, and one the guard above permits."""
 
-_REPLAY_BASE_URL: Final[str] = "http://127.0.0.1"
-"""The base URL reported in replay, where no server runs and no socket may be opened.
-
-Cassette matching ignores the host (assumption A7), so a replayed request never dials the URL the
-configuration carries; a fixed loopback value keeps ``http.base_url`` a valid absolute URL.
-"""
-
-_SHUTDOWN_TIMEOUT: Final[float] = 5.0
-"""Seconds the teardown waits for the serving thread, so a wedged loop cannot hang the run."""
+def _canonical(document: object) -> bytes:
+    """Serialise ``document`` byte-stably: sorted keys, no spaces, UTF-8."""
+    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 class CheckoutEchoHandler(BaseHTTPRequestHandler):
-    """Echo one request back as JSON, so a test can assert on what it actually sent.
-
-    The document carries the method, the path, the parsed query, the headers under their received
-    spelling and under a lower-cased mapping, and the body -- decoded when it is JSON and as text
-    otherwise. Nothing is interpreted and no request is answered differently, which is what makes
-    the server a reference for the request a session built.
-    """
+    """Serve the example's five deterministic routes; nothing here reads a clock or a counter."""
 
     protocol_version = "HTTP/1.1"
 
     def do_GET(self) -> None:
-        """Answer a GET with the echo document."""
-        self._echo()
+        self._dispatch()
 
     def do_POST(self) -> None:
-        """Answer a POST with the echo document."""
-        self._echo()
+        self._dispatch()
 
     def do_PUT(self) -> None:
-        """Answer a PUT with the echo document."""
-        self._echo()
+        self._dispatch()
 
     def do_PATCH(self) -> None:
-        """Answer a PATCH with the echo document."""
-        self._echo()
+        self._dispatch()
 
     def do_DELETE(self) -> None:
-        """Answer a DELETE with the echo document."""
-        self._echo()
+        self._dispatch()
 
     def log_message(self, format: str, *args: object) -> None:
-        """Write no access log: the example's output stays its own (AAP 0.13.1)."""
+        """Write no access log, so server chatter never reaches pytest's captured output."""
 
-    def _echo(self) -> None:
-        """Write the echo document for the request this handler was dispatched for."""
-        raw_length = self.headers.get("Content-Length")
-        length = int(raw_length) if raw_length is not None and raw_length.isdigit() else 0
-        raw_body = self.rfile.read(length) if length else b""
-        target = urlparse(self.path)
-        payload = {
-            "method": self.command,
-            "path": target.path,
-            "query": parse_qs(target.query),
-            "headers": dict(self.headers.items()),
-            "headers_lower": {name.lower(): value for name, value in self.headers.items()},
-            "body": _decoded_body(raw_body),
-        }
-        body = json.dumps(payload, sort_keys=True).encode("utf-8")
-        self.send_response(200)
+    def _dispatch(self) -> None:
+        """Route one request, reading its body first so a kept-alive connection stays in step."""
+        raw = self._read_body()
+        path = urlparse(self.path).path
+        if path == "/health" and self.command == "GET":
+            self._send_json(200, dict(_HEALTH))
+        elif path == "/orders" and self.command == "POST":
+            self._create_order(raw)
+        elif path == "/private/profile" and self.command == "GET":
+            self._send_json(401, {"error": "unauthorized", "realm": "checkout"})
+        elif path.startswith(_ORDERS_PATH) and self.command == "GET":
+            self._send_json(200, _stored_order(path[len(_ORDERS_PATH) :]))
+        else:
+            self._send_json(404, {"error": "not_found", "path": path})
+
+    def _read_body(self) -> bytes:
+        """Return the request body, read exactly as ``Content-Length`` states it."""
+        raw_length = self.headers.get("Content-Length", "")
+        length = int(raw_length) if raw_length.isdigit() else 0
+        return self.rfile.read(length) if length else b""
+
+    def _send_json(self, status: int, document: object) -> None:
+        """Write the response with no ``Date`` or ``Server`` header, so cassettes stay stable."""
+        body = _canonical(document)
+        self.send_response_only(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def _create_order(self, raw: bytes) -> None:
+        """Answer ``POST /orders`` from the body alone: a hash-derived id and the summed total."""
+        try:
+            payload = json.loads(raw.decode("utf-8")) if raw else None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = None
+        items = payload.get("items") if isinstance(payload, dict) else None
+        total = _order_total(items)
+        if not isinstance(payload, dict) or total is None:
+            self._send_json(400, {"error": "invalid_order"})
+            return
+        self._send_json(
+            201,
+            {
+                "currency": payload.get("currency"),
+                "items": items,
+                "order_id": f"ord-{hashlib.sha256(_canonical(payload)).hexdigest()[:12]}",
+                "status": "created",
+                "total_cents": total,
+            },
+        )
 
-def _decoded_body(raw: bytes) -> object:
-    """Return the request body decoded as JSON, or as text when it is not JSON."""
-    if not raw:
+
+def _order_total(items: object) -> int | None:
+    """Return ``sum(quantity * unit_price_cents)`` over ``items``, or ``None`` when unusable."""
+    if not isinstance(items, list):
         return None
-    text = raw.decode("utf-8", "replace")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return text
+    total = 0
+    for item in items:
+        if not isinstance(item, dict):
+            return None
+        quantity, price = item.get("quantity"), item.get("unit_price_cents")
+        if not isinstance(quantity, int) or not isinstance(price, int):
+            return None
+        total += quantity * price
+    return total
 
 
-def _invocation_dir(config: pytest.Config) -> Path:
-    """Return the directory the run was invoked from, which configuration discovery is anchored to.
+def _stored_order(order_id: str) -> dict[str, object]:
+    """Return the fixed document ``GET /orders/<id>`` answers with, echoing ``order_id`` back."""
+    return {
+        "currency": "EUR",
+        "items": [],
+        "order_id": order_id,
+        "status": "created",
+        "total_cents": 0,
+    }
 
-    A blank record falls back to ``rootpath``; a relative one is resolved by the configuration
-    package against the process working directory, which at startup is the invocation directory
-    itself (AAP 0.4.5).
+
+# --- The server's lifetime ---------------------------------------------------
+
+
+def _replay_requested(config: pytest.Config) -> bool:
+    """Return whether this run replays, read without resolving project configuration.
+
+    Resolution belongs to the plugin and hook ordering is not guaranteed, so the three inputs an
+    operator sets replay with are read directly: ``--foundry-replay``, the generic
+    ``--foundry-cassette.mode replay`` override and ``FOUNDRY_CASSETTE__MODE``.
     """
-    recorded = str(config.invocation_params.dir).strip()
-    if not recorded:
-        return Path(config.rootpath)
-    return Path(recorded)
+    if config.getoption("--foundry-replay", default=False):
+        return True
+    mode = config.getoption("--foundry-cassette.mode", default=None)
+    if isinstance(mode, str) and mode.strip().lower() == "replay":
+        return True
+    return os.environ.get("FOUNDRY_CASSETTE__MODE", "").strip().lower() == "replay"
 
 
-def _cassette_mode(request: pytest.FixtureRequest) -> CassetteMode:
-    """Return the ``cassette.mode`` this run resolved, without going through ``foundry_config``.
-
-    The override below requests the echo server for ``http.base_url``, so the echo server cannot
-    ask ``foundry_config`` for the mode without a cycle. It resolves the same two inputs the
-    fixture's body does -- the ``--foundry-*`` overrides and the invocation directory (AAP 0.4.5) --
-    and a :class:`foundry.core.exceptions.ConfigError` propagates unchanged.
-    """
-    from foundry.config import resolve
-    from foundry.config.cli_layer import collect_from_pytest
-
-    resolved = resolve(
-        cli_overrides=collect_from_pytest(request.config),
-        cwd=_invocation_dir(request.config),
-    )
-    return resolved.cassette.mode
-
-
-@pytest.fixture(scope="session")
-def echo_server(request: pytest.FixtureRequest) -> Iterator[str]:
-    """Session scope: the base URL of the in-process echo server, for as long as the run lasts.
-
-    A :class:`http.server.ThreadingHTTPServer` bound to ``127.0.0.1:0`` -- the kernel picks a free
-    port, so concurrent example runs cannot collide -- served from a daemon thread. It starts in
-    this fixture's body and is shut down here (``shutdown()``, ``server_close()``, then a bounded
-    join), so no port outlives the session that opened it.
-
-    **In replay it does not start at all**: a replay run has to prove it opens no socket (AAP
-    0.4.7), so the mode is resolved first (see :func:`_cassette_mode` for why not through
-    ``foundry_config``) and the fixed loopback placeholder is reported instead of binding anything.
-
-    Args:
-        request: The fixture request, read for the pytest configuration the mode is resolved from.
-
-    Returns:
-        ``http://127.0.0.1:<port>`` of the running server, or the replay placeholder.
-
-    Raises:
-        foundry.core.exceptions.ConfigError: The run's configuration cannot be resolved.
-    """
-    from foundry.config.enums import CassetteMode
-
-    if _cassette_mode(request) is CassetteMode.REPLAY:
-        yield _REPLAY_BASE_URL
+def pytest_configure(config: pytest.Config) -> None:
+    """Start the echo server for a live run, or record the replay placeholder and bind nothing."""
+    if _replay_requested(config):
+        config.stash[BASE_URL_KEY] = REPLAY_BASE_URL
         return
     server = ThreadingHTTPServer((_ECHO_HOST, 0), CheckoutEchoHandler)
+    server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, name="checkout-echo", daemon=True)
     thread.start()
-    try:
-        # The URL names the host the server was bound to and the port the kernel assigned, so it is
-        # the address the guard above already permits rather than a reading of server_address.
-        yield f"http://{_ECHO_HOST}:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
+    config.stash[_SERVER_KEY] = server
+    config.stash[_THREAD_KEY] = thread
+    config.stash[BASE_URL_KEY] = f"http://{_ECHO_HOST}:{server.server_address[1]}"
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Stop the server and join its thread, so no port and no thread outlives the session."""
+    server = config.stash.get(_SERVER_KEY, None)
+    if server is None:
+        return
+    server.shutdown()
+    server.server_close()
+    thread = config.stash.get(_THREAD_KEY, None)
+    if thread is not None:
         thread.join(timeout=_SHUTDOWN_TIMEOUT)
 
 
-# --- The example's configuration --------------------------------------------
+# --- The example's fixtures and settings -------------------------------------
 
 
 @pytest.fixture(scope="session")
-def foundry_config(foundry_config: FoundryConfig, echo_server: str) -> FoundryConfig:
-    """Return the run's configuration with this example's directories and base URL in it.
+def checkout_base_url(request: pytest.FixtureRequest) -> str:
+    """Session scope: the echo server's URL for this run, or the replay placeholder."""
+    return request.config.stash.get(BASE_URL_KEY, REPLAY_BASE_URL)
 
-    Pytest's documented same-name override of the public session-scoped fixture (AAP 0.4.3): it
-    requests the parent instance, copies it, and changes exactly three things -- ``http.base_url``
-    becomes the echo server's URL; ``data.dir`` becomes ``examples/checkout/testdata``, resolved
-    here rather than relative to wherever pytest was invoked, which is what lets
-    ``foundry_data.cases("cart_pricing.csv")`` read the example's CSV by its bare name; and
-    ``cassette.dir`` becomes ``examples/checkout/cassettes``, where the committed cassettes live
-    (AAP 0.4.6) and which is not created here.
 
-    ``artifacts.dir`` keeps its default so ``artifacts/<run_id>/`` lands in the invocation
-    directory, and every other key, ``sources`` included, stays the parent's. The nested models are
-    copied rather than mutated: the parent instance is shared with the rest of the session.
+@pytest.fixture(scope="session", autouse=True)
+def _offline_guard() -> Iterator[None]:
+    """Fail the session, rather than warn, if any non-loopback connection was attempted."""
+    yield
+    assert _GUARD.non_loopback_attempts == 0, (
+        f"examples/checkout: {_GUARD.non_loopback_attempts} non-loopback connection attempt(s): "
+        f"{_GUARD.blocked_hosts}"
+    )
 
-    Args:
-        foundry_config: The parent fixture's resolved configuration, session scoped and shared.
-        echo_server: The base URL of the in-process echo server, or the replay placeholder.
 
-    Returns:
-        A copy of the parent configuration with the three example-specific values applied.
+@pytest.fixture(scope="session")
+def foundry_config(foundry_config: FoundryConfig, checkout_base_url: str) -> FoundryConfig:
+    """Return the run's configuration with this example's base URL, directories and retries in it.
 
-    Raises:
-        foundry.core.exceptions.ConfigError: The parent's resolution fault propagates unchanged.
+    Pytest's documented same-name override (AAP 0.4.3): the parameter of that name is the public
+    session fixture, one level up. ``http.base_url`` becomes the echo server's URL, ``data.dir`` and
+    ``cassette.dir`` become this example's absolute directories, and ``execution.retries`` becomes
+    one repeat, which exercises the retry driver in the documented run (A2). ``artifacts.dir`` keeps
+    its default so ``artifacts/<run_id>/`` lands in the invocation directory, and every other key
+    -- ``cassette.mode``, ``reporting.*``, ``logging.*``, ``secrets.*`` and ``profile`` -- stays the
+    parent's. The parent's nested models are copied, never mutated, because it is shared.
+
+    Foundry's five layers are the only supported provenance, and a fixture override is none of them,
+    so the four injected keys are attributed to the ``file`` layer naming this conftest: the project
+    file that supplied them, rather than the field defaults the parent recorded.
     """
-    example_dir = Path(__file__).resolve().parent
-    return foundry_config.model_copy(
+    from foundry.config.layers import ConfigLayer
+    from foundry.config.sources import ConfigSource
+
+    origin = ConfigSource(layer=ConfigLayer.FILE, detail=str(Path(__file__).resolve()))
+    sources = dict(foundry_config.sources)
+    for key in ("cassette.dir", "data.dir", "execution.retries", "http.base_url"):
+        sources[key] = origin
+    updated = foundry_config.model_copy(
         update={
-            "http": foundry_config.http.model_copy(update={"base_url": echo_server}),
-            "data": foundry_config.data.model_copy(update={"dir": example_dir / "testdata"}),
-            "cassette": foundry_config.cassette.model_copy(
-                update={"dir": example_dir / "cassettes"},
-            ),
+            "http": foundry_config.http.model_copy(update={"base_url": checkout_base_url}),
+            "data": foundry_config.data.model_copy(update={"dir": TESTDATA_DIR}),
+            "cassette": foundry_config.cassette.model_copy(update={"dir": CASSETTE_DIR}),
+            "execution": foundry_config.execution.model_copy(update={"retries": _RETRIES}),
         }
+    )
+    return updated.with_sources(sources)
+
+
+def pytest_terminal_summary(
+    terminalreporter: TerminalReporter, exitstatus: int, config: pytest.Config
+) -> None:
+    """Print this file's one line: the guard's counters, which the offline proof matches on."""
+    terminalreporter.write_line(
+        f"checkout: socket-guard non-loopback={_GUARD.non_loopback_attempts} "
+        f"loopback={_GUARD.loopback_attempts}"
     )
