@@ -105,10 +105,8 @@ def _request_body(request: httpx.Request) -> bytes:
     """Return the body of ``request``, or ``b""`` when it was never read into memory.
 
     AAP 0.9.2 excludes streaming, so an ordinary request has already been read by
-    :class:`httpx.Request` and this returns its bytes. A request built around a caller's own stream
-    has no content until it is sent, and a fingerprint is taken before that; rather than refusing
-    the request, such a body fingerprints as empty. Capture and lookup both come through here, so
-    they agree about that case and a request with a streamed body still matches itself.
+    :class:`httpx.Request` and this returns its bytes. Capture and lookup both come through here,
+    so they agree about that case and a request with a streamed body still matches itself.
     """
     try:
         return request.content
@@ -151,11 +149,10 @@ def fingerprint_from_request(
     """Return the comparable part of ``request``, as a replay lookup decides a match.
 
     The four fields are the whole matching rule: the method, the path, the decoded query pairs and
-    the body hash. The path carries no scheme, host or port, so a cassette recorded against one port
-    replays on another, and the query goes through :func:`~foundry.cassette.models.normalise_query`,
-    so parameter order and percent-encoding cannot separate two identical requests. A parameter
-    whose name the engine redacts carries the marker here too, so a request fingerprints the same
-    way when it is captured and when it is looked up. Headers are absent by design.
+    the body hash. The path carries no scheme, host or port, so a cassette recorded against one
+    port replays on another, and the query goes through
+    :func:`~foundry.cassette.models.normalise_query`, so parameter order and percent-encoding
+    cannot separate two identical requests. Headers are absent by design.
     """
     engine = default_redactor() if redactor is None else redactor
     return RequestFingerprint(
@@ -359,10 +356,9 @@ class RecordingTransport(httpx.BaseTransport):
     Every reply is the live transport's own object, tagged :data:`SOURCE_LIVE` and otherwise
     untouched, so the caller's status, headers and body cannot differ because recording is on. The
     captured :class:`~foundry.cassette.models.Interaction` goes to the sink the caller supplied --
-    normally a list the ``record`` path saves at teardown -- and a fault in that capture is reported
-    as one ``WARNING`` and absorbed, because it is Foundry's plumbing rather than the test's
-    (AAP 0.1.2, AAP 0.14.3). A captured query value whose name the run's engine redacts carries the
-    marker, so capture and the store agree about what a cassette may hold (AAP 0.2.1).
+    normally a list the ``record`` path saves at teardown -- and a fault in that capture is
+    reported as one ``WARNING`` and absorbed, because it is Foundry's plumbing rather than the
+    test's (AAP 0.1.2, AAP 0.14.3).
     """
 
     def __init__(

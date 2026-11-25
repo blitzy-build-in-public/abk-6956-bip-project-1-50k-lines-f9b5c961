@@ -1,7 +1,7 @@
 """The persisted shapes of a record/replay cassette.
 
 One JSON document per test holds ``recorded_at``, ``redacted_keys`` and ordered ``{request,
-response}`` entries, with the field names AAP 0.4.6 and AAP 0.7.2 publish; none may be renamed (AAP
+response}`` entries, with the field names AAP 0.4.6 and AAP 0.7.2 publish, never renamed (AAP
 0.4.9).
 """
 
@@ -93,8 +93,9 @@ def body_sha256_of(content: bytes) -> str | None:
 def _parsed(text: str) -> list[tuple[str, str]]:
     """Return the decoded pairs of a query string, keeping blank values.
 
-    Raises: FoundryError: The parser rejects the text, which happens only past its field limit. The
-        message never quotes the query.
+    Raises:
+        FoundryError: The parser rejects the text, which happens only past its field limit. The
+            message never quotes the query.
     """
     try:
         return parse_qsl(text, keep_blank_values=True)
@@ -350,8 +351,7 @@ class RecordedRequest:
     def as_dict(self) -> dict[str, object]:
         """Return this request as the ``request`` object of a cassette document (AAP 0.4.6).
 
-        ``query`` becomes a list of two-element lists and ``headers_subset`` an object of sorted
-        keys.
+        ``query`` becomes two-element lists and ``headers_subset`` an object of sorted keys.
         """
         return {
             "method": self.method,
@@ -530,8 +530,7 @@ class CassetteDocument:
     def as_dict(self) -> dict[str, object]:
         """Return the document as the JSON object AAP 0.4.6 fixes.
 
-        The keys are ``recorded_at``, ``redacted_keys`` and ``interactions``, and there are no
-        others.
+        The keys are ``recorded_at``, ``redacted_keys`` and ``interactions``, and no others.
         """
         return {
             "recorded_at": to_iso8601(self.recorded_at),
@@ -594,8 +593,9 @@ def to_json_text(document: CassetteDocument) -> str:
 def from_json_text(text: str) -> CassetteDocument:
     """Read the JSON text of a cassette file into a document, without touching the filesystem.
 
-    Raises: FoundryError: The text is not valid JSON, or the object it holds is not a cassette. A
-        syntax error is reported with its line and column, and no message quotes the content.
+    Raises:
+        FoundryError: The text is not valid JSON, or the object it holds is not a cassette. A
+            syntax error is reported with its line and column, and no message quotes the content.
     """
     try:
         loaded: object = json.loads(text)

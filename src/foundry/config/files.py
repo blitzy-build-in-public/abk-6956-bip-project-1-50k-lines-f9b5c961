@@ -114,13 +114,15 @@ class DiscoveredFile:
     record for the ``file`` layer. Frozen and slotted, being built once by discovery and read by the
     loader and the source recorder, neither of which may see it change.
 
-    Attributes: path: The file, absolute and normalised; a relative path an operator typed is
-        resolved against the invocation directory, never the process working directory. kind: How
-        the file is read -- as a Foundry TOML document or through ``[tool.foundry]``. origin: The
-        discovery step that selected it. document: The parsed document, kept only where discovery
-        had to parse the file to decide whether it configures Foundry, so :func:`load_file` does not
-        parse it twice; a cache of the content rather than part of what identifies the descriptor,
-        so comparison and ``repr`` leave it out.
+    Attributes:
+        path: The file, absolute and normalised; a relative path an operator typed is resolved
+            against the invocation directory, never the process working directory.
+        kind: How the file is read -- as a Foundry TOML document or through ``[tool.foundry]``.
+        origin: The discovery step that selected it.
+        document: The parsed document, kept only where discovery had to parse the file to decide
+            whether it configures Foundry, so :func:`load_file` does not parse it twice; a cache of
+            the content rather than part of what identifies the descriptor, so comparison and
+            ``repr`` leave it out.
     """
 
     path: Path
@@ -152,10 +154,11 @@ def discover_file(
     Returns:
         The selected file, or ``None`` when no step matched and the defaults apply.
 
-    Raises: foundry.core.exceptions.ConfigError: When an explicitly named file does not exist or is
-        not a regular file -- ``config file not found: <path>``, exit 2 at the caller -- when the
-        ``pyproject.toml`` candidate cannot be read or parsed, and when it carries a
-        ``[tool.foundry]`` that is not a table.
+    Raises:
+        foundry.core.exceptions.ConfigError: When an explicitly named file does not exist or is
+            not a regular file -- ``config file not found: <path>``, exit 2 at the caller -- when
+            the ``pyproject.toml`` candidate cannot be read or parsed, and when it carries a
+            ``[tool.foundry]`` that is not a table.
     """
     named = _named_path(cli_path)
     if named is not None:
@@ -191,7 +194,8 @@ def _environment_path(environ: Mapping[str, str]) -> Path | None:
     the canonical upper-case spelling wins when both are present, and otherwise the candidates are
     visited in sorted order, so the file selected never depends on the mapping's own order.
 
-    Returns: The path the variable names, or ``None`` when no spelling of it is set or its value is
+    Returns:
+        The path the variable names, or ``None`` when no spelling of it is set or its value is
         empty or whitespace -- an empty variable selects no file rather than the current directory.
     """
     spellings = sorted(name for name in environ if name.upper() == ENV_CONFIG_VAR)
@@ -228,9 +232,10 @@ def _local_pyproject(cwd: Path) -> DiscoveredFile | None:
     unread. A document that parses but carries no ``[tool.foundry]`` configures nothing, and is the
     one case that falls through to the defaults.
 
-    Raises: foundry.core.exceptions.ConfigError: ``unreadable_file`` when the file cannot be read,
-        ``malformed_toml`` when it is not UTF-8 text or not valid TOML, and ``invalid_shape`` when
-        it carries a ``[tool.foundry]`` that is not a table.
+    Raises:
+        foundry.core.exceptions.ConfigError: ``unreadable_file`` when the file cannot be read,
+            ``malformed_toml`` when it is not UTF-8 text or not valid TOML, and ``invalid_shape``
+            when it carries a ``[tool.foundry]`` that is not a table.
     """
     path = _absolute(Path(PYPROJECT_TOML), cwd)
     if not path.is_file():
@@ -245,7 +250,8 @@ def _local_pyproject(cwd: Path) -> DiscoveredFile | None:
 def _absolute(path: Path, cwd: Path) -> Path:
     """Resolve ``path`` against ``cwd`` and normalise it.
 
-    Returns: The absolute, symlink-resolved path. A path that cannot be resolved is returned as its
+    Returns:
+        The absolute, symlink-resolved path. A path that cannot be resolved is returned as its
         absolute spelling, so the existence check reports it instead of an unrelated fault.
     """
     candidate = path if path.is_absolute() else cwd / path
@@ -264,12 +270,13 @@ class FilePayload:
     be attributed key by key, and the mappings are read-only views: a caller that could edit one
     could change a resolution after the fact.
 
-    Attributes: source: The descriptor the values were read through, or ``None`` when no file
-        applied. base: The base configuration as ``dotted key -> value``, sorted: what a
-        ``foundry.toml`` states at top level, or what ``[tool.foundry]`` holds, minus the
-        ``profiles`` table. profiles: One entry per profile table, keyed by name and sorted; each
-        value is that table as ``dotted key -> value``, also sorted. label: The path as text for
-        :attr:`source`, or ``""`` when there is none.
+    Attributes:
+        source: The descriptor the values were read through, or ``None`` when no file applied.
+        base: The base configuration as ``dotted key -> value``, sorted: what a ``foundry.toml``
+            states at top level, or what ``[tool.foundry]`` holds, minus the ``profiles`` table.
+        profiles: One entry per profile table, keyed by name and sorted; each value is that table
+            as ``dotted key -> value``, also sorted.
+        label: The path as text for :attr:`source`, or ``""`` when there is none.
     """
 
     source: DiscoveredFile | None
@@ -280,8 +287,7 @@ class FilePayload:
     def is_empty(self) -> bool:
         """Report whether the file contributed no configuration value at all.
 
-        A file that only declares profile tables is not empty: those are values a selected profile
-        contributes later.
+        A file that only declares profile tables is not empty: a profile contributes those later.
         """
         return len(self.base) == 0 and len(self.profiles) == 0
 
@@ -318,9 +324,10 @@ def load_file(discovered: DiscoveredFile | None) -> FilePayload:
         The payload for that file, or the empty payload from :func:`default_payload` when
         ``discovered`` is ``None``.
 
-    Raises: foundry.core.exceptions.ConfigError: When the file cannot be read or parsed, when a
-        ``profiles`` table or a profile table has the wrong shape, when a profile table sets
-        ``profile``, or when the registry declares no key or table name the file sets.
+    Raises:
+        foundry.core.exceptions.ConfigError: When the file cannot be read or parsed, when a
+            ``profiles`` table or a profile table has the wrong shape, when a profile table sets
+            ``profile``, or when the registry declares no key or table name the file sets.
     """
     if discovered is None:
         return default_payload()
@@ -354,9 +361,10 @@ def _split_document(
     Returns:
         The base configuration and the profile tables, both flat and key-sorted.
 
-    Raises: foundry.core.exceptions.ConfigError: When a table has the wrong shape, when a profile
-        table sets ``profile``, when one nests another ``profiles`` table, or when a keyless table
-        is not a registered table path.
+    Raises:
+        foundry.core.exceptions.ConfigError: When a table has the wrong shape, when a profile
+            table sets ``profile``, when one nests another ``profiles`` table, or when a keyless
+            table is not a registered table path.
     """
     table = document if discovered.kind == "foundry-toml" else _foundry_table(document)
     if table is None:
@@ -374,12 +382,14 @@ def _profile_tables(raw: object, *, detail: str) -> Mapping[str, Mapping[str, ob
     """Return the profile tables of a document as flat, sorted mappings by name.
 
     Each profile table is checked for keyless section headers before it is flattened, under its own
-    ``profile:<name>`` layer, so a header that holds nothing is refused in the table that carries it
+    ``profile:<name>`` layer, so an empty header is refused in the table that carries it
     (AAP 0.4.5).
 
-    Raises: foundry.core.exceptions.ConfigError: When ``profiles`` is not a table of tables, when a
-        profile's value is not a table, when that table sets ``profile``, when it nests a further
-        ``profiles`` table, or when it holds a keyless table that is not a registered table path.
+    Raises:
+        foundry.core.exceptions.ConfigError: When ``profiles`` is not a table of tables, when a
+            profile's value is not a table, when that table sets ``profile``, when it nests a
+            further ``profiles`` table, or when it holds a keyless table that is not a registered
+            table path.
     """
     if raw is None:
         return MappingProxyType({})
@@ -416,14 +426,13 @@ def _reject_keyless_tables(
     """Refuse a section header that holds nothing and names no configuration key.
 
     Flattening keeps one entry per leaf, so ``[data.bogus]`` would reach the settings model as
-    though the header were not there. A table name is a key in TOML terms, so this walk reads the
-    unflattened tree and reports the fault a scalar of that spelling gets. Two shapes pass: a key
-    the registry declares (``[http.headers]`` is table-valued, empty or not) and a path a published
-    key sits under.
+    though the header were not there. Two shapes pass: a key the registry declares
+    (``[http.headers]`` is table-valued, empty or not) and a path a published key sits under.
 
-    Raises: foundry.core.exceptions.ConfigError: ``unknown_key`` for the first keyless table in
-        sorted key order whose dotted path is neither a registered key nor a path some registered
-        key sits under, carrying the closest registered spelling and the layer that supplied it.
+    Raises:
+        foundry.core.exceptions.ConfigError: ``unknown_key`` for the first keyless table in sorted
+            key order whose dotted path is neither a registered key nor a path some registered key
+            sits under, carrying the closest registered spelling and the layer that supplied it.
     """
     for key in sorted(name for name in table if isinstance(name, str)):
         value = table[key]
@@ -461,9 +470,10 @@ def _read_document(discovered: DiscoveredFile) -> Mapping[str, object]:
     Foundry found it: a file that cannot be decoded or parsed is a fault in both cases, because
     skipping it would resolve the run from the defaults while the operator's table sat unread.
 
-    Raises: foundry.core.exceptions.ConfigError: ``unreadable_file`` when the file cannot be read,
-        ``malformed_toml`` when it is not UTF-8 text or not valid TOML, carrying the parser's
-        location when it reported one.
+    Raises:
+        foundry.core.exceptions.ConfigError: ``unreadable_file`` when the file cannot be read,
+            ``malformed_toml`` when it is not UTF-8 text or not valid TOML, carrying the parser's
+            location when it reported one.
     """
     path = discovered.path
     try:
@@ -502,12 +512,14 @@ def _parse_fault(exc: tomllib.TOMLDecodeError) -> tuple[str, int | None, int | N
 def _foundry_table(document: Mapping[str, object]) -> Mapping[str, object] | None:
     """Return the ``[tool.foundry]`` table of a parsed ``pyproject.toml``, when it has one.
 
-    Returns: The Foundry table, or ``None`` when the document has no ``[tool]`` table, no
+    Returns:
+        The Foundry table, or ``None`` when the document has no ``[tool]`` table, no
         ``[tool.foundry]`` entry, or a ``[tool]`` that is not a table.
 
-    Raises: foundry.core.exceptions.ConfigError: When ``tool.foundry`` is present but is not a
-        table: that entry attempts to configure Foundry in a shape it cannot read, which is worth
-        reporting rather than passing over.
+    Raises:
+        foundry.core.exceptions.ConfigError: When ``tool.foundry`` is present but is not a
+            table: that entry attempts to configure Foundry in a shape it cannot read, which is
+            worth reporting rather than passing over.
     """
     tool = _as_table(document.get(TOOL_TABLE))
     if tool is None:

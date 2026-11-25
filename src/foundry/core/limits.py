@@ -8,11 +8,9 @@ parses the bounds back out of ``foundry.config.keys.constraint_for`` and compare
 text with the registry's constraint text byte for byte, so a copy cannot drift from the published
 surface AAP 0.4.9 fixes. :func:`range_fault_message` is the one wording of a value outside its
 accepted range, shared by the configuration layer and the two capability packages that validate a
-hand-built policy; AAP 0.4.5 pins its shape, so a person correcting ``foundry.toml``, an environment
-variable, a command-line option or a policy built inside a test reads the same sentence whichever
-surface reported the fault. The module holds immutable constants plus one pure function and imports
-the standard library alone: importing it reads no environment variable, touches no file, configures
-no logger and mutates nothing (AAP 0.4.8 import-time discipline).
+hand-built policy; AAP 0.4.5 pins its shape, so a person correcting ``foundry.toml``, an
+environment variable, a command-line option or a policy built inside a test reads the same sentence
+whichever surface reported the fault.
 """
 
 from __future__ import annotations
@@ -161,10 +159,9 @@ def range_fault_message(key: str, value: object, constraint: str) -> str:
     """Return the one message Foundry reports for a value outside its accepted range.
 
     The message of a :class:`foundry.core.exceptions.ConfigError`, with no trailing period. AAP
-    0.4.5's worked case is ``http.timeout = -1``, which must report ``http.timeout`` and
-    ``0 < t <= 300``; the key, the offending value and the accepted range stay greppable in a
-    terminal and in a CI log. Pure and total: it reads nothing, raises nothing and returns the same
-    text for the same arguments, so a fault reads alike whichever surface reported it.
+    0.4.5's worked case is ``http.timeout = -1``, which must report ``http.timeout`` and ``0 < t <=
+    300``; the key, the offending value and the accepted range stay greppable in a terminal and in a
+    CI log.
 
     Args:
         key: The dotted configuration key at fault, such as ``http.retries.max_attempts``.

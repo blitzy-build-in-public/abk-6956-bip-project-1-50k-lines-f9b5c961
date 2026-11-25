@@ -3,9 +3,7 @@
 Every CLI module hands this renderer plain data -- rows, node ids, one message, one document -- and
 receives nothing back: widths, colours, borders and the stdout/stderr choice live here. ``rich`` is
 imported inside each function that needs it, so the pytest activation path pays for nothing until a
-command renders, and every cell, message and line passes through the redactor before it reaches the
-console. Output is deterministic and unstyled on rich's own defaults, with no value ever interpreted
-as markup, and a write fault travels no further than the caller's guard.
+command renders, and every cell, message and line passes through the redactor before the console.
 """
 
 from __future__ import annotations
@@ -121,9 +119,8 @@ class KeyValueSourceRow(Protocol):
 class ProbeRow(Protocol):
     """The structure of one ``foundry doctor`` row, satisfied by ``ProbeResult``.
 
-    ``ProbeResult.as_row()`` returns the same three cells as one plain ``(name, status,
-    detail)`` tuple, so a caller may hand this renderer either the probe model or the row tuple it
-    produced.
+    ``ProbeResult.as_row()`` returns the same three cells as one plain ``(name, status, detail)``
+    tuple, so a caller may hand this renderer either the probe model or the row tuple it produced.
     """
 
     @property
@@ -182,11 +179,10 @@ def _console(stderr: bool = False) -> Console:
     """Return the console one rendering writes through.
 
     The single ``rich.console.Console`` construction site in the tree. ``highlight``, ``emoji`` and
-    ``soft_wrap`` are off so two runs of one command capture identical bytes, and ``stderr`` selects
-    the stream, which is how an error reaches stderr while a result reaches stdout. No theme and no
-    style is passed: rich's defaults are the whole of the presentation. ``rich`` is imported here
-    rather than at module scope, so the pytest activation path never pays for it, and rich resolves
-    the stream when it prints.
+    ``soft_wrap`` are off so two runs of one command capture identical bytes, and ``stderr``
+    selects the stream, which is how an error reaches stderr while a result reaches stdout.
+    ``rich`` is imported here rather than at module scope, so the pytest activation path never pays
+    for it, and rich resolves the stream when it prints.
     """
     from rich.console import Console
 
@@ -196,8 +192,7 @@ def _console(stderr: bool = False) -> Console:
 def _redactor(redactor: Redactor | None) -> Redactor:
     """Return ``redactor``, or :func:`foundry.obs.redaction.default_redactor` when none was given.
 
-    The default carries the built-in header and query deny-lists, so it covers every default secret
-    name.
+    The default carries the built-in header and query deny-lists, covering every default name.
     """
     return default_redactor() if redactor is None else redactor
 
@@ -303,10 +298,9 @@ def render_not_applied(
     """Print the separate section naming configuration overrides a command did not apply.
 
     ``foundry config show`` without ``--resolved`` resolves the configuration from defaults, file,
-    profile and environment only, so the override options it was given change nothing and are listed
-    apart. The section is titled with the literal words ``not applied`` and has the same three
-    columns as the resolved table. An empty sequence prints nothing, so a command that applied
-    everything needs no branch of its own.
+    profile and environment only, so the override options it was given change nothing and are
+    listed apart. The section is titled with the literal words ``not applied`` and has the same
+    three columns as the resolved table.
     """
     if not rows:
         return
@@ -380,9 +374,7 @@ def render_comparison(groups: ComparisonGroups, *, redactor: Redactor | None = N
     The labels are exactly ``Newly failing``, ``Newly passing`` and ``Still failing`` (AAP 0.7.4),
     each printed with the group's size and followed by its node ids. An empty group prints the
     ``(none)`` marker rather than disappearing, so all three are always visible and an empty set
-    reads differently from a missing one. The node ids print in the order they arrive -- the
-    comparator supplies ascending, de-duplicated tuples -- unwrapped, so a long parametrised node id
-    stays one copyable line.
+    reads differently from a missing one.
 
     Args:
         groups: The three node-id sequences, as :class:`foundry.reporting.compare.ComparisonDiff`

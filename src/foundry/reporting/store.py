@@ -308,9 +308,8 @@ def _redact_run_error(error: RunError, scrub: Redactor) -> dict[str, object]:
 def _is_encodable(text: str) -> bool:
     """Return whether UTF-8 can encode ``text`` as it stands.
 
-    Asking before the file is opened is what lets :func:`write_text` report a degradation with one
-    ``WARNING``. The answer depends on the text alone, so it keeps the write deterministic
-    (AAP 0.14.1).
+    Asking first lets :func:`write_text` report a degradation with a single ``WARNING``.
+    The answer depends on the text alone, so the write stays deterministic (AAP 0.14.1).
     """
     try:
         text.encode(_ENCODING)

@@ -73,8 +73,8 @@ def _invalid_schema_fault(error: SchemaError, *, source: str | None = None) -> C
     Both paths are rendered by :mod:`foundry.contract.violations`, and the reason is collapsed to
     one line and redacted so a schema cannot inject a newline -- or a quoted secret -- into a
     failure report. ``source`` prefixes the summary with the name the caller knows the document by,
-    which is what lets an author in a tree of data files find the broken sidecar; ``detail`` keeps
-    the unlabelled text.
+    which lets an author in a tree of data files find the broken sidecar; ``detail`` keeps the
+    unlabelled text.
     """
     json_path = json_path_from_parts(tuple(error.absolute_path))
     schema_path = format_schema_path(tuple(error.absolute_schema_path))

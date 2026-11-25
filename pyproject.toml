@@ -20,6 +20,9 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  # The resolved pytest 8.4.2 sits inside GHSA-6w46-j5rx-g56g / CVE-2025-71176's affected range; this
+  # constraint stands because AAP 0.5.1 and 0.14.6 A10 fix it, so the suite runs against a private
+  # temporary root pinned in tests/conftest.py (docs/verification.md records the advisory).
   "pytest>=8.2,<9",
   "httpx>=0.27,<0.28",
   "pydantic>=2.7,<3",
@@ -95,5 +98,6 @@ warn_unused_ignores = true
 files = ["src/foundry"]
 
 [tool.pytest.ini_options]
+# The session's temporary root is pinned in tests/conftest.py, not here; see docs/verification.md.
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

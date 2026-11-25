@@ -21,8 +21,7 @@ this module without the plugin working. That key lives in ``foundry.obs`` becaus
 the writer reports the fault once at ``WARNING`` on the ``foundry`` logger, its later writes return
 ``None``, and no test outcome or exit code changes. A path escaping the run directory still surfaces
 as :class:`foundry.core.exceptions.ArtifactError`, and no directory is created eagerly. Module scope
-imports only ``pytest`` and the standard library inside the 150 ms budget, Foundry imports sitting
-inside the fixture that first needs them.
+imports only ``pytest`` and the standard library; Foundry imports load inside the fixture.
 """
 
 from __future__ import annotations

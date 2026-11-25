@@ -22,9 +22,8 @@ __all__: list[str] = ["LOADER", "JsonlLoader"]
 class JsonlLoader:
     """Read a JSON Lines file as a table whose rows keep their real line numbers.
 
-    The class satisfies :class:`Loader` structurally, which is all ``registry.py``
-    needs: it holds one instance per suffix and calls :meth:`load` through that
-    protocol.
+    The class satisfies :class:`Loader` structurally, which is all ``registry.py`` needs: it holds
+    one instance per suffix and calls :meth:`load` through that protocol.
 
     Attributes:
         extensions: The suffixes this reader answers for, lowercase and without a

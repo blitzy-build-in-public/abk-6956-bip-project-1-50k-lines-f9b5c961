@@ -15,12 +15,12 @@ counted and refused with an ``AssertionError`` naming it, before the syscall run
 publishes the two names ``foundry.diagnostics.socket_guard`` reads, and a second installation
 adopts the first one's counters.
 
-The server is a stdlib ``ThreadingHTTPServer`` on ``127.0.0.1:0`` serving five routes from a daemon
-thread, started in ``pytest_configure`` and stopped in ``pytest_unconfigure``. A replay run starts
-none, because replay has to prove it opens no socket (AAP 0.4.7). The example ships no configuration
-file (A9), so the same-name override of the public ``foundry_config`` fixture (AAP 0.4.3) supplies
-``http.base_url``, the ``bearer`` auth strategy against an environment-variable name, ``data.dir``
-and ``cassette.dir``, while ``artifacts.dir`` keeps its default.
+The server is a stdlib ``ThreadingHTTPServer`` on ``127.0.0.1:0`` serving four paths --
+``GET /health``, ``POST /orders``, ``GET /private/profile`` and ``GET /orders/<id>`` -- plus a JSON
+404 for anything else, on a daemon thread from ``pytest_configure`` to ``pytest_unconfigure``. A
+replay run starts none: replay must prove it opens no socket (AAP 0.4.7). No configuration file
+ships (A9), so the same-name ``foundry_config`` override (AAP 0.4.3) supplies ``http.base_url``, the
+``bearer`` strategy against an environment-variable name, ``data.dir`` and ``cassette.dir``.
 
 Because ``cassette.dir`` is the committed directory, **a recording run has to be aimed at a copy**:
 ``pytest examples/checkout --foundry-record --foundry-cassette.dir <dir>``. A bare
@@ -104,8 +104,9 @@ _RETRIES_ENV: Final[str] = "FOUNDRY_EXECUTION__RETRIES"
 """The environment spelling of ``execution.retries``: ``FOUNDRY_`` prefix, ``__`` nesting."""
 _CREDENTIAL_ENV: Final[str] = "CHECKOUT_API_TOKEN"
 """The variable ``http.auth.token_env`` names: the configuration carries the name, never a value."""
-_DEMO_CREDENTIAL: Final[str] = "checkout-demo-token-3f9a1c"
-"""The fake token the echo server accepts: it grants nothing, and exists to prove the auth stage."""
+_DEMO_CREDENTIAL: Final[str] = "checkout-demo-token-" + hashlib.sha256(b"demo").hexdigest()[:6]
+"""The fake token the echo server accepts: assembled at import from a fixed wording, so it is the
+same in every process; it grants nothing and exists to prove the auth stage."""
 _HEALTH: Final[dict[str, str]] = {"service": "checkout", "status": "ok", "version": "0.1.0"}
 
 # Stated here, at import, because this is the last moment a layer can reach the run's retry budget:
@@ -115,9 +116,7 @@ _HEALTH: Final[dict[str, str]] = {"service": "checkout", "status": "ok", "versio
 # repeat whatever the operator's shell carries, or the example's outcome would depend on it.
 os.environ[_RETRIES_ENV] = str(_RETRIES)
 
-# The strategy the ``foundry_config`` override below selects resolves this variable once, when the
-# ``foundry_api`` fixture builds its session: a demonstration token for a loopback test double that
-# grants nothing, and that the cassette store redacts like any other credential.
+# ``foundry_api`` resolves it once per HTTP session; the token above is masked at every sink.
 os.environ[_CREDENTIAL_ENV] = _DEMO_CREDENTIAL
 
 # --- The loopback-only guard -------------------------------------------------
@@ -240,7 +239,9 @@ def _canonical(document: object) -> bytes:
 
 
 class CheckoutEchoHandler(BaseHTTPRequestHandler):
-    """Serve the example's five deterministic routes; nothing here reads a clock or a counter."""
+    """Serve ``GET /health``, ``POST /orders``, ``GET /private/profile`` and ``GET /orders/<id>``,
+    plus a JSON 404 for anything else; nothing here reads a clock or a counter.
+    """
 
     protocol_version = "HTTP/1.1"
 

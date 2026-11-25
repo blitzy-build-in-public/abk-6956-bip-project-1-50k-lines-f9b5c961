@@ -199,11 +199,11 @@ def backoff(attempt: int, *, base: float, maximum: float) -> float:
     """Return the wait that follows attempt ``attempt``.
 
     The growth is exponential from one base -- ``min(base * 2 ** (attempt - 1), maximum)`` for a
-    1-based ``attempt`` (AAP 0.7.3) -- and it is written as a bounded doubling loop rather than a
-    power, because ``2.0 ** 2000`` raises ``OverflowError`` while a loop returns the cap as soon
-    as it reaches it. A count below 1 is treated as 1, and a non-positive or non-finite base or
-    cap yields ``0.0``, so a disabled policy never hands the injected sleep a negative, ``NaN``
-    or infinite delay.
+    1-based ``attempt`` (AAP 0.7.3) -- written as a bounded doubling loop rather than a power,
+    because ``2.0 ** 2000`` raises ``OverflowError`` while a loop returns the cap as soon as it
+    reaches it. A count below 1 is treated as 1, and a non-positive or non-finite base or cap yields
+    ``0.0``, so a disabled policy never hands the injected sleep a negative, ``NaN`` or infinite
+    delay.
     """
     if not math.isfinite(base) or not math.isfinite(maximum):
         return 0.0
@@ -223,9 +223,8 @@ def backoff(attempt: int, *, base: float, maximum: float) -> float:
 def _require_int(value: object, key: str, minimum: int, maximum: int, *, constraint: str) -> int:
     """Return ``value`` as an ``int`` inside ``minimum..maximum``, or raise ``ConfigError``.
 
-    ``bool`` is refused even though it subclasses ``int``, and the message is
-    :func:`foundry.core.limits.range_fault_message`'s one wording, carrying the registry's
-    ``constraint``.
+    ``bool`` is refused even though it subclasses ``int``, and the message carries the
+    :func:`foundry.core.limits.range_fault_message` wording and the registry's ``constraint``.
     """
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
         raise ConfigError(range_fault_message(key, value, constraint), key=key)
@@ -263,11 +262,10 @@ class RetryPolicy:
     """The resolved ``http.retries.*`` settings: how often to try, and how long to wait.
 
     The defaults and the ranges are AAP 0.4.5's. Frozen, because a session builds one policy from
-    its resolved configuration and every request shares it; hashable, so a caller can key a cache
-    on it; and ``retry_on`` is a ``frozenset``, so the configured list's order and repeats cannot
-    change behaviour. ``max_attempts`` is the total count including the first, which is why
-    ``--foundry-retries 2`` and ``max_attempts=3`` describe the same three attempts (assumption
-    A2).
+    its resolved configuration and every request shares it; hashable, so a caller can key a cache on
+    it; and ``retry_on`` is a ``frozenset``, so the configured list's order and repeats cannot
+    change behaviour. ``max_attempts`` counts the first attempt, so ``--foundry-retries 2`` and
+    ``max_attempts=3`` describe the same three attempts (assumption A2).
 
     Attributes:
         max_attempts: Total attempts per logical request, ``1..10``, default ``3``.
@@ -393,8 +391,7 @@ def _elapsed_ms(started: float) -> float:
     """Return the milliseconds elapsed since ``started`` on the monotonic clock.
 
     Returns:
-        The milliseconds since ``started``, never negative because the monotonic clock does not
-        go backwards.
+        The milliseconds since ``started``; the monotonic clock never runs backwards.
     """
     return (time.monotonic() - started) * 1000.0
 
@@ -450,9 +447,11 @@ class RetryRunner:
     ) -> RetriedResponse:
         """Issue the request until an attempt produces a response or the policy gives up.
 
-        Args: send: A zero-argument callable performing one attempt and returning its response,
-            called once per attempt, the last one included. method: The request method, named in
-            every message this call raises. path: The request path, likewise named.
+        Args:
+            send: A zero-argument callable performing one attempt and returning its response,
+                called once per attempt, the last one included.
+            method: The request method, named in every message this call raises.
+            path: The request path, likewise named.
 
         Returns:
             The final response with one attempt record per attempt, including the response of a

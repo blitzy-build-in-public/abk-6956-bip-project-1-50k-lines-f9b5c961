@@ -15,19 +15,16 @@ level, the logger name and the message only -- no timestamp, thread, host or add
 what makes two runs' tails identical.
 
 **Capacity and attachment.** The ring retains exactly ``logging.capture_lines`` records (default
-``200``, accepted range ``0..10000``), read from the resolved configuration through the
-``foundry_config`` fixture argument, and no second list is kept beside it. ``capture_lines = 0``
-disables capture: the fixture yields a capture reporting no records and attaches no handler at all.
-Setup attaches the ring through :func:`foundry.obs.logging.attach_handler` -- the sole writer of
-that handler list -- and teardown detaches it; ``propagate`` is never touched, which is why pytest's
-``caplog`` keeps seeing every record.
+``200``, range ``0..10000``) read through ``foundry_config``, and no second list is kept beside it;
+``capture_lines = 0`` attaches no handler at all, so the capture reports no records. Setup attaches
+the ring through :func:`foundry.obs.logging.attach_handler` and teardown detaches it; ``propagate``
+is never touched, which is why pytest's ``caplog`` keeps seeing every record.
 
 **Failure isolation.** A fault while attaching or detaching changes neither the test's outcome nor
 the run's exit code: setup yields a usable, empty capture, teardown never raises, and the fault is
-reported as exactly one ``WARNING`` through :func:`foundry.obs.events.emit_plumbing_failure`, only
-after the ring is detached. Module scope imports :mod:`pytest`, the standard library and
-:mod:`foundry.core`; the ring and the emitter are imported inside the fixture body, because
-``foundry.plugin`` imports this package during ``pytest_configure`` inside a 150 ms budget.
+one ``WARNING`` through :func:`foundry.obs.events.emit_plumbing_failure` after the ring is
+detached. Module scope imports :mod:`pytest`, the standard library and :mod:`foundry.core`; the ring
+and the emitter are imported inside the fixture body, outside the plugin's 150 ms startup budget.
 """
 
 from __future__ import annotations

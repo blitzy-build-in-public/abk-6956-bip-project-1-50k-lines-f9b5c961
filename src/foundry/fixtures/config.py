@@ -9,19 +9,18 @@ through the four layers, carrying one :class:`foundry.config.sources.ConfigSourc
 **The fixture resolves the configuration itself.** ``foundry.fixtures`` may not import the plugin's
 session stash, so the fixture calls :func:`foundry.config.merge.resolve` with the two inputs the
 plugin's own bootstrap passes: the ``--foundry-*`` overrides, read back through
-:func:`foundry.config.cli_layer.collect_from_pytest`, and the invocation directory file discovery is
-anchored to. Resolution is the one place the four layers are applied, so the fixture and the plugin
-cannot disagree about a value. ``environ`` is deliberately not passed: the environment layer belongs
-to :mod:`foundry.config.env`.
+:func:`foundry.config.cli_layer.collect_from_pytest`, and the invocation directory. Resolution being
+the one place the four layers are applied, the fixture and the plugin cannot disagree about a value.
+``environ`` is deliberately not passed: the environment layer belongs to :mod:`foundry.config.env`.
 
 **Overridable by name.** ``foundry_config`` is a plain session-scoped fixture returning the plain
 resolved model, so a project replaces it with pytest's documented same-name override and shadows the
 value through ``model_copy(update=...)``, which is how ``examples/checkout/conftest.py`` supplies an
 ephemeral ``http.base_url`` and points ``data.dir``/``cassette.dir`` at the example's directories;
 ``foundry_profile`` follows a shadowed value because it reads the configuration. Module scope
-imports ``pytest``, :mod:`pathlib` and :mod:`typing` only, :mod:`foundry.config` being pulled in
-inside the fixture body. A configuration holds the *names* of the environment variables that carry
-credentials, never their values, and nothing here reads a clock.
+imports ``pytest``, :mod:`pathlib` and :mod:`typing` only, :mod:`foundry.config` coming in inside
+the fixture body. A configuration holds the *names* of the variables that carry credentials, never
+their values, and nothing here reads a clock.
 """
 
 from __future__ import annotations

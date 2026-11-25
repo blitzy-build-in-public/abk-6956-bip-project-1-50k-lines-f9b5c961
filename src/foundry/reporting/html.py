@@ -103,8 +103,8 @@ _MILLISECONDS_PER_SECOND: Final[float] = 1000.0
 class OutcomeCount:
     """One outcome's tally in the report's summary strip.
 
-    All nine outcomes are always present, zero counts included, so the strip keeps one width
-    (criterion 14).
+    Every outcome is always present, zero counts included, so the strip keeps one width (criterion
+    14).
 
     Attributes:
         outcome: The outcome this chip counts.
@@ -120,9 +120,6 @@ class OutcomeCount:
 @dataclass(frozen=True, slots=True)
 class ReportRow:
     """One test's row in the report's results table.
-
-    The row carries what the summary view of a test shows -- which test, how it ended, how long it
-    took, which profile it ran under and which markers it held.
 
     Attributes:
         nodeid: The test's pytest node id, unsanitised, exactly as ``results.json`` records it.
@@ -297,8 +294,7 @@ def _row_for(record: ResultRecord) -> ReportRow:
 def _counts(results: Sequence[ResultRecord]) -> tuple[OutcomeCount, ...]:
     """Tally the run's outcomes into the nine summary chips, in outcome declaration order.
 
-    Every outcome is present, zero counts included, counted from the records rather than from a
-    mutable accumulator.
+    The counts come from the records rather than from a mutable accumulator.
 
     Returns:
         Nine :class:`OutcomeCount` entries in :data:`foundry.reporting.record.OUTCOMES` order.
@@ -321,13 +317,14 @@ def _removal_note(outcome: Outcome) -> str:
 def _quarantined_rows(results: Sequence[ResultRecord]) -> tuple[QuarantinedRow, ...]:
     """Collect the Quarantined section from the run's result records.
 
-    The records are already sorted by node id, so the section inherits that order, and only the two
-    outcomes of :data:`foundry.reporting.record.QUARANTINE_OUTCOMES` are selected. The badge's class
-    comes from :func:`_outcome_css_class`, so the results table and the Quarantined section cannot
+    The records are already sorted by node id, so the section inherits that order, and only the
+    two outcomes of :data:`foundry.reporting.record.QUARANTINE_OUTCOMES` are selected. The badge's
+    class comes from :func:`_outcome_css_class`, so the results table and this section cannot
     disagree.
 
-    Returns: One :class:`QuarantinedRow` per quarantined result, in node-id order; an empty tuple
-        when nothing was quarantined, which makes the template omit the section.
+    Returns:
+        One :class:`QuarantinedRow` per quarantined result, in node-id order; an empty tuple when
+        nothing was quarantined, which makes the template omit the section.
     """
     return tuple(
         QuarantinedRow(
@@ -379,7 +376,8 @@ def _finished_at(results: Sequence[ResultRecord], override: str | None) -> str:
     the zero-tests and run-error-only cases where no record carries one; an empty string is treated
     as absent. The clock is never read, so two renders of the same records stay byte-identical.
 
-    Returns: The override when set, else the latest record ``finished_at`` as ISO 8601, else
+    Returns:
+        The override when set, else the latest record ``finished_at`` as ISO 8601, else
         :data:`_UNKNOWN`.
     """
     if override:
@@ -392,10 +390,8 @@ def _finished_at(results: Sequence[ResultRecord], override: str | None) -> str:
 def _artifacts_disabled(results: Sequence[ResultRecord], explicit: bool | None) -> bool:
     """Return whether the report must state that artifact capture was disabled (AAP 0.4.7).
 
-    ``explicit`` is the artifact writer's own ``disabled`` flag, which the caller holding it --
-    ``plugin.py`` -- passes down rather than this package reading it out of the writer's state (AAP
-    0.4.8, 0.13.1).
-
+    ``explicit`` is the artifact writer's own ``disabled`` flag, which ``plugin.py`` passes down
+    rather than this package reading it out of the writer's state (AAP 0.4.8, 0.13.1).
     Without that signal the banner falls back to the records: a run that captured no artifact for
     any of its tests. The inference cannot tell a disabled writer from an all-skipped run, so it is
     only the fallback for a caller that supplies nothing, not the trigger AAP 0.4.7 names.
@@ -418,9 +414,10 @@ def _partition(records: Sequence[ResultElement]) -> tuple[list[ResultRecord], li
     escaping into the session (AAP 0.14.3), and the results come back sorted by node id and the run
     errors by worker id and message.
 
-    Raises: ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
-        It subclasses ``TypeError`` and :class:`foundry.core.exceptions.FoundryError`, so a caller
-        defect surfaces instead of being absorbed into a report.
+    Raises:
+        ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
+            It subclasses ``TypeError`` and :class:`foundry.core.exceptions.FoundryError`, so a
+            caller defect surfaces instead of being absorbed into a report.
     """
     results: list[ResultRecord] = []
     errors: list[RunError] = []
@@ -463,9 +460,8 @@ def build_context(
     0.4.7 names for the report's single banner -- so each is used when given, else derived from the
     records, with :data:`_UNKNOWN` as the last resort. ``report_dir`` is the directory the document
     is written into, which every artifact href is relative to (assumption A5).
-
     Determinism (criterion 14): records sort by node id, run errors by worker id and message, counts
-    by outcome declaration order. Redaction (AAP 0.3.2): a run error's message is scrubbed here, and
+    by outcome declaration order. Redaction (AAP 0.3.2): a run error's message is scrubbed here and
     failure messages and log lines where the panels are built, while contract values are left alone
     because redacting one would break ``foundry report compare``; every such text has its control
     characters spelled out, so the page is plain text.
@@ -473,8 +469,9 @@ def build_context(
     Returns:
         The context, every collection sorted and every free-text value redacted and printable.
 
-    Raises: ElementTypeError: An element is neither a result record nor a run error (see
-        :func:`_partition`).
+    Raises:
+        ElementTypeError: An element is neither a result record nor a run error
+            (see :func:`_partition`).
     """
     scrubber = default_redactor() if redactor is None else redactor
     bundle = DEFAULT_ASSETS if assets is None else assets
@@ -556,11 +553,12 @@ def _search_dirs(source: Path) -> list[str]:
 def _first_external_attribute(document: str) -> str | None:
     """Return the first ``href`` or ``src`` in ``document`` that points outside it, or ``None``.
 
-    Only the attributes the template controls are inspected, which keeps a failure message that
-    legitimately quotes a URL from reading as an external reference.
+    Only the attributes the template controls are inspected, so a failure message that legitimately
+    quotes a URL cannot read as an external reference.
 
-    Returns: The offending value stripped of surrounding whitespace, or ``None`` when every
-        attribute stays inside the document.
+    Returns:
+        The offending value stripped of surrounding whitespace, or ``None`` when every attribute
+        stays inside the document.
     """
     for match in _ATTRIBUTE_REFERENCE.finditer(document):
         value = (match.group("double") or match.group("single") or "").strip()
@@ -579,7 +577,8 @@ def _render_document(context: ReportContext, source: Path, redactor: Redactor) -
     ``href`` or ``src`` value that points outside it, so a template regression that reintroduces an
     external asset takes the fallback.
 
-    Returns: The rendered document, or ``None`` when the template is missing, cannot be rendered, or
+    Returns:
+        The rendered document, or ``None`` when the template is missing, cannot be rendered, or
         pulls in a reference from outside itself; the caller then skips ``report.html``, keeps
         ``results.json``, writes no ``junit.xml`` and leaves the exit code alone (AAP 0.4.7).
     """
@@ -637,19 +636,18 @@ def render(
     :func:`foundry.reporting.store.write_text`, this package's only file writer (AAP 0.4.8). The
     header's run-level values and the artifact writer's flag are the caller's to supply, on the
     terms :func:`build_context` documents.
-
     The asset bundle is validated before anything is rendered, so a bundle that reaches outside the
-    document raises rather than shipping a report that cannot open offline. The finished document is
-    scanned too, at attribute level: autoescape escapes a failure message's quotes, so a URL a
-    message quotes cannot match an ``href`` or ``src``.
+    document raises rather than shipping a report that cannot open offline.
 
-    Returns: The rendered document, or ``None`` when the template is missing, cannot be rendered, or
-        pulls in a reference from outside itself -- the caller then writes no ``report.html``, keeps
-        ``results.json``, writes no ``junit.xml`` and leaves the exit code alone (AAP 0.4.7).
+    Returns:
+        The rendered document, or ``None`` when the template is missing, cannot be rendered, or
+        pulls in a reference from outside itself -- the caller then writes no ``report.html``,
+        keeps ``results.json``, writes no ``junit.xml`` and leaves the exit code alone (AAP 0.4.7).
 
-    Raises: FoundryError: The asset bundle is not self-contained, a programmer error rather than a
-        run fault. ElementTypeError: An element is neither a result record nor a run error
-        (:func:`build_context`).
+    Raises:
+        FoundryError: The asset bundle is not self-contained, a programmer error, not a run fault.
+        ElementTypeError: An element is neither a result record nor a run error
+            (see :func:`build_context`).
     """
     scrubber = default_redactor() if redactor is None else redactor
     bundle = DEFAULT_ASSETS if assets is None else assets

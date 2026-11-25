@@ -4,8 +4,8 @@
 (AAP 0.4.2), which makes the fixtures available before collection and lets a consuming suite use
 them with no ``-p`` flag, no ``conftest.py`` declaration and no configuration file. This module is
 the object that call registers: pytest's fixture discovery scans the attributes of whatever object
-it is handed, and a re-exported fixture function is discovered exactly as one defined here would be,
-because each binding refers to the same function object rather than to a wrapper.
+it is handed, and a re-exported fixture function is discovered as one defined here would be, each
+binding referring to the same function object rather than to a wrapper.
 
 The family, with the scope AAP 0.4.3 publishes for each::
 
@@ -22,13 +22,13 @@ The family, with the scope AAP 0.4.3 publishes for each::
     foundry_log_capture function bounded ring of records from the ``foundry`` logger
     foundry_poll function poller carrying an injectable sleep
 
-**This module adds no behaviour.** Every function lives in the sibling module its import names and
-carries its own docstring, scope and wiring there; what stands here is the imports,
-:data:`FIXTURE_NAMES`, ``__all__`` and this docstring. Nothing is decorated, wrapped or rebound, no
-import is conditional, no configuration is read and no I/O happens. Registration belongs to
-``foundry.plugin`` alone -- listing fixture modules in a non-root conftest is deprecated -- so this
-module declares no plugin list and no hook, and the siblings are named directly rather than through
-the ``foundry.fixtures`` barrel, so no cycle is possible.
+**This module adds no behaviour.** Every function lives in the sibling module its import names
+and carries its own docstring, scope and wiring there; what stands here is the imports,
+:data:`FIXTURE_NAMES`, ``__all__`` and this docstring. Nothing is decorated, wrapped or
+rebound, no import is conditional, no configuration is read and no I/O happens. Registration
+belongs to ``foundry.plugin`` alone -- listing fixture modules in a non-root conftest is
+deprecated -- so this module declares no plugin list and no hook, naming the siblings directly
+rather than through the ``foundry.fixtures`` barrel.
 
 **Stability.** The twelve names and their scopes are the published contract, spelled in test
 signatures and registered by ``foundry.plugin`` under exactly these names, so they may be added to

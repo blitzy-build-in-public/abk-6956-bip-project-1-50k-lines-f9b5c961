@@ -194,13 +194,10 @@ def create_state(
     """Build one run's state from a resolved configuration, resolving nothing further.
 
     The single constructor of :class:`SessionState`: the controller's bootstrap calls it, and every
-    worker too, with the controller's run id, start and invocation directory. Taking the
-    configuration as an argument keeps resolution single, and
-    :meth:`foundry.obs.artifacts.ArtifactWriter.ensure_run_dir` creates the artifact directory with
-    AAP 0.4.7's one-warning isolation. ``run_id`` defaults to one minted from ``started_at`` and a
-    worker passes the controller's, so one run shares one artifact directory; ``invocation_dir``
-    defaults to the working directory. A run id of the wrong shape raises ``FoundryError``, a budget
-    outside its range ``ConfigError``.
+    worker too, with the controller's run id, start and invocation directory. ``run_id`` defaults
+    to one minted from ``started_at`` and a worker passes the controller's, so one run shares one
+    artifact directory; ``invocation_dir`` defaults to the working directory. A run id of the wrong
+    shape raises ``FoundryError``, a budget outside its range ``ConfigError``.
     """
     moment = utc_now() if started_at is None else started_at
     identifier = new_run_id(now=moment) if run_id is None else _validated_run_id(run_id)
@@ -251,13 +248,12 @@ def bootstrap_session(
 ) -> SessionState:
     """Resolve the configuration once, build the run's state and log the run's one ``INFO`` line.
 
-    The controller's bootstrap, called from ``pytest_configure`` before collection, so the run
-    id, the artifact directory and the profile are fixed before the first item is collected (AAP
-    0.4.2). Nothing reads the environment or the working directory unless the matching argument
-    is ``None``, and ``cli_input`` is what the command line supplied, or ``None`` for an
-    invocation that typed no ``--foundry-*`` option (AAP 0.4.7). A fatal configuration fault
-    raises ``ConfigError`` from ``foundry.config.merge.resolve``, and no state is built when it
-    does.
+    The controller's bootstrap, called from ``pytest_configure`` before collection, so the run id,
+    the artifact directory and the profile are fixed before the first item is collected (AAP 0.4.2).
+    Nothing reads the environment or the working directory unless the matching argument is ``None``,
+    and ``cli_input`` is what the command line supplied, or ``None`` for an invocation that typed no
+    ``--foundry-*`` option (AAP 0.4.7). A fatal configuration fault raises ``ConfigError`` from
+    ``foundry.config.merge.resolve``, and no state is built when it does.
     """
     directory = None if invocation_dir is None else Path(invocation_dir)
     config = resolve(cli_overrides=cli_input, environ=environ, cwd=directory)
@@ -359,7 +355,6 @@ def state_from_worker_payload(payload: Mapping[str, object]) -> SessionState:
 
     The worker half of the handshake: it shares the controller's run id, start, artifact directory
     and settings, so both sides write into one ``artifacts/<run_id>/`` tree.
-
     ``payload`` is the mapping stored in ``config.workerinput[WORKER_INPUT_KEY]``; a malformed one
     raises ``FoundryError`` rather than defaulting, because a worker that invented its own run id
     would write its results into a second, unreachable run.
@@ -402,10 +397,7 @@ def assemble_payload(
     """Assemble one collected item's record from the data the capture phase already redacted.
 
     A pure function of its arguments -- no clock, no filesystem, no pytest -- so the same inputs
-    yield an equal payload with its markers, failures and artifacts in canonical order (AAP 0.13.1).
-    The outcome is the final attempt's, as
-    :func:`foundry.execution.coordinator.final_outcome` classifies it, until a quarantine verdict
-    replaces it, so the record, the report, the JUnit element and the exit code agree (AAP 0.4.7).
+    yield an equal payload, its markers, failures and artifacts in canonical order (AAP 0.13.1).
     ``duration_ms`` sums the attempts' own elapsed times, and ``log_tail`` is cut here to the newest
     ``logging.capture_lines`` lines, so a record crossing the worker boundary stays bounded (I7).
     """

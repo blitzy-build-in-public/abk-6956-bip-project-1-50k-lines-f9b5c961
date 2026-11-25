@@ -93,8 +93,7 @@ def _absolute(path: Path, cwd: Path | None) -> Path:
     """Return ``path`` as an absolute normalised path, resolving a relative one against ``cwd``.
 
     ``cwd`` defaults to the process working directory, and every detail string of the directory
-    probes reports this resolved path, so two runs on one machine print identical text
-    (AAP 0.13.1).
+    probes reports this resolved path, so two runs on one machine print identical text (AAP 0.13.1).
     """
     base = Path.cwd() if cwd is None else cwd
     if path.is_absolute():
@@ -179,8 +178,7 @@ def _module_importable(name: str) -> bool:
 
     :func:`importlib.util.find_spec` locates the module rather than executing it, so the plugin
     probe cannot trigger the hooks and registration work that importing :mod:`foundry.plugin` does.
-    A parent package that is missing raises instead, which is reported as "not importable"
-    (AAP 0.1.2).
+    A parent package that is missing raises instead, reported as "not importable" (AAP 0.1.2).
     """
     try:
         return importlib.util.find_spec(name) is not None
@@ -330,8 +328,7 @@ def _prove_writable(path: Path) -> None:
     The only honest proof of writability is a write that really happens, so the probe creates a
     file with the unmistakable :data:`_PROBE_FILE_PREFIX` name and unlinks it in a ``finally``. It
     never creates ``<dir>/<run_id>/``: the run layout belongs to a run, and ``foundry doctor``
-    leaves the artifact tree as it found it. A failed cleanup is suppressed, because a directory
-    that accepted the write has already answered the question.
+    leaves the artifact tree as it found it.
     """
     created: Path | None = None
     try:
@@ -460,11 +457,9 @@ def check_cassette_dir(
 def _isolation_row(name: str, error: BaseException, *, required: bool) -> ProbeResult:
     """Return the ``FAIL`` row a probe that raised leaves behind, after one ``WARNING``.
 
-    The detail carries the exception's class name alone. Its message can hold a path, a header
-    value or another credential, and the detail is serialised into the published document, so it
-    stays out of it; the probes already return rich details for the faults they expect. The record
-    itself goes through :func:`foundry.obs.events.emit_plumbing_failure`, the package's one
-    ``WARNING`` emitter, which takes scalars only and adds the class name of ``error``.
+    The detail carries the exception's class name alone. The record itself goes through
+    :func:`foundry.obs.events.emit_plumbing_failure`, the package's one ``WARNING`` emitter, which
+    takes scalars only and adds the class name of ``error``.
     """
     emit_plumbing_failure(name, _PROBE_FAILURE_DETAIL, exc=error)
     return ProbeResult(
@@ -478,9 +473,9 @@ def _isolation_row(name: str, error: BaseException, *, required: bool) -> ProbeR
 def _guarded(name: str, probe: Callable[[], ProbeResult], *, required: bool) -> ProbeResult:
     """Return ``probe()``'s row, or an isolated ``FAIL`` row when the probe raises (AAP 0.1.2).
 
-    Foundry's own diagnostics never fail a run by crashing: a probe that cannot do its work
-    reports ``FAIL`` with its row, logs at ``WARNING`` and lets ``foundry doctor`` print a table
-    instead of a traceback.
+    Foundry's own diagnostics never fail a run by crashing: a probe that cannot work reports
+    ``FAIL`` with its row, logs at ``WARNING`` and leaves ``foundry doctor`` a table, not a
+    traceback.
     """
     try:
         return probe()

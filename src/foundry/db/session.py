@@ -2,42 +2,35 @@
 
 ``foundry_db`` (AAP 0.4.3) promises "a transactional session on a fresh in-memory sqlite schema
 built from the models the test registers, rolled back at teardown"; :mod:`foundry.db.engine` owns
-the connection and the pool that holds it, and this module owns the transaction that makes the
-promise true -- the only place a test's database work is begun and discarded.
+the connection and the pool holding it, and this module owns the transaction that makes the promise
+true -- the only place a test's database work is begun and discarded.
 
 **The contract, stated once.** Inside a test that requested ``foundry_db`` its own writes are
-visible: an ``add`` followed by ``flush`` is found by the test's own ``select``, and a ``commit``
-leaves the rows in place for the rest of that test. At teardown the transaction is rolled back, the
-session closed and the engine disposed, which for the ``StaticPool`` connection of
-:mod:`foundry.db.engine` also destroys the in-memory database. Nothing a test does is observable by
-another test -- not its rows, not its schema, not a committed batch -- and a test that fails half
-way through leaves nothing behind either (AAP 0.4.3, AAP 0.7.1).
+visible: an ``add`` followed by ``flush`` is found by the test's own ``select``, and a
+``commit`` leaves the rows in place for the rest of that test. At teardown the transaction is
+rolled back, the session closed and the engine disposed, which for
+:mod:`foundry.db.engine`'s ``StaticPool`` connection destroys the in-memory database, so
+nothing a test does reaches another test -- not its rows, not its schema, not a committed
+batch -- and a failing test leaves nothing behind (AAP 0.4.3, AAP 0.7.1).
 
 **Two functions, and no third.** :func:`open_session` creates the schema for the models the test
 registered and opens the session with its outer transaction already begun;
 :func:`rollback_and_close` ends that transaction, closes the session and disposes the engine. The
-transaction is begun explicitly because a session begins one lazily, so a session its test has not
-touched would otherwise have no unambiguous rollback target, including when the test's first call is
-``rollback()`` itself.
+transaction is begun explicitly because a session begins one lazily, so an untouched session would
+have no unambiguous rollback target, not even when its first call is ``rollback()``.
 
 **Teardown never raises** (AAP 0.1.2, AAP 0.14.3, failure isolation). A fixture that cannot roll
-back or close must not turn a passing test into a failing one or change the exit code, so each step
-is wrapped, a fault is reported at ``WARNING`` through
-:func:`foundry.obs.events.emit_plumbing_failure`, and the function returns; a test's own exception
-belongs to pytest and is not swallowed. No message carries a connection string, a database URL being
-able to hold ``user:password`` and a log line reaching the terminal, the captured-log artifact and
-the report (AAP 0.3.2), and the exception contributes its class name alone: a driver's message
-routinely embeds ``[SQL: ...]`` with the ``[parameters: (...)]`` row values a test wrote.
+back or close must not fail a passing test or change the exit code, so each step is wrapped, a
+fault is reported at ``WARNING`` through :func:`foundry.obs.events.emit_plumbing_failure`, and the
+function returns; a test's own exception is not swallowed. No message carries a connection string, a
+URL being able to hold ``user:password`` and a log line reaching the terminal, the captured-log
+artifact and the report (AAP 0.3.2): the exception contributes its class name alone, since a
+driver's message embeds ``[SQL: ...]`` with the ``[parameters: (...)]`` row values a test wrote.
 
-**SQLAlchemy is imported lazily** (implicit requirement I5). ``foundry.plugin`` is imported at every
-pytest start inside a 150 ms budget while a minority of tests request the database fixture, so no
-SQLAlchemy name is bound at module scope: annotated names come from ``TYPE_CHECKING``, called names
-from inside the function that needs them. The outward dependency is :mod:`foundry.db.schema` and
-:mod:`foundry.obs.events` -- the single emission point AAP 0.13.1 declares, so this module acquires
-no logger and inherits the emitter's levels, scrubbing and class-name-only rule; AAP 0.4.8 permits
-exactly ``core`` and ``obs`` here, and no exception type is defined. Importing defines names only,
-and the lifecycle is single-threaded and deterministic (AAP 0.4.8): no thread, no background task,
-no sleep and no socket.
+**Layering.** The outward dependency is :mod:`foundry.db.schema` and :mod:`foundry.obs.events`, the
+single emission point AAP 0.13.1 declares, so this module inherits the emitter's levels, scrubbing
+and class-name-only rule; AAP 0.4.8 permits exactly ``core`` and ``obs`` here, and no exception type
+is defined.
 """
 
 from __future__ import annotations
@@ -145,7 +138,6 @@ def rollback_and_close(session: Session) -> None:
     4. The bind is disposed when it is an :class:`~sqlalchemy.engine.Engine`. Both steps are
        needed: closing hands the ``StaticPool`` connection back to the pool, and only disposing the
        engine closes it -- which for an in-memory sqlite database is also what destroys it.
-
     A bind that is not an engine is a real arrangement with a different owner: a bare
     :class:`~sqlalchemy.engine.Connection`, or no bind at all, is closed here while its connection
     stays open, because disposing it belongs to whoever created it, and that case is reported once
@@ -220,9 +212,8 @@ def _release_bind(bind: Engine | Connection | None | _UnknownBind) -> None:
     Disposing an engine Foundry did not build is not this function's decision: a caller that bound
     its session to a connection owns that connection's lifetime, so the session is closed and the
     connection left alone. A bind that is not an engine is reported once at ``WARNING`` naming its
-    type -- never its value, because an engine's repr carries its URL and a URL can carry a password
-    (AAP 0.3.2 Security). The sentinel is the one exception: :func:`_capture_bind` has already
-    reported that fault, so this function stays quiet rather than reporting one problem twice.
+    type -- never its value, because an engine's repr carries its URL and a URL can carry a
+    password (AAP 0.3.2 Security).
     """
     from sqlalchemy import Engine as SQLAlchemyEngine
 

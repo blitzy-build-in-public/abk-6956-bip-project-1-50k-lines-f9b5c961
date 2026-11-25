@@ -143,8 +143,7 @@ def __getattr__(name: str) -> object:
     """Resolve one published name on first access, importing its defining module at that point.
 
     A name outside :data:`_LAZY_IMPORTS` raises the ``AttributeError`` PEP 562 expects. Nothing is
-    written back into the module globals, so a second access costs one dictionary lookup and returns
-    the very same object.
+    written back into the module globals, so a second access is one dictionary lookup.
     """
     module_name = _LAZY_IMPORTS.get(name)
     if module_name is None:

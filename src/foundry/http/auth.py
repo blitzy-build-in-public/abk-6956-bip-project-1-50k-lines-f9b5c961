@@ -98,13 +98,10 @@ class AuthSettings:
 class AuthHeader:
     """One resolved credential header, holding its value out of every representation.
 
-    ``value`` is declared with ``field(repr=False)`` and no value-bearing ``__str__`` or
-    ``__eq__`` is added, so the dataclass-generated ``__repr__`` renders the name alone and
-    ``str()``, an f-string, a ``%r`` format and a logging call all inherit it. That is the
-    whole leak surface of this module closed: a caller that logs a session, a request
-    preparation or an object graph holding this header writes ``AuthHeader(name='...')`` and
-    never the credential.
-
+    ``value`` is declared with ``field(repr=False)`` and no value-bearing ``__str__`` or ``__eq__``
+    is added, so the generated ``__repr__`` renders the name alone, which ``str()``, an f-string, a
+    ``%r`` format and a logging call inherit. A caller logging a session or an object graph holding
+    this header writes ``AuthHeader(name='...')`` and never the credential.
     The value lives for the lifetime of the session that resolved it. It is never written to an
     artifact, a cassette, a result record or a report -- the sinks persist values only after
     :mod:`foundry.obs.redaction` has masked the names in its deny-list, and ``Authorization`` is
@@ -163,9 +160,11 @@ def _require_setting(value: str | None, key: str, strategy: str, expectation: st
     dotted configuration key and the strategy, and the hint says what to put there; neither mentions
     a value, because none has been read at this point.
 
-    Args: value: The configured value, or ``None``. key: The dotted configuration key it came from.
-        strategy: The normalised strategy that requires it. expectation: What the key should hold,
-        phrased to follow ``set <key> to``.
+    Args:
+        value: The configured value, or ``None``.
+        key: The dotted configuration key it came from.
+        strategy: The normalised strategy that requires it.
+        expectation: What the key should hold, phrased to follow ``set <key> to``.
 
     Returns:
         The configured value with surrounding whitespace removed.
@@ -208,7 +207,6 @@ def _read_secret(environ: Mapping[str, str], variable: str, key: str) -> str:
     The lookup is one mapping read -- cheap enough for ``foundry_api``'s per-test resolution -- and
     no value is cached anywhere: a test may change the environment between tests with
     ``monkeypatch``, so the next resolution must observe the change.
-
     Three states are reported separately and none quotes the variable's content: absent
     (``not set``), not text (defensive, because a test may inject a mapping of anything) and empty
     (``empty``), which no credential strategy can use.

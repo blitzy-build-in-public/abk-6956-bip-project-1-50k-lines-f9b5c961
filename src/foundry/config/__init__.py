@@ -47,10 +47,9 @@ module-level state and keeps the promise AAP 0.4.8 makes about the package.
 def __getattr__(name: str) -> object:
     """Resolve one published name on first access, importing its module at that point.
 
-    A name outside :data:`_LAZY_IMPORTS` raises the ``AttributeError`` PEP 562 expects, so a
-    ``from foundry.config import errors`` statement falls through to importing that submodule.
-    Nothing is written back into the module globals, so a second access costs one dictionary
-    lookup.
+    A name outside :data:`_LAZY_IMPORTS` raises the ``AttributeError`` PEP 562 expects, so a ``from
+    foundry.config import errors`` statement falls through to importing that submodule. Nothing is
+    written back into the module globals, so a second access costs one dictionary lookup.
     """
     module_name = _LAZY_IMPORTS.get(name)
     if module_name is None:

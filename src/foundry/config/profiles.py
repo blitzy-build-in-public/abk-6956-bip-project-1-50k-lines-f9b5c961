@@ -97,8 +97,8 @@ def _sorted_values(values: Mapping[str, object]) -> Mapping[str, object]:
 
     Ordered iteration, not immutability alone, is what the determinism rule needs: a merged mapping
     reaches ``foundry config show``, the debug log line and any test comparing two resolutions.
-    Copying also keeps a caller's later edit of its own dict out of an application it already
-    handed over.
+    Copying also keeps a caller's later edit of its own dict out of an application it already handed
+    over.
     """
     return types.MappingProxyType({key: values[key] for key in sorted(values)})
 
@@ -166,7 +166,6 @@ def apply_profile(
     structurally true rather than a convention. A profile the tables do not contain returns ``base``
     unchanged with ``applied`` false, the zero-configuration state, and an empty table changes
     nothing.
-
     A ``profile`` key inside the table is refused, since it would reselect the profile while its own
     table is applied, as is an undeclared key, reported against ``profile:<name>``.
     :mod:`foundry.config.files` rejects the first when it reads the file; the check is repeated here

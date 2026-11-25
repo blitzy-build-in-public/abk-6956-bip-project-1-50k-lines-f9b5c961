@@ -33,6 +33,9 @@ BASIC_USER: Final[str] = "foundry-probe-user"
 # so a sink that encoded the value instead of masking it is caught by _secret_forms.
 SENTINEL_TOKEN: Final[str] = "rdx-sentinel.T0KEN+4f8a/1c"
 TRACE_VALUE: Final[str] = "trace-not-a-secret-1"
+# The two shapes the reports name, which the probe peer echoes into every reply body it writes.
+QUERIED_LINK: Final[str] = "https://api.example.test/a?p=1"
+ESCAPED_PAIR: Final[str] = '\\"client_secret\\"'
 CHILD_MODULE: Final[str] = "test_redaction.py"
 NODEID: Final[str] = f"{CHILD_MODULE}::test_leaks_nothing"
 RUN_ID: Final[str] = "20250102T030405-9f3c1a"
@@ -77,12 +80,18 @@ class _EchoHandler(BaseHTTPRequestHandler):
             self.rfile.read(int(length))
         headers = {name.lower(): value for name, value in self.headers.items()}
         payload = {"headers": headers, "method": self.command, "path": urlparse(self.path).path}
-        body = json.dumps(payload, sort_keys=True).encode("utf-8")
+        token = headers.get("authorization", "").rpartition(" ")[2]
+        # The two shapes the reports name, spliced after the sorted payload: the queried URL stands
+        # adjacent to a secret-bearing pair, and a JSON document is carried inside a JSON string.
+        shapes = {"link": QUERIED_LINK, "client_secret": token}
+        shapes["echo"] = json.dumps({"client_secret": token})
+        head = json.dumps(payload, sort_keys=True)[:-1]
+        reply = f"{head}, {json.dumps(shapes)[1:-1]}}}".encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(len(reply)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(reply)
 
     def do_POST(self) -> None:
         self.do_GET()
@@ -257,8 +266,9 @@ def test_the_artifact_sink_redacts_every_file_it_writes(
     for strategy, (response, files) in proofs.items():
         directory = next(iter(files.values())).parent
         texts = _artifact_texts(directory)
-        # The control: the payload the writer was handed really carries the secret.
+        # The control: the payload the writer was handed really carries the secret, in both shapes.
         _assert_carries_a_secret(f"the raw {strategy} response body", response.text)
+        assert QUERIED_LINK in response.text and ESCAPED_PAIR in response.text, strategy
         for name, text in texts.items():
             _assert_carries_no_secret(f"{strategy} {name}", text)
         request = texts["request.json"]

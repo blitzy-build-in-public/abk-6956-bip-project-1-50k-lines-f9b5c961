@@ -236,15 +236,16 @@ class SessionSettings:
     configuration model's values are copied here by the fixture that builds the session. Frozen and
     slotted, so a session cannot have its settings changed under it.
 
-    Attributes: base_url: The ``http.base_url`` a relative path is resolved against, or ``None``.
-        timeout: The default deadline in seconds for a request that names none. headers: The static
-        ``http.headers`` pairs, where a later pair of the same name wins. retry: The
-        ``http.retries.*`` policy every logical request runs under. auth: The ``http.auth.*``
-        settings, whose fields name credential variables, or ``None``. redact_keys:
-        ``secrets.redact_keys``, the names the run masks at every sink. cassette_mode: The resolved
-        ``cassette.mode``; the cassette session governs behaviour. require_base_url: Whether a base
-        URL is mandatory, which ``foundry_api`` sets so the constructor raises naming
-        ``http.base_url`` before the first request (AAP 0.4.7).
+    Attributes:
+        base_url: The ``http.base_url`` a relative path is resolved against, or ``None``.
+        timeout: The default deadline in seconds for a request that names none.
+        headers: The static ``http.headers`` pairs, where a later pair of the same name wins.
+        retry: The ``http.retries.*`` policy every logical request runs under.
+        auth: The ``http.auth.*`` settings, whose fields name credential variables, or ``None``.
+        redact_keys: ``secrets.redact_keys``, the names the run masks at every sink.
+        cassette_mode: The resolved ``cassette.mode``; the cassette session governs behaviour.
+        require_base_url: Whether a base URL is mandatory, which ``foundry_api`` sets so the
+            constructor raises naming ``http.base_url`` before the first request (AAP 0.4.7).
     """
 
     base_url: str | None = None
@@ -446,12 +447,10 @@ class FoundrySession:
         """Record this exchange as the running test's ``request.json`` and ``response.json``.
 
         AAP 0.4.6 puts one request dump and one response dump in each test's artifact directory, so
-        the exchange a failure panel links to is the one the test made. The writer is looked up from
-        :func:`foundry.obs.artifacts.active_writer` rather than held on the session, because the
-        session is built by a fixture that sees no item (AAP 0.4.8): outside a test no writer is
-        bound, and in a run whose artifact directory could not be created the bound writer is the
-        disabled one.
-
+        the exchange a failure panel links to is the one the test made. The writer comes from
+        :func:`foundry.obs.artifacts.active_writer` rather than the session, which a fixture builds
+        with no item in sight (AAP 0.4.8): outside a test no writer is bound, and where the artifact
+        directory could not be created the bound writer is the disabled one.
         A capture fault is isolated (AAP 0.1.2): one ``WARNING`` leaves the response, the outcome
         and the exit code untouched. Every dump is already redacted by the response's own engine
         (AAP 0.3.2), so a configured secret has no route onto the disk.
@@ -538,7 +537,6 @@ class FoundrySession:
         The fixture that owns a session calls this in teardown and must not also call the cassette
         session's ``finish()``: the save happens here, exactly once, because a second writer would
         be a second capture of the same test.
-
         A transport that fails to close and a cassette that fails to save are both reported as one
         ``WARNING`` on the ``foundry`` logger, and neither changes a test's outcome or the run's
         exit code (AAP 0.1.2, AAP 0.14.3). What it closes is the transport this session sent on -- a
@@ -587,10 +585,11 @@ class FoundrySession:
 
         ``headers`` is the per-request headers, or ``None``.
 
-        Returns: The merged headers: ``http.headers``' order, then the auth strategy's pair, then
-            the caller's. A name that appears twice keeps its last value at the position it was
-            first set in, because ``httpx.Headers`` removes the duplicate and overwrites in place,
-            so two requests with the same inputs serialise identically.
+        Returns:
+            The merged headers: ``http.headers``' order, then the auth strategy's pair, then the
+            caller's. A name that appears twice keeps its last value at the position it was first
+            set in, because ``httpx.Headers`` removes the duplicate and overwrites in place, so two
+            requests with the same inputs serialise identically.
         """
         merged = httpx.Headers()
         for name, value in self._settings.headers:

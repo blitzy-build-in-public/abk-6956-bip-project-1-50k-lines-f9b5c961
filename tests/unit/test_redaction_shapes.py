@@ -39,6 +39,7 @@ _CHANNELS: Final[tuple[tuple[str, object, object], ...]] = (
     ("text", "{'token': '$s', 'page': 2}", "{'token': '***', 'page': 2}"),
     ("text", '{"token": "$s", "page": 2}', '{"token": "***", "page": 2}'),
     ("text", "Traceback:\n  authorization: Bearer $s", "Traceback:\n  authorization: ***"),
+    ("text", "about to call with token $s", "about to call with token ***"),
     ("url", "http://qa:$s@[::1/x", "http://[::1/x"),
     ("text", "http://qa:$s@[::1/x", "http://[::1/x"),
     ("text", "http://qa:$s@127.0.0.1:38227/a[b] failed", "http://127.0.0.1:38227/a[b] failed"),
@@ -258,6 +259,9 @@ def test_every_shape_a_credential_assignment_takes_loses_its_value(text: str) ->
         ("text", "redact_keys=['authorization', 'set-cookie', 'cookie', 'x-api-key']"),
         ("text", "test_keys.py:3: AssertionError"),
         ("text", '{"nodeid": "tests/test_token_refresh.py::test_x"}'),
+        ("text", "token bucket"),
+        ("text", "password reset required for the admin account"),
+        ("text", "secret rotation is scheduled"),
         ("diagnostic", "unknown configuration key: zzzz_misspelled"),
     ],
 )

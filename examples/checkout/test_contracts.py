@@ -4,12 +4,12 @@ AAP 0.8.1 places this module in the example project as three contract and subset
 these are 3 of the suite's 24 collected tests (6 + 4 + 3 + 2 + 2 + 2 + 2 + 3) -- the count the
 end-to-end test asserts and the set the sharding and determinism tests compare across.
 
-**Three cases rather than one test per helper.** The brief names three helpers
-(``assert_status``, ``assert_json_subset``, ``assert_json_schema``) and exactly three collected
-tests, so the count is met without giving each helper an item of its own: the single currency axis
-of ``testdata/checkout_matrix.yaml`` drives the three cases, and every case runs all three helpers.
-That also exercises the YAML matrix loader from a real entry point -- the cross-product, the axes
-sorted by name and the stable case ids -- which no other example module covers.
+**Three cases rather than one test per helper.** AAP 0.4.3 names three helpers
+(``assert_status``, ``assert_json_subset``, ``assert_json_schema``) and AAP 0.8.1 expects three
+collected tests from this module, so the count is met without giving each helper its own item: the
+single currency axis of ``testdata/checkout_matrix.yaml`` drives the three cases, and every case
+runs all three helpers. That also exercises the YAML matrix loader from a real entry point -- the
+cross-product, the axes sorted by name and the stable case ids -- which no other module covers.
 
 Each case posts one order whose body is a function of the case's own currency value and of nothing
 else: no clock, no generated identifier, no counter. A cassette is matched later on method, path,

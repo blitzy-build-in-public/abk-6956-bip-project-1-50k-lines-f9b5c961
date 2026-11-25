@@ -138,11 +138,52 @@ other runtime constraints use. Declaring it adds no package to the offline closu
 installed transitively, so the install test's closure assertion sees nothing new. The import sits
 inside the function that needs it and never at module scope, so plugin startup cost is unchanged.
 
+## Known advisories and their mitigations
+
+One declared dependency carries an open advisory at the version this release resolves. It is recorded
+here rather than closed in the manifest, because the fixed release falls outside the constraint the
+specification fixes, and the suite is instead configured so that the advisory's vector is not reachable
+from this repository's own runs.
+
+**`pytest` 8.4.2, GHSA-6w46-j5rx-g56g / CVE-2025-71176 / PYSEC-2026-1845.** CWE-379 (generation of a
+predictable temporary file name), CVSS 3.1 score 6.8, affected releases below 9.0.3, fixed in 9.0.3.
+pytest's default base temporary directory is the predictable `{tempfile.gettempdir()}/pytest-of-{user}`,
+which it creates with `exist_ok=True` and then validates through a symlink-following `stat()`, so on a
+host where other users can write the shared temporary root an attacker who pre-creates that name
+redirects the session's temporary tree. This suite requests `tmp_path` and `tmpdir` throughout.
+
+**Why the constraint stands.** `pyproject.toml` declares `pytest>=8.2,<9` because the specification
+fixes that range in its dependency table (AAP 0.5.1) and keeps pytest at 8.4.2 with `pytest-cov` 5.0.0
+(AAP 0.14.6 A10). The fixed 9.0.3 release is outside that range, and changing a declared constraint
+means revising the specification, which a fix may not do.
+
+**What the tree does instead.** `tests/conftest.py` creates a private `tempfile.mkdtemp` root of
+unpredictable name and mode `0700`, exports it as `PYTEST_DEBUG_TEMPROOT` — so every child process,
+`pytester` run and worker inherits it — and as `TMPDIR` when the caller set none, and points the session's
+`basetemp` inside it.
+pytest uses a given base directory directly, so its `pytest-of-{user}` branch is not entered from this
+repository's runs; the root is deleted after a clean run and kept, with its path printed, after a failing
+one. `tests/unit/test_private_temproot.py` asserts the pin through a real session.
+
+**Residual risk.** The mitigation covers this repository's own `tests/` runs only. A bare `pytest` over
+another tree, whether `pytest examples/checkout` or a consumer's own project, still uses pytest 8.4.2's
+default base directory unless `TMPDIR` or `PYTEST_DEBUG_TEMPROOT` names a private root, and every project
+that installs `pytest-foundry` inherits this constraint and therefore that default. Upstream's fix leaves
+the predictable name in place, so a local user who pre-creates `pytest-of-{user}` can still make a run
+fail, a denial of service the advisory itself records as unaddressed.
+
+**When the constraint is next revised.** Raise the floor to `>=9.0.3`, re-verify `pytest-cov` and
+`pytest-xdist` against it, then delete the pin in `tests/conftest.py`, its guard test, and this section's
+mitigation paragraph.
+
 ## Version-resolution notes
 
 - `pytest-timeout` 2.5.0 is yanked on the registry, so the newest non-yanked release inside
   `>=2.3,<3` is 2.4.0, which declares `pytest>=7.0.0` and therefore accepts the 8.4.2 pin. A range
   constraint must never let an installer select the yanked release.
+- `pytest` 8.4.2 carries one open advisory, GHSA-6w46-j5rx-g56g / CVE-2025-71176; the constraint that
+  keeps it cannot reach the 9.0.3 fix, and "Known advisories and their mitigations" above records the
+  private temporary root the suite pins instead.
 - `pytest-cov` 5.0.0 runs against pytest 8.4.2 because the project's pytest configuration sets no
   `filterwarnings=error` entry and therefore stays outside the documented `INTERNALERROR` trigger for
   that plugin combination. The recorded fallback, if such a setting is ever adopted, is pytest 8.3.5

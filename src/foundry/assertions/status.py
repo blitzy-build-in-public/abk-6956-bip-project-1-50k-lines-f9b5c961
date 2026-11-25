@@ -170,10 +170,9 @@ def _body_excerpt(response: HttpResponseLike, redactor: Redactor | None = None) 
     The raw body is cut to :data:`_EXCERPT_INPUT_LIMIT` characters first, which bounds the bytes
     handed to the engine too, so a large body is never walked whole; the redaction engine then
     applies the configured and built-in deny-lists and the
-    :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` byte cap (AAP 0.7.3). The body may be empty;
-    an empty body renders as the empty string. Reading ``response.text`` is assumed not to raise,
-    because a response that cannot report its own body is a fault of the HTTP layer rather than of
-    this assertion, and this helper does not mask it.
+    :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` byte cap (AAP 0.7.3). Reading
+    ``response.text`` is assumed not to raise, because a response that cannot report its own body
+    is a fault of the HTTP layer rather than of this assertion, and this helper does not mask it.
 
     Args:
         response: The response whose body is quoted.

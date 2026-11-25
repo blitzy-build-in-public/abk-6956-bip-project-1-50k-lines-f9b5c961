@@ -126,8 +126,7 @@ def _redact_body(body: str, redactor: Redactor) -> tuple[str, frozenset[str]]:
     A body that parses as JSON is redacted structure-first, so a secret-bearing key loses its value
     however deeply it is nested. A body that is not JSON -- empty, HTML, plain text -- goes through
     the redactor's text path, which scrubs header lines, ``Bearer`` credentials, embedded URLs and
-    ``name=value`` pairs. A JSON body in which nothing secret was found is stored exactly as the
-    peer sent it: rewriting every recorded body would make a replay differ from the live response.
+    ``name=value`` pairs.
 
     Returns:
         The body to persist and the frozenset of key names that were scrubbed from it.
@@ -246,9 +245,8 @@ class CassetteStore:
 
     A store holds the resolved ``cassette.dir`` and the redactor every write passes through, and
     answers where a test's cassette lives (:meth:`path_for`), whether it exists (:meth:`exists`) and
-    what it holds (:meth:`load`). Both write methods funnel into :meth:`save_document`, so the tree
-    has exactly one place that creates a directory, redacts a capture and writes a cassette file
-    (AAP 0.4.8).
+    what it holds (:meth:`load`). Both write methods funnel into :meth:`save_document`, so one place
+    creates a directory, redacts a capture and writes a cassette file (AAP 0.4.8).
 
     Attributes:
         _cassette_dir: The directory the documents live in, as given to the constructor.
@@ -330,8 +328,7 @@ class CassetteStore:
         error: a truncated or hand-edited recording must not replay as if nothing had been recorded.
 
         Returns:
-            The stored document, or :func:`~foundry.cassette.models.empty_document` when the file
-            does not exist.
+            The stored document, or :func:`~foundry.cassette.models.empty_document` when absent.
 
         Raises:
             FoundryError: ``nodeid`` is empty, the file cannot be read or decoded, or its content is

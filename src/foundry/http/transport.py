@@ -152,10 +152,10 @@ def close_quietly(transport: httpx.BaseTransport | None) -> None:
     """Close ``transport``, reporting a fault as one ``WARNING`` instead of raising it.
 
     The teardown path for every transport Foundry builds: a socket that lingers or a pool that
-    refuses to shut down is a fault in Foundry's own plumbing, so it is reported on the
-    ``foundry`` logger and the run keeps its outcomes and its exit code (AAP 0.1.2, AAP 0.14.3).
-    The message names the transport's class and nothing else, since a fault's own text can quote
-    a URL or a header.
+    refuses to shut down is a fault in Foundry's own plumbing, so it is reported on the ``foundry``
+    logger and the run keeps its outcomes and its exit code (AAP 0.1.2, AAP 0.14.3). The message
+    names the transport's class and nothing else, since a fault's own text can quote a URL or a
+    header.
     """
     if transport is None:
         return

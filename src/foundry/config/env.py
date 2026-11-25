@@ -153,8 +153,7 @@ class FoundryEnvSource(EnvSettingsSource):
 
     It reads the mapping it was constructed with instead of ``os.environ``, records in
     :attr:`matched_variables` the operator's spelling the parent found -- which the library exposes
-    nowhere -- and pins :meth:`__call__` to plain builtins, so no ``Any`` leaks upward from the
-    library's signature.
+    nowhere -- and pins :meth:`__call__` to plain builtins, so no ``Any`` leaks upward.
     """
 
     matched_variables: dict[str, str]
@@ -229,7 +228,6 @@ def payload_from_source(environ: Mapping[str, str]) -> EnvPayload:
     The cross-check of :func:`read_env`: it resolves the same names with the same errors and order
     and coerces each leaf through the same :func:`foundry.config.validation.parse_env_value` call,
     so agreement is a property of the construction rather than of two hand-kept copies.
-
     The source is given only the variable each key resolved to rather than the whole mapping,
     because the library folds every name before matching: two spellings of one key collide inside
     it, and which supplies the key is Foundry's tie-break. Only keys both readers resolved enter the
@@ -324,8 +322,7 @@ def _unknown_variable(spelling: str, folded_name: str) -> ConfigError:
 def _resolve_variables(mapping: Mapping[str, str]) -> dict[str, tuple[keys.KeySpec, str]]:
     """Match every configuration variable to its key, refusing the ones that fit none.
 
-    The single pass both readers make, so they cannot refuse different names or report them in a
-    different order.
+    The single pass both readers make, so they cannot refuse different names or reorder them.
 
     Returns:
         One entry per dotted key, holding the key's spec and the spelling that supplied it.

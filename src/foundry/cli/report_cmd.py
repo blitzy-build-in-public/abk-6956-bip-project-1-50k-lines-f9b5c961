@@ -1,11 +1,10 @@
 """``foundry report compare``: which tests regressed between two result documents.
 
-The command prints the three node-id sets -- Newly failing, Newly passing and Still failing, in that
-fixed order -- and ``--json`` prints one document instead. The exit codes are ``0``, ``1`` for a
-newly failing test and ``2`` for an unreadable document, which raises
-:class:`foundry.core.exceptions.DataError` here and is mapped to that code by the command line entry
-point alone. The comparison itself comes from :func:`foundry.reporting.compare.diff_files`; no
-project configuration is read.
+The command prints the three node-id sets -- Newly failing, Newly passing and Still failing, in
+that fixed order -- and ``--json`` prints one document instead. The exit codes are ``0``, ``1`` for
+a newly failing test and ``2`` for an unreadable document, which raises
+:class:`foundry.core.exceptions.DataError` here and is mapped to that code by the command line
+entry point alone.
 """
 
 from __future__ import annotations
@@ -45,8 +44,7 @@ class _ExitCodeGroup(click.Group):
         """Invoke the selected subcommand, then exit with the status it returned.
 
         A non-``int`` value is returned, which click's own machinery ignores; a returned exit
-        status does not return at all, because :meth:`click.Context.exit` ends the invocation with
-        it.
+        status does not return at all, since :meth:`click.Context.exit` ends the invocation.
         """
         result = super().invoke(ctx)
         if isinstance(result, int):
@@ -107,9 +105,8 @@ def compare_command(base: Path, new: Path, *, as_json: bool = False) -> int:
     each with its size and its node ids in ascending order, and an empty group prints ``(none)`` so
     that all three are always visible. Raises: foundry.core.exceptions.DataError: Either path is
     missing, is a directory, cannot be decoded as UTF-8, or does not hold a Foundry result document.
-    Deliberately not caught here: the command line maps it to exit code ``2`` with the message on
-    stderr and nothing on stdout (AAP 0.4.4), and :func:`foundry.cli.main.main` is the one place
-    that mapping is stated.
+    The command line maps it to exit code ``2`` with the message on stderr and nothing on stdout
+    (AAP 0.4.4), a mapping stated once in :func:`foundry.cli.main.main`.
     """
     diff = diff_files(base, new)
     if as_json:

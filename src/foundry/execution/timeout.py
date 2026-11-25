@@ -69,10 +69,8 @@ MAX_TIMEOUT_SECONDS: Final[float] = TIMEOUT_MAX
 """Inclusive upper bound of ``execution.timeout``: one hour for a single test (AAP 0.4.5)."""
 
 TIMEOUT_RANGE_TEXT: Final[str] = TIMEOUT_RANGE
-"""The accepted range as the message states it: ``0 < t <= 3600``.
-
-Quoted from :data:`foundry.core.limits.TIMEOUT_RANGE`, the one spelling of the range, so the same
-sentence appears whichever surface reports the fault.
+"""The accepted range as the message states it: ``0 < t <= 3600``, quoted from the one spelling of
+the range in :data:`foundry.core.limits.TIMEOUT_RANGE`, so every surface reports the same sentence.
 """
 
 TIMEOUT_KEY: Final[str] = "execution.timeout"
@@ -82,8 +80,7 @@ TIMEOUT_MARKER: Final[str] = "Timeout ("
 """The literal prefix pytest-timeout puts in its own failure message.
 
 It reports a timed-out test as ``Timeout (>60.0s) from pytest-timeout.``, and this prefix is the
-stable part of that text. It is only evidence for labelling an attempt; the outcome itself still
-comes from pytest's own report.
+stable part of that text, evidence only for labelling an attempt.
 """
 
 TIMEOUT_METHODS: Final[frozenset[str]] = frozenset({TIMEOUT_METHOD_SIGNAL, TIMEOUT_METHOD_THREAD})
@@ -145,9 +142,8 @@ class _SettingsFactory(Protocol):
     """The call surface of pytest-timeout's ``Settings`` namedtuple class.
 
     A protocol rather than the real class, because the class belongs to an optionally imported peer
-    and must not leak into a signature. It states the four keyword arguments
-    :func:`_build_settings` passes, so a release that renames one fails at that single construction
-    site.
+    and must not leak into a signature. It states the four keyword arguments :func:`_build_settings`
+    passes, so a release that renames one fails at that single construction site.
     """
 
     def __call__(
@@ -465,8 +461,7 @@ def _config_value(config: object, accessor: str, name: str) -> object | None:
     """Read ``name`` from ``config`` through ``accessor``, and ``None`` when it is not readable.
 
     ``getoption`` raises ``ValueError`` for an option nobody registered and ``getini`` for an ini
-    name that is not declared, so a pytest-timeout that renamed its option yields ``None`` rather
-    than an error.
+    name that is not declared, so a pytest-timeout that renamed its option yields ``None``.
     """
     reader = getattr(config, accessor, None)
     if not callable(reader):

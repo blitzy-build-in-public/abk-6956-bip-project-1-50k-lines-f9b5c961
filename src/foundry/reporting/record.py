@@ -388,8 +388,7 @@ class ResultRecord(_FrozenRecord):
     def has_failures(self) -> bool:
         """Return whether the record carries a failure entry to render.
 
-        A quarantined failure carries one too: it is a failure a person has to see, even when it
-        does not fail the run.
+        A quarantined failure carries one too: a person has to see it, even when it fails nothing.
         """
         return bool(self.failures)
 

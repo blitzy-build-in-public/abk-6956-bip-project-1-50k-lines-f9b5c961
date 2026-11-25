@@ -38,12 +38,10 @@ class JsonLoader:
     def load(self, path: Path) -> LoadedTable | LoadedMatrix:
         """Parse the JSON file at ``path`` and return the document it holds.
 
-        The return type is the union rather than the ``LoadedDocument`` alias so
-        that a caller can branch on the shape it received: a table for an array of
-        records or for an object of scalar fields, a matrix for an object whose
-        every value is an array. Which of the two the payload becomes is
-        :func:`foundry.data.loaders.base.classify_document`'s decision and is not
-        repeated here.
+        The return type is the union rather than the ``LoadedDocument`` alias, so a caller can
+        branch on the shape it received: a table for an array of records or of scalar fields, a
+        matrix for an object whose every value is an array. Which of the two the payload becomes is
+        :func:`foundry.data.loaders.base.classify_document`'s decision and is not repeated here.
 
         Args:
             path: An already-resolved path inside ``data.dir``. Locating the file

@@ -139,8 +139,7 @@ class ExecutionRetries:
     def from_config(cls, repeats: int) -> ExecutionRetries:
         """Return the budget for a resolved ``execution.retries`` value.
 
-        The named seam the coordinator calls with the setting it read from the resolved
-        configuration.
+        The named seam the coordinator calls with the setting it read from the resolved config.
 
         Args:
             repeats: Repeats after the first attempt, ``0..10`` (AAP 0.4.5), never coerced, so a

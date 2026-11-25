@@ -207,8 +207,7 @@ def _seconds_from_now(clock: ClockLike | None) -> Callable[[], float]:
         clock: The supplied time source, or ``None`` to measure on the monotonic clock.
 
     Returns:
-        A zero-argument callable returning the seconds elapsed since this function was called,
-        as a ``float``.
+        A zero-argument callable returning the seconds elapsed since the call, as a ``float``.
 
     Raises:
         AssertionError: When ``clock.now()`` returns anything other than a ``datetime``, at
@@ -225,8 +224,7 @@ def _one_line(text: str) -> str:
     """Collapse ``text`` to a single line with runs of whitespace reduced to one space.
 
     A failure message is one line by contract, while the value it quotes is arbitrary: an
-    exception's ``str`` may be a formatted block and a polled payload may be pretty-printed
-    JSON.
+    exception's ``str`` may be a formatted block and a polled payload may be pretty-printed JSON.
 
     Args:
         text: The text to flatten.
@@ -289,10 +287,9 @@ def eventually(
 ) -> T:
     """Poll ``fn`` until it returns a truthy value, or raise once the deadline passes.
 
-    Each poll calls ``fn`` with no arguments. A truthy return value comes back unchanged; a falsy
-    one or a raised exception is remembered and polling continues. When the deadline passes, or the
-    poll budget ends a stalled clock, ``AssertionError`` names the last outcome and the poll count
-    (AAP 0.4.3); ``clock`` and ``redactor`` are additive over AAP 0.4.3 (AAP 0.4.9).
+    Each poll calls ``fn`` with no arguments. When the deadline passes, or the poll budget ends a
+    stalled clock, ``AssertionError`` names the last outcome and the poll count (AAP 0.4.3);
+    ``clock`` and ``redactor`` are additive over AAP 0.4.3 (AAP 0.4.9).
     """
     poll = _require_pollable(fn)
     limit = _require_timeout(timeout, redactor)

@@ -1,18 +1,17 @@
 """The probes behind ``foundry doctor``: what each one checks, and the report they build.
 
 AAP 0.3.2 and AAP 0.7.1 place the environment probes in this package, and this module is their
-public surface: :func:`~foundry.diagnostics.checks.run_checks` runs every probe once,
+public
+surface: :func:`~foundry.diagnostics.checks.run_checks` runs every probe once,
 :class:`~foundry.diagnostics.report.DoctorReport` carries the rows that AAP 0.7.4 prints as a table
 and AAP 0.7.3 serialises as a document, and ``foundry.cli`` renders either form. Nothing here
 decides a finding of its own; the probes read configuration and observe the environment, importing
 only ``core``, ``obs`` and ``config`` and never ``plugin``, ``reporting`` or ``cli`` (AAP 0.4.8).
-Two contracts hold for every probe, and they are stated here because they outlive any single one of
-them. The exit code belongs to :data:`~foundry.diagnostics.checks.REQUIRED_PROBES` alone: a ``fail``
-on one of those five makes ``foundry doctor`` exit ``2``, while a ``warn`` never changes the code
-and the optional socket-guard row never can (AAP 0.4.4). And no probe opens a socket, not even a
-loopback one, because the guard row reads state a host project published rather than connecting to
-anything (AAP 0.9.2). A probe defined outside this package would escape both contracts, so none
-exists.
+The exit code belongs to :data:`~foundry.diagnostics.checks.REQUIRED_PROBES` alone: a ``fail`` on
+one of those five makes ``foundry doctor`` exit ``2``, while a ``warn`` never changes the code and
+the optional socket-guard row never can (AAP 0.4.4). No probe opens a socket, not even a loopback
+one, because the guard row reads state a host project published rather than connecting (AAP 0.9.2),
+and a probe defined outside this package would escape both contracts.
 """
 
 from __future__ import annotations

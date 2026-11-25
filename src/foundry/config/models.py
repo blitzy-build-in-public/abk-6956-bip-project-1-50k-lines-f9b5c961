@@ -5,7 +5,6 @@ accepted range -- and this module is that surface as a value: :class:`FoundryCon
 models beneath it, one per ``[section]`` of ``foundry.toml``. Adding, renaming or removing a key
 breaks a published surface, so the field list below and the registry in :mod:`foundry.config.keys`
 are the same 28 keys.
-
 Resolution is *not* here: :mod:`foundry.config.merge` applies the layers, records a source per key,
 and this model validates the result. No validator reads a file, an environment variable or a clock,
 so equal inputs stay equal. A rejected value is pydantic's own ``ValidationError``, worded for the
@@ -240,8 +239,7 @@ class HttpAuthConfig(BaseModel):
 class HttpConfig(BaseModel):
     """The ``http.*`` table: base URL, timeout, static headers and the retry and auth tables.
 
-    ``base_url`` may be unset, but the ``foundry_api`` fixture raises a ``ConfigError`` naming it
-    while it is.
+    ``base_url`` may be unset, but ``foundry_api`` raises a ``ConfigError`` naming it while it is.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -490,7 +488,6 @@ class FoundryConfig(BaseSettings):
     A run builds exactly one, in :func:`foundry.config.merge.resolve`, from what the four layers
     supplied, and every consumer reads that instance; it is frozen, so no consumer alters what
     another sees, and provenance is attached with :meth:`with_sources`.
-
     It subclasses :class:`pydantic_settings.BaseSettings` so the ``FOUNDRY_`` prefix and ``__``
     nesting are declared where pydantic-settings reads them, while
     :meth:`settings_customise_sources` keeps the caller's mapping the only source: an ambient

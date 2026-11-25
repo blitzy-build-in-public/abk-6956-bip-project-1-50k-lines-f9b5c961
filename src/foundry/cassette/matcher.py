@@ -36,8 +36,7 @@ Matching is unaffected: :func:`matches_recorded` compares the stored path exactl
 class RequestFingerprint:
     """The part of a request a match is decided by, normalised so that equal requests are equal.
 
-    No host, no port and no headers: that is what lets a recording replay on any machine (assumption
-    A7).
+    No host, no port and no headers, so a recording replays on any machine (assumption A7).
 
     Attributes:
         method: The request method, stripped and upper-cased at construction.
@@ -152,10 +151,9 @@ def match(
 ) -> tuple[int, Interaction] | None:
     """Return the ``consumed``-th interaction whose request ``fp`` describes, with its position.
 
-    ``consumed`` counts the matches already replayed, so a request issued twice replays in recording
-    order. A count at or past the last match answers with the last match, so a re-read of one
-    resource replays instead of reporting a miss; a negative count is read as ``0``. The position is
-    returned beside the interaction so the transport can advance its cursor without a second scan.
+    ``consumed`` counts the matches already replayed, so a request issued twice replays in
+    recording order. A count at or past the last match answers with the last match, so a re-read of
+    one resource replays instead of reporting a miss; a negative count is read as ``0``.
 
     Returns:
         ``(index, interaction)`` at the requested offset, or ``None`` when nothing matches.

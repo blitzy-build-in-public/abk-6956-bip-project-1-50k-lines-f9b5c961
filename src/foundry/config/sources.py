@@ -79,8 +79,7 @@ class ConfigSource:
     def is_default(self) -> bool:
         """Return whether the value came from the settings model's own field default.
 
-        A reader that lists origins can then tell the field default apart from a value an operator
-        set to the same value.
+        A reader listing origins can then tell the field default from an operator's same value.
 
         Returns:
             ``True`` when :attr:`layer` is the ``default`` layer.

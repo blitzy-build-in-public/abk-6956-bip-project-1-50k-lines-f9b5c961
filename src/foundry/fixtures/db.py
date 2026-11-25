@@ -4,12 +4,10 @@
 that belongs to that one test: a fresh in-memory sqlite engine, a schema created from the models the
 test registered, and one outer transaction rolled back at teardown.
 
-**What a test gets, and what survives it.** Inside the test its own writes are visible: an ``add``
-followed by a ``flush`` is found by the test's own ``select``, and a ``commit`` leaves the rows in
-place for the rest of that test. At teardown the transaction is rolled back, the session is closed
-and the engine is disposed -- which for an in-memory sqlite database also destroys it -- so no row,
-no schema and no committed batch reaches another test. None of that happens here:
-:func:`foundry.db.session.open_session` creates the schema and begins the transaction and
+**What a test gets, and what survives it.** Inside the test its own writes are visible, and at
+teardown the transaction is rolled back, the session closed and the engine disposed, so no row, no
+schema and no committed batch reaches another test. :mod:`foundry.db.session` states that contract
+in full: :func:`foundry.db.session.open_session` creates the schema and begins the transaction, and
 :func:`foundry.db.session.rollback_and_close` ends them.
 
 **How a test registers its models.** No table is created unless the test asks for it, and there is
@@ -29,10 +27,9 @@ over an empty schema.
 **Isolation and lazy import.** Every request builds its own engine, so nothing is shared or cached
 at module or session scope, and the teardown runs in a ``finally`` -- after a failed test and after
 a ``KeyboardInterrupt`` just as after a passing one. ``SQLAlchemy`` is imported inside the fixture,
-because ``pytest_configure`` imports this module inside a 150 ms budget while a minority of tests
-request the database. :func:`foundry.db.engine.create_engine` accepts nothing but an in-memory
-sqlite URL, so there is no server, driver install, migration step or socket, which is why the URL is
-not a parameter here.
+outside the plugin's 150 ms startup budget (implicit requirement I5). The engine
+:func:`foundry.db.engine.create_engine` accepts nothing but an in-memory sqlite URL, so there is no
+server, driver install, migration step or socket, which is why the URL is not a parameter here.
 """
 
 from __future__ import annotations
@@ -75,12 +72,11 @@ def foundry_db(request: pytest.FixtureRequest) -> Iterator[OrmSession]:
     Function scoped: every test that requests the fixture gets a fresh engine, a fresh schema and a
     fresh transaction, and nothing survives into the next test. The schema holds the tables of the
     models the test passed by indirect parametrisation -- ``@pytest.mark.parametrize("foundry_db",
-    [Widget], indirect=True)`` -- or no table at all when the test passed nothing. Writes the test
-    makes, including ones it commits, are rolled back at teardown, and the session's connection,
-    with the in-memory database, is released on the failing and interrupted paths as well as the
-    passing one. The yielded value is a plain :class:`sqlalchemy.orm.Session`: query it with
-    SQLAlchemy 2.0 typed statements, add rows with ``session.add`` and commit with
-    ``session.commit``.
+    [Widget], indirect=True)`` -- or no table at all when it passed nothing. Writes the test makes,
+    including ones it commits, are rolled back at teardown, and the session's connection, with the
+    in-memory database, is released on the failing and interrupted paths as well as the passing one.
+    The yielded value is a plain :class:`sqlalchemy.orm.Session`: query it with SQLAlchemy 2.0 typed
+    statements, add rows with ``session.add`` and commit with ``session.commit``.
 
     Yields:
         An open session, bound to the test's own engine, whose outer transaction has already begun

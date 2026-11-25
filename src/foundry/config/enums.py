@@ -80,8 +80,7 @@ class CassetteMode(StrEnum):
 class QuarantineMode(StrEnum):
     """Modes accepted by the ``execution.quarantine_mode`` key.
 
-    ``REPORT`` records a quarantined failure without failing the run; ``STRICT`` lets it count
-    against the run.
+    ``REPORT`` records a quarantined failure without failing the run; ``STRICT`` counts it.
     """
 
     REPORT = "report"

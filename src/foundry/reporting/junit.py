@@ -277,8 +277,7 @@ def _add_properties(parent: ElementTree.Element, pairs: Sequence[tuple[str, str]
     """Attach a ``<properties>`` container to ``parent`` when there is a property to record.
 
     An empty ``pairs`` attaches nothing, so a suite that knows no run id carries no empty container.
-    The pairs are the ``(name, value)`` pairs, already redacted, in the order the document lists
-    them.
+    The pairs are the ``(name, value)`` pairs, already redacted, in document order.
     """
     if not pairs:
         return
@@ -341,9 +340,9 @@ def _failure_payload(record: ResultRecord, scrub: Redactor) -> tuple[str, str]:
     each prefixed with its phase name in brackets, so a test that failed in ``setup`` and again in
     ``teardown`` reports both. ``scrub`` is the redactor every message passes through.
 
-    Returns: The ``(message attribute, element text)`` pair. A failing record that carries no
-        failure entry reports :data:`NO_FAILURE_DETAIL_MESSAGE` in both, so no element is ever
-        blank.
+    Returns:
+        The ``(message attribute, element text)`` pair. A failing record that carries no failure
+        entry reports :data:`NO_FAILURE_DETAIL_MESSAGE` in both, so no element is ever blank.
     """
     if not record.failures:
         return NO_FAILURE_DETAIL_MESSAGE, NO_FAILURE_DETAIL_MESSAGE
@@ -479,9 +478,10 @@ def _partition(
     Returns:
         The result records sorted by node id, and the run errors sorted by worker id and message.
 
-    Raises: ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
-        It subclasses ``TypeError`` and ``FoundryError``, so a caller defect surfaces instead of
-        being absorbed into a document that would silently omit a test.
+    Raises:
+        ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
+            It subclasses ``TypeError`` and ``FoundryError``, so a caller defect surfaces instead
+            of being absorbed into a document that would silently omit a test.
     """
     results: list[ResultRecord] = []
     errors: list[RunError] = []
@@ -511,12 +511,14 @@ def render(records: Sequence[ResultElement], *, redactor: Redactor | None = None
     markup, and :func:`_sanitise_tree` removes the code points escaping cannot carry (AAP 0.3.2).
     The document is byte-identical for identical records (AAP 0.14.1).
 
-    Args: records: The run's elements, in any order: result records, run errors, or both. redactor:
-        The run's redactor, built from ``secrets.redact_keys``. ``None`` uses the built-in header
-        and query deny-lists, so a caller cannot skip redaction by omitting it.
+    Args:
+        records: The run's elements, in any order: result records, run errors, or both.
+        redactor: The run's redactor, built from ``secrets.redact_keys``. ``None`` uses the built-in
+            header and query deny-lists, so a caller cannot skip redaction by omitting it.
 
-    Returns: The document as text: the XML declaration, the indented suite and a trailing newline.
-        An empty ``records`` yields a ``<testsuite>`` reporting zero tests.
+    Returns:
+        The document as text: the XML declaration, the indented suite and a trailing newline. An
+        empty ``records`` yields a ``<testsuite>`` reporting zero tests.
 
     Raises:
         ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
@@ -546,7 +548,8 @@ def write(
         path: The document to write, normally ``junit.xml`` in the invocation directory.
         redactor: The run's redactor, or ``None`` for the built-in deny-lists.
 
-    Returns: The path written, or ``None`` when the filesystem refused the write. A refusal is
+    Returns:
+        The path written, or ``None`` when the filesystem refused the write. A refusal is
         reported at ``WARNING`` and changes neither an outcome nor the exit code (AAP 0.14.3).
 
     Raises:

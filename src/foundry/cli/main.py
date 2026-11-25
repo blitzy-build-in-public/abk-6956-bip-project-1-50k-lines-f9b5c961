@@ -6,7 +6,6 @@ one place a Foundry error becomes the exit status AAP 0.4.4 assigns it (AAP 0.4.
 
 **The layer boundary** (AAP 0.4.8): ``foundry.cli`` may import ``core``, ``obs``, ``config``,
 ``execution``, ``diagnostics`` and ``reporting``, never ``foundry.plugin``; importing it is inert.
-
 The subcommand modules are imported inside :func:`build_group` rather than here, because each one
 imports the ``--foundry-*`` override decorator, whose home would otherwise import this module back.
 The PEP 562 :func:`__getattr__` below serves that decorator on first access, never at import time,
@@ -80,12 +79,11 @@ def build_group() -> click.Group:
     calls cannot share a mutable command registry. The group declares ``--version`` from
     :data:`foundry.__version__` and nothing else of its own: each subcommand declares the options
     AAP 0.4.4 documents for it, which is what keeps ``foundry init --help`` free of the
-    configuration overrides that only a configuration-aware command accepts. The five subcommands
-    come from their own modules, imported here rather than at module scope for the circular-import
-    reason the module docstring gives. ``config`` and ``report`` are themselves groups --
-    ``show``/``validate`` and ``compare`` -- published under the ``<verb>_command`` name their
-    modules also expose so the import spelling cannot drift. ``--version`` and ``--help`` both exit
-    ``0``; an invocation that names no subcommand prints the help and is a usage error.
+    configuration overrides that only a configuration-aware command accepts. ``config`` and
+    ``report`` are themselves groups -- ``show``/``validate`` and ``compare`` -- published under
+    the ``<verb>_command`` name their modules also expose so the import spelling cannot drift.
+    ``--version`` and ``--help`` both exit ``0``; an invocation that names no subcommand prints the
+    help and is a usage error.
 
     Returns:
         The application object, ready for :func:`main` or a ``CliRunner`` test.
@@ -126,8 +124,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     process itself. The group is invoked with ``standalone_mode=False`` so click surfaces its
     exceptions here instead of ending the interpreter, which is what makes one documented mapping
     possible. The mapping, and the only exception types this function catches -- an unexpected
-    exception is deliberately left to propagate, so a real defect stays visible instead of becoming
-    exit ``2``:
+    exception deliberately propagates, so a real defect stays visible instead of becoming exit
+    ``2``:
 
     * a command's own ``int`` result is returned unchanged, and a command that returned nothing
       publishes :data:`foundry.cli.exit_codes.SUCCESS`;
@@ -139,7 +137,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     * :class:`KeyboardInterrupt` -- which click re-raises as :class:`click.Abort` in this mode --
       publishes :data:`foundry.cli.exit_codes.INTERRUPT`, pytest's interrupt code, preserved as
       AAP 0.4.7 requires.
-
     A caught error's message is written to stderr by :func:`foundry.cli.render.render_error`, which
     puts the hint on an indented second line and passes both through the redaction engine, so a
     value the configuration masks can never reach the terminal (AAP 0.3.2, 0.7.4).

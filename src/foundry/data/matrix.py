@@ -73,11 +73,10 @@ def expand_axes(
 
     The expansion is a total function of its arguments, which is what a sharded run needs: the axes
     are ordered by ``sorted()`` on their names, so the order the caller wrote them in cannot change
-    the result, and ``itertools.product`` then varies the alphabetically first axis slowest. Each
-    axis keeps the order of its own values, so an author controls the sequence inside an axis and
-    nothing else. ``line`` is ``None`` on every case. A combination is not a line of the file, and a
-    reader records axis positions rather than per-combination ones, so the field reports honestly
-    that there is no line to give instead of inventing one (AAP 0.7.2).
+    the result, and ``itertools.product`` then varies the alphabetically first axis slowest.
+    ``line`` is ``None`` on every case. A combination is not a line of the file, and a reader
+    records axis positions rather than per-combination ones, so the field reports honestly that
+    there is no line to give instead of inventing one (AAP 0.7.2).
 
     Args:
         source_file: The data file the axes were read from; carried on the matrix and on every case
@@ -91,8 +90,7 @@ def expand_axes(
     Returns:
         The expanded matrix, whose ``axes`` are the pairs sorted by axis name and whose ``cases``
         hold one case per combination, each named and identified by
-        :func:`foundry.data.ids.matrix_case_id` and carrying its combination's 0-based position as
-        ``row_index``.
+        :func:`foundry.data.ids.matrix_case_id`, carrying its 0-based position as ``row_index``.
 
     Raises:
         FoundryError: The file's stem is blank, or an axis value cannot be rendered as JSON. Both

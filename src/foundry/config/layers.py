@@ -1,10 +1,9 @@
 """The configuration-layer vocabulary and the per-layer value carriers.
 
 Every value Foundry resolves comes from one of the layers AAP 0.4.5 fixes, and each hands on a
-:class:`LayerPayload`: what it read in flat, dotted-key form plus the detail that names it -- file
-path, variable or option spelling. :data:`LAYER_ORDER` states the order they win in and
-:func:`layer_label` composes the spelling ``foundry config show`` prints, so the precedence rule has
-one edit site.
+:class:`LayerPayload`: what it read in flat, dotted-key form plus the detail that names it.
+:data:`LAYER_ORDER` states the order they win in and :func:`layer_label` composes the spelling
+``foundry config show`` prints, so the precedence rule has one edit site.
 """
 
 from __future__ import annotations
@@ -81,9 +80,9 @@ class ConfigLayer(StrEnum):
     def _missing_(cls, value: object) -> ConfigLayer | None:
         """Return the instance for a profile-labelled spelling, or ``None`` to refuse it.
 
-        :meth:`enum.Enum.__new__` asks this when a value matches no member, which is the case for a
-        value a ``[profiles.<name>]`` table supplied: its layer is ``profile:<name>`` for whichever
-        name the run selected. ``value`` is what a caller looked a member up by, and the answer is a
+        :meth:`enum.Enum.__new__` asks this when a value matches no member, the case for a value a
+        ``[profiles.<name>]`` table supplied: its layer is ``profile:<name>`` for whichever name the
+        run selected. ``value`` is what a caller looked a member up by, and the answer is a
         :class:`ConfigLayer` that is ``profile:<name>`` for a non-empty name, else ``None``, so a
         bare ``profile``, an empty name and a non-text value still raise the ``ValueError`` the enum
         spells.
@@ -127,12 +126,8 @@ def layer_label(layer: ConfigLayer, detail: str = DEFAULT_DETAIL) -> str:
 
     The one composition of the five published spellings -- ``default``, ``file:<path>``,
     ``profile:<name>``, ``env:<VARIABLE>`` and ``cli:<--option>`` -- so the terminal, the JSON
-    document and the TOML document cannot drift apart. :attr:`ConfigLayer.DEFAULT` has nothing finer
-    to name, so its detail is ignored; for the other four, an empty detail yields the bare layer
-    name rather than a dangling separator, and a detail that already carries the label comes back
-    unchanged, so a value can be labelled on the layer it came from and labelled again by a renderer
-    without the prefix doubling. ``detail`` is a file path, an environment variable, an option
-    spelling, a profile name or :data:`DEFAULT_DETAIL`.
+    document and the TOML document cannot drift apart. ``detail`` is a file path, an environment
+    variable, an option spelling, a profile name or :data:`DEFAULT_DETAIL`.
 
     Returns:
         ``default`` for :attr:`ConfigLayer.DEFAULT`; otherwise ``<layer>`` when the detail is empty
@@ -226,16 +221,17 @@ def flatten(
     instead of splitting into ``secrets.redact_keys.0`` and friends. A mapping is descended into,
     except where the registry declares the key itself table-valued: ``[http.headers]`` arrives as
     the one key ``http.headers``, whose value is the header table.
-
     Keeping a table whole is what keeps a payload's keys the keys of the configuration surface:
     ``config show`` prints one row per registry key, and a header table split into
     ``http.headers.accept`` and friends would be attributed in fragments and then rejected as an
     unknown key. Keys are visited in sorted order, so the key a shape fault names is the same on
     every run.
 
-    Args: values: The nested mapping to flatten. prefix: The dotted path it sits under, joined to
-        each key with a dot; empty at the top level. layer: The layer it came from, so a shape fault
-        names it, or ``None`` when the caller does not know and the fault reports as ``default``.
+    Args:
+        values: The nested mapping to flatten.
+        prefix: The dotted path it sits under, joined to each key with a dot; empty at top level.
+        layer: The layer it came from, so a shape fault names it, or ``None`` when the caller does
+            not know and the fault reports as ``default``.
 
     Returns:
         One entry per leaf, keyed by the leaf's dotted path, in sorted order.
@@ -263,16 +259,19 @@ def unflatten(
     it. A leaf value that is itself a mapping -- ``http.headers`` is a table of header names -- is
     stored whole and never merged with a dotted key below it.
 
-    Args: values: The flat dotted keys to nest. layer: The layer whose values these are, so a
-        conflict names it, or ``None`` when the caller does not know.
+    Args:
+        values: The flat dotted keys to nest.
+        layer: The layer whose values these are, so a conflict names it, or ``None`` when the caller
+            does not know.
 
     Returns:
         The nesting, with the keys of every table in sorted order.
 
-    Raises: foundry.core.exceptions.ConfigError: If a key is empty or has an empty segment, if one
-        key is both a value and the prefix of another (``http`` beside ``http.timeout``), or if a
-        key descends below a key already given as a whole value. The message names the shorter key,
-        whose shape is wrong.
+    Raises:
+        foundry.core.exceptions.ConfigError: If a key is empty or has an empty segment, if one
+            key is both a value and the prefix of another (``http`` beside ``http.timeout``), or
+            if a key descends below a key already given as a whole value. The message names the
+            shorter key, whose shape is wrong.
     """
     nested: dict[str, object] = {}
     leaves: set[str] = set()
@@ -301,8 +300,9 @@ def _flatten_into(
     carried to the shape fault, and ``target`` is the flat mapping the leaves are added to, mutated
     in place.
 
-    Raises: foundry.core.exceptions.ConfigError: If a key is not a string, or if a leaf collides
-        with a key already in ``target``.
+    Raises:
+        foundry.core.exceptions.ConfigError: If a key is not a string, or if a leaf collides with
+            a key already in ``target``.
     """
     for key in values:
         if not isinstance(key, str):
@@ -329,8 +329,9 @@ def _insert_leaf(
     describe cannot hold both. The shorter key is reported, because its shape was already
     established when the longer key arrived.
 
-    Raises: foundry.core.exceptions.ConfigError: If ``dotted`` is already present, or if it is a
-        prefix of an existing key or an existing key is a prefix of it.
+    Raises:
+        foundry.core.exceptions.ConfigError: If ``dotted`` is already present, or if it is a
+            prefix of an existing key or an existing key is a prefix of it.
     """
     for existing in target:
         if existing == dotted:

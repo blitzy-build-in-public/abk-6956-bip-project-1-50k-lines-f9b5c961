@@ -1,8 +1,7 @@
 """Redaction engine: the single place where Foundry scrubs secrets out of values.
 
-Every sink passes its values through a :class:`Redactor` *before* serialisation (AAP 0.3.2), and a
-secret is recognised by name or by credential shape. Standard library only, no state, no I/O, no
-``foundry`` import, every method total, so a redaction fault never changes an outcome.
+Every sink passes its values through a :class:`Redactor` *before* serialisation (AAP 0.3.2), which
+recognises a secret by name or shape. Standard library only, no I/O, every method total.
 """
 
 import re
@@ -68,11 +67,12 @@ DEFAULT_QUERY_DENY_LIST: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: Names secret by nature, the catch-all for names no deny-list enumerates (``X-Auth-Token``).
+#: Names secret by nature: the catch-all no deny-list enumerates -- ``X-Auth-Token``, a user name.
 SECRET_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:^|[^a-z0-9])"
     r"(?:access[-_]?token|refresh[-_]?token|authorization|credential[s]?"
-    r"|password[s]?|passwd|pwd|secret[s]?|signature|token[s]?|api[-_]?key|auth|key[s]?)"
+    r"|password[s]?|passwd|pwd|pass|secret[s]?|signature|token[s]?|api[-_]?key"
+    r"|user(?:name)?s?|login|auth|key[s]?)"
     r"(?:$|[^a-z0-9])",
     re.IGNORECASE,
 )
@@ -102,8 +102,7 @@ _SECRET_HEADER_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 
-#: A cookie header loses its whole value, marked with :data:`TRUNCATION_MARKER`: its pairs need
-#: hold no secret word, so no part of it can be resolved.
+#: A cookie header loses its whole value, marked: its pairs hold no word that can be resolved.
 _COOKIE_HEADER_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\b(?P<name>cookie|set-cookie)(?P<sep>\s*:\s*)(?P<value>[^\r\n]+)",
     re.IGNORECASE,
@@ -114,10 +113,10 @@ _HEADER_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?P<name>[A-Za-z0-9][A-Za-z0-9\-_.]{0,63})(?P<sep>[ \t]*:[ \t]*)(?P<value>[^\r\n]+)"
 )
 
-#: A URL embedded in free text, so a logged request line is scrubbed like a recorded one. A quoted
-#: run after it belongs to the URL, so ``?token="<secret>"`` is scrubbed rather than left behind.
+#: A URL in free text: a quoted run joins it only as a ``=`` value, so a pair after it survives.
 _URL_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"[A-Za-z][A-Za-z0-9+.\-]*://(?:\"[^\"]*\"|'[^']*'|[^\s\"'<>`\\()])+"
+    r"[A-Za-z][A-Za-z0-9+.\-]*://"
+    r"(?:[^\s\"'<>`\\()=]+(?:=(?:\"[^\"]*\"|'[^']*'|[^\s\"'<>`\\()]*))?)+"
 )
 
 #: The credential a URL carries before its host, ``scheme://user:pass@``, stripped from free text.
@@ -128,7 +127,7 @@ _USERINFO_PATTERN: Final[re.Pattern[str]] = re.compile(
 #: A ``name=value`` or ``"name": "value"`` pair, its name checked by ``_free_text_redacts``.
 _KEY_VALUE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?P<open>[\"']?)"
-    r"(?P<name>\b[A-Za-z0-9][A-Za-z0-9_\-]{0,63})"
+    r"(?P<name>\b[A-Za-z0-9][A-Za-z0-9_.\-]{0,63})"
     r"(?P<close>[\"']?)"
     r"(?P<sep>\s*[=:]\s*)"
     r"(?:"
@@ -139,33 +138,43 @@ _KEY_VALUE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r")"
 )
 
-#: A quoted pair-list entry, ``["token", "value"]`` or ``('token', 'value')``, whose value goes
-#: when its name is deny-listed, wherever it stands; :meth:`Redactor._redact_quoted_pair` still
-#: keeps a rendered deny-list of names readable (AAP 0.4.5).
+#: A quoted run wrapped around a concatenation or left open by one: a source line's literal.
+_LITERAL_TAIL_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[\"'][ \t]*[+%][ \t]*(?:[^\"']*[+%][ \t]*[\"']|[^\"']*$)"
+)
+
+#: A quoted pair-list entry, ``["token", "value"]``: its value goes when its name is deny-listed.
 _QUOTED_PAIR_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?P<name_quote>[\"'])(?P<name>[A-Za-z0-9][A-Za-z0-9_.\-]{0,63})(?P=name_quote)"
     r"(?P<sep>[ \t\r\n]{0,8},[ \t\r\n]{0,8})"
     r"(?P<value_quote>[\"'])(?P<value>(?:[^\"'\\\r\n]|\\.)*)(?P=value_quote)"
 )
 
-#: Further header lines one multipart part may carry: RFC 7578 gives a part only MIME headers, so
-#: ``Content-Disposition`` plus at most ``Content-Type``, ``Content-Transfer-Encoding`` and
-#: ``Content-ID``. Eight covers them, and the cap keeps the scan linear in the text's length.
+#: A pair inside a JSON document embedded in a JSON string: a plain scalar value, level by level.
+_ESCAPED_PAIR_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?P<name_quote>\\+\")(?P<name>[A-Za-z0-9][A-Za-z0-9_.\-]{0,63})(?P=name_quote)"
+    r"(?P<sep>\s*:\s*)(?P<value_quote>\\+\")(?P<value>[^\"\\]*)(?P=value_quote)"
+)
+
+#: A name, a space and a token carrying a digit and a letter; ``token bucket`` keeps its words.
+_SPACED_SECRET_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?P<name>\b[A-Za-z][A-Za-z0-9_\-]{0,63})(?P<sep>[ \t]+)"
+    r"(?P<value>(?=[\w+=/.\-]*[0-9])(?=[\w+=/.\-]*[A-Za-z])[\w+=/.\-]{12,})"
+)
+
+#: Header lines one multipart part may carry: RFC 7578 gives a part MIME headers; eight suffice.
 _MAX_PART_HEADER_LINES: Final[int] = 8
 
-#: Pre-check for the multipart scan, so text naming no part skips the walk: a part header names its
-#: field through a ``name`` parameter, a shape no other line holds.
+#: Pre-check for the multipart scan: a part header names its field through a ``name`` parameter.
 _MULTIPART_HINT_PATTERN: Final[re.Pattern[str]] = re.compile(r"name[ \t]*=", re.IGNORECASE)
 
-#: The ``name`` parameter naming a multipart part, matched inside one line: at the line's start or
-#: after the ``;``, so ``filename=`` is never a name; whether the line is a header is _part_spans'.
+#: The ``name`` parameter naming a part, matched inside one line so ``filename=`` is never a name.
 _MULTIPART_NAME_PARAM_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:^|;)[ \t]*(?i:name)[ \t]*=[ \t]*"
     r"(?P<quote>[\"']?)(?P<name>[A-Za-z0-9][A-Za-z0-9_.\-]{0,63})(?P=quote)"
 )
 
-#: The three line breaks the scan treats as one. ``str.splitlines`` would additionally break on
-#: ``\v``, ``\f`` and the Unicode separators, reading a terminator into text that holds none.
+#: The three line breaks the scan treats as one; ``str.splitlines`` breaks on more than these.
 _LINE_BREAK_PATTERN: Final[re.Pattern[str]] = re.compile(r"\r\n|\n|\r")
 
 #: Re-scan pre-check: without ``=``, ``:`` or ``Bearer``/``Basic`` a span cannot hold a pair.
@@ -178,18 +187,13 @@ _FILE_EXTENSION_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?i:py|pyi|pyx|json|jsonl|toml|yaml|yml|xml|csv|txt|log|ini|cfg|md|sql|sh|db)\Z"
 )
 
-#: A quoted scalar of a rendered collection: one entry of a list of names, or of a list of pairs.
 _QUOTED_SCALAR_PATTERN: Final[re.Pattern[str]] = re.compile(r"\"([^\"\r\n]*)\"|'([^'\r\n]*)'")
 
 
-def _is_name_list(collection: str, redacts: Callable[[str], bool]) -> bool:
-    """Report whether a rendered collection holds quoted entries that are all deny-listed names.
-
-    A deny-list a configuration echo publishes -- ``redact_keys=['authorization', 'cookie']`` -- is
-    a value, not a credential (AAP 0.4.5); one other entry may carry a secret, so the whole masks.
-    """
+def _is_name_list(collection: str, denies: Callable[[str], bool]) -> bool:
+    """Report whether a rendered collection's entries are deny-listed names (AAP 0.4.5)."""
     scalars = [dquote or squote for dquote, squote in _QUOTED_SCALAR_PATTERN.findall(collection)]
-    return bool(scalars) and all(redacts(scalar) for scalar in scalars)
+    return bool(scalars) and all(denies(scalar) for scalar in scalars)
 
 
 def _as_text(value: object) -> str:
@@ -259,11 +263,7 @@ class _PartSpans(NamedTuple):
 
 
 def _next_line_end(text: str, start: int) -> tuple[int, int]:
-    """Return where the line at ``start`` ends, and where the line below it begins.
-
-    The two are equal for the last line of text carrying no break, which is how a caller tells
-    "another line follows" from "the text ends here".
-    """
+    """Return where the line at ``start`` ends, and where the line below it begins."""
     match = _LINE_BREAK_PATTERN.search(text, start)
     if match is None:
         return len(text), len(text)
@@ -271,12 +271,7 @@ def _next_line_end(text: str, start: int) -> tuple[int, int]:
 
 
 def _part_spans(text: str, line_end: int, next_start: int) -> _PartSpans | None:
-    """Return the body spans of the part whose ``name`` parameter line ends at ``line_end``.
-
-    ``next_start`` is where the line below it begins. The header ends at a blank line -- two breaks
-    with blanks between them -- within :data:`_MAX_PART_HEADER_LINES` lines, and the body runs from
-    below it to the line opening with ``--``. ``None`` says no terminator follows within the cap.
-    """
+    """Return the body spans of the part whose ``name`` parameter line ends at ``line_end``."""
     if next_start <= line_end:
         # The ``name`` parameter line is the last one and carries no break, so no part follows it.
         return None
@@ -351,18 +346,25 @@ class Redactor:
         split = _CAMEL_BOUNDARY_PATTERN.sub(" ", raw).casefold()
         return split != folded and SECRET_NAME_PATTERN.search(split) is not None
 
-    def _free_text_redacts(self, name: str) -> bool:
-        """Report whether a name is secret-bearing in free text; a file name is not."""
-        _, dot, extension = _as_text(name).rpartition(".")
-        return not (dot and _FILE_EXTENSION_PATTERN.match(extension)) and self.redacts(name)
+    def _is_deny_name(self, name: str) -> bool:
+        """Report whether ``name`` is a deny-listed name, never a value merely shaped like one."""
+        return _as_text(name).strip().casefold() in self.keys
+
+    def _free_text_redacts(self, name: str, value: str = "") -> bool:
+        """Report whether a name is secret-bearing in free text; a location names no secret.
+
+        A line or node-id separator after the name keeps a location readable (AAP 0.4.6), so
+        ``data/password.csv:12:3`` survives while ``{"db_password.json": "x"}`` masks.
+        """
+        stem, dot, extension = _as_text(name).rpartition(".")
+        if dot and _FILE_EXTENSION_PATTERN.match(extension):
+            return not (value[:1].isdigit() or value[:1] == ":") and self.redacts(stem)
+        return self.redacts(name)
 
     def header(self, name: str, value: str) -> str:
-        """Return a header value masked by name and then scrubbed as free text.
+        """Return a header value masked by name then scrubbed as free text (AAP 0.3.2, 0.14.3).
 
-        A name :meth:`redacts` recognises loses its whole value to :data:`REDACTED`; any other keeps
-        a value that still passes through :meth:`text`, since the deny-lists cannot enumerate every
-        invented header, so an echoed ``x-echo: token=...`` loses its value before reaching a dump,
-        a cassette or a terminal (AAP 0.3.2, AAP 0.14.3).
+        A recognised name loses its value; any other goes through :meth:`text` (AAP 0.14.3).
         """
         try:
             if self.redacts(name):
@@ -372,11 +374,7 @@ class Redactor:
             return REDACTED
 
     def headers(self, headers: Mapping[str, str]) -> dict[str, str]:
-        """Return a redacted copy of ``headers``, ordered by case-folded name.
-
-        Every value goes through :meth:`header`, so a secret-bearing name renders as the marker and
-        a value under any other name is free-text scrubbed rather than trusted (AAP 0.3.2).
-        """
+        """Return a redacted copy of ``headers``, ordered by case-folded name (AAP 0.3.2)."""
         try:
             pairs = _name_value_pairs(headers)
         except (AttributeError, KeyError, TypeError, ValueError):
@@ -389,8 +387,7 @@ class Redactor:
     def query(self, params: Mapping[str, str] | Sequence[tuple[str, str]]) -> dict[str, str]:
         """Return a redacted copy of query parameters, ordered by case-folded name.
 
-        Only the name decides here, as the URL-parameter deny-list of AAP 0.3.2 states it; unlike
-        :meth:`header`, a value kept under any other name is not scrubbed.
+        Only the name decides (AAP 0.3.2); unlike :meth:`header`, another name's value is kept.
         """
         result: dict[str, str] = {}
         for name, value in sorted(_name_value_pairs(params), key=_pair_sort_key):
@@ -411,6 +408,9 @@ class Redactor:
         if not parts.scheme and not parts.netloc:
             return self._scrub(candidate, include_urls=False)
         netloc = parts.netloc.rsplit("@", 1)[-1]
+        # No port follows the colon, so the authority is userinfo whose ``@`` truncation removed.
+        if ":" in netloc and "[" not in netloc and not netloc.rpartition(":")[2].isdigit():
+            netloc = REDACTED
         redacted: list[tuple[str, str]] = [
             (name, REDACTED if self.redacts(name) else value)
             for name, value in parse_qsl(parts.query, keep_blank_values=True)
@@ -425,23 +425,14 @@ class Redactor:
         return urlunsplit((parts.scheme, netloc, parts.path, query, fragment))
 
     def text(self, text: str, *, limit: int | None = None) -> str:
-        """Scrub secrets out of free text such as a message, a URL or a traceback.
-
-        ``Bearer``/``Basic`` credentials, URLs, secret pairs and header lines lose their values;
-        redaction precedes truncation, and ``limit`` is a UTF-8 byte budget splitting no character.
-        """
+        """Scrub free text, clipping to ``limit``; redaction precedes truncation (AAP 0.14.3)."""
         return self._scrubbed(text, limit=limit, diagnostic=False)
 
     def diagnostic(self, text: str, *, limit: int | None = None) -> str:
         """Scrub the values a ``Foundry`` diagnostic carries, and read its own prose as prose.
 
-        AAP 0.4.5 makes an unknown key, its closest match and a key's accepted range part of the
-        message -- ``unknown configuration key: http.timeot``, ``invalid value for option
-        --foundry-http.auth.strategy: expected none, bearer, basic, header`` -- so every pass
-        :meth:`text` applies runs except the free-text ``Name: value`` inference: a header line and
-        a colon-separated pair whose name is unquoted read as prose. An ``=`` pair, a quoted pair, a
-        deny-listed header line, a cookie line, a ``Bearer``/``Basic`` credential, URL userinfo and
-        URL query parameters still apply; ``limit`` behaves as in :meth:`text`.
+        AAP 0.4.5 puts the key, its closest match and its range in the message, so only the
+        free-text ``Name: value`` inference is skipped. ``limit`` as in :meth:`text`.
         """
         return self._scrubbed(text, limit=limit, diagnostic=True)
 
@@ -494,9 +485,8 @@ class Redactor:
             return self._redact_mapping(value, depth)
         if isinstance(value, list | tuple):
             if len(value) == 2 and isinstance(value[0], str) and self.redacts(value[0]):
-                # A two-element ``[name, value]`` pair arrives thus from a decoded query or header
-                # list: the name is the key, so only the value is secret; any other sequence
-                # recurses element by element, so a plain array of two values is untouched.
+                # A two-element ``[name, value]`` pair from a decoded query or header list: only the
+                # value is secret, and any other sequence recurses element by element.
                 return [value[0], REDACTED]
             return [self._redact_value(item, depth + 1) for item in value]
         if isinstance(value, set | frozenset):
@@ -554,8 +544,11 @@ class Redactor:
             lambda match: self._redact_key_value(match, nested=nested, diagnostic=diagnostic),
             value,
         )
-        # After the ``name=value`` pass, which already resolved a ``"name": "value"`` pair, and
-        # before the cookie pass: last, so nothing reduces the value it produced to one token.
+        # A JSON document embedded in a JSON string is invisible to every pattern above.
+        value = _ESCAPED_PAIR_PATTERN.sub(self._redact_escaped_pair, value)
+        # Prose separates a name from its token with a space, which only this pass reads.
+        value = _SPACED_SECRET_PATTERN.sub(self._redact_spaced_secret, value)
+        # After the pair pass that resolved a ``name: value`` pair, and before the cookie pass.
         value = _QUOTED_PAIR_PATTERN.sub(self._redact_quoted_pair, value)
         return _COOKIE_HEADER_LINE_PATTERN.sub(self._redact_cookie_header_line, value)
 
@@ -564,10 +557,7 @@ class Redactor:
     ) -> str:
         """Replace the body of every multipart part named by a secret-bearing ``name`` parameter.
 
-        One left-to-right walk, linear in the length of ``value``: each line is searched once, and
-        the lines below a candidate are bounded by :data:`_MAX_PART_HEADER_LINES`. The part header
-        is kept, so a reader sees which field lost its body, and a part whose name is not secret
-        keeps a body scrubbed in turn, since a nested body is a shape no other pass reads.
+        One left-to-right walk; a part whose name is not secret keeps a scrubbed body in turn.
         """
         if _MULTIPART_HINT_PATTERN.search(value) is None:
             return value
@@ -618,11 +608,9 @@ class Redactor:
         return f"{match.group('name')}: {REDACTED} {TRUNCATION_MARKER}"
 
     def _redact_header_value(self, value: str) -> str:
-        """Return the substitute for the value of a secret-bearing header line.
+        """Return the substitute for a secret-bearing header line's value (AAP 0.4.5).
 
-        Only a credential the engine resolves is replaced alone, keeping its diagnostics; the rest
-        loses all of it, marked with :data:`TRUNCATION_MARKER`, and a value already beginning with
-        the marker is left as it is, so re-scanning redacted text changes nothing.
+        A resolved credential is replaced alone; the rest loses all of it, and a marked value stays.
         """
         tokens = value.split()
         if tokens and tokens[0] == REDACTED:
@@ -642,7 +630,7 @@ class Redactor:
         if name.casefold() in DEFAULT_HEADER_DENY_LIST:
             return match.group(0)
         prefix = f"{name}{match.group('sep')}"
-        if self._free_text_redacts(name):
+        if self._free_text_redacts(name, match.group("value")):
             return f"{prefix}{self._redact_header_value(match.group('value'))}"
         return self._rescan_value(prefix, match.group("value"), nested=nested)
 
@@ -653,30 +641,45 @@ class Redactor:
         name = match.group("name")
         prefix = f"{match.group('open')}{name}{match.group('close')}{match.group('sep')}"
         value = match.group(0)[len(prefix) :]
-        # Prose separates a sentence from its value rather than naming a credential, and a name no
-        # deny-list recognises is no key either, so a value under either keeps its scrubbed text.
+        if match.group("bare") is None and _LITERAL_TAIL_PATTERN.match(value) is not None:
+            # A source line's literal: what follows the separator is an operator and the next
+            # literal, not a value, so masking it would drop the code around it.
+            return match.group(0)
+        # Prose names no credential and an unknown name is no key, so both keep scrubbed text.
         prose = diagnostic and ":" in match.group("sep") and not match.group("open")
-        if prose or not self._free_text_redacts(name):
+        if prose or not self._free_text_redacts(name, value):
             return self._rescan_value(prefix, value, nested=nested, diagnostic=diagnostic)
         if match.group("bracketed") is not None:
-            # A bracketed collection is a published value only while every quoted entry is a
-            # deny-listed name; any other collection -- ``tokens=["abc123"]`` -- masks whole.
-            return prefix + value if _is_name_list(value, self.redacts) else f"{prefix}{REDACTED}"
+            # A collection is published only while every quoted entry is a deny-listed name.
+            published = _is_name_list(value, self._is_deny_name)
+            return prefix + value if published else f"{prefix}{REDACTED}"
         if match.group("dquoted") is not None:
             return f'{prefix}"{REDACTED}"'
         if match.group("squoted") is not None:
             return f"{prefix}'{REDACTED}'"
         return f"{prefix}{REDACTED}"
 
-    def _redact_quoted_pair(self, match: re.Match[str]) -> str:
-        """Replace the value of a quoted ``["name", "value"]`` pair, keeping the name readable.
+    def _redact_spaced_secret(self, match: re.Match[str]) -> str:
+        """Replace the token a secret-bearing name introduces with a space, keeping the name."""
+        if not self._free_text_redacts(match.group("name"), match.group("value")):
+            return match.group(0)
+        return f"{match.group('name')}{match.group('sep')}{REDACTED}"
 
-        The text before the value stays as written, so a second pass changes nothing; an entry of a
-        rendered deny-list -- ``'set-cookie', 'cookie'`` -- reads as written (AAP 0.4.5).
+    def _redact_quoted_pair(self, match: re.Match[str]) -> str:
+        """Replace the value of a quoted pair-list entry, keeping its name (AAP 0.4.5).
+
+        The text before the value stays as written, so a re-scan changes nothing.
         """
-        if _is_name_list(match.group(0), self.redacts) or not self._free_text_redacts(
-            match.group("name")
+        if _is_name_list(match.group(0), self._is_deny_name) or not self._free_text_redacts(
+            match.group("name"), match.group("value")
         ):
+            return match.group(0)
+        kept = match.group(0)[: match.start("value") - match.start(0)]
+        return f"{kept}{REDACTED}{match.group('value_quote')}"
+
+    def _redact_escaped_pair(self, match: re.Match[str]) -> str:
+        """Mask the value of a pair inside a JSON document embedded in a JSON string."""
+        if not self._free_text_redacts(match.group("name"), match.group("value")):
             return match.group(0)
         kept = match.group(0)[: match.start("value") - match.start(0)]
         return f"{kept}{REDACTED}{match.group('value_quote')}"

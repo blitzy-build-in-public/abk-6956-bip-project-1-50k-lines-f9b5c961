@@ -1,6 +1,8 @@
 """``foundry.cassette``: the document, the matcher, the store and the four modes, with the published
 keys, the match rule (method, path, decoded query pairs, body hash), the ``***`` marker, the typed
-miss and the committed fixture's round trip all pinned.
+miss and the committed fixture's round trip all pinned. A redacted query value never reaches the
+committed file in the clear: capture writes the marker, names the parameter in ``redacted_keys`` and
+replay matches on that same marker.
 """
 
 from __future__ import annotations
@@ -53,6 +55,13 @@ _NODEID: Final[str] = "tests/test_api.py::test_checkout[ticket-1]"  # carries /,
 _REPLAY_HOST: Final[str] = "http://cassette.invalid:9999"
 _PROBE_URL: Final[str] = "http://127.0.0.1:54321/echo?page=2&limit=10"
 _FLAGS: Final[tuple[str, ...]] = ("reads", "writes", "network", "miss_raises", "falls_through")
+# Query-value redaction: assembled from parts, so no secret scanner reads a test value as a leak.
+_QUERY_SENTINEL: Final[str] = "-".join(("S3NT1NEL", "capture", "4a91"))
+_QUERY_OTHER: Final[str] = "-".join(("S3NT1NEL", "capture", "b3ef"))
+_QUERY_LEGACY: Final[str] = "-".join(("S3NT1NEL", "plaintext", "earlier"))
+_QUERY_NODEID: Final[str] = "tests/test_health.py::test_health[ticket-1]"
+_JSON_BODY: Final[str] = '{"ok": true}'
+_OTHER_HOST: Final[str] = "https://127.0.0.1:1"
 
 
 def _request(
@@ -98,6 +107,10 @@ def _live_stub(*, body: bytes = b"live") -> tuple[httpx.MockTransport, list[http
         return httpx.Response(200, headers={"content-type": "text/plain"}, content=body)
 
     return httpx.MockTransport(handle), calls
+
+
+def _json_stub() -> httpx.MockTransport:
+    return _live_stub(body=_JSON_BODY.encode("utf-8"))[0]
 
 
 @pytest.fixture
@@ -283,3 +296,86 @@ class TestCassette:
         for nodeid, mode in (("   ", "off"), (_NODEID, "sometimes")):
             with pytest.raises(FoundryError):
                 CassetteSession(nodeid, mode=mode, store=store, live_transport=live)
+
+
+class TestQueryRedaction:
+    @pytest.mark.parametrize(
+        ("query", "document_query", "keys"),
+        [
+            (f"token={_QUERY_SENTINEL}&page=2", [["page", "2"], ["token", _REDACTED]], ["token"]),
+            (
+                f"token={_QUERY_SENTINEL}&page=2&token={_QUERY_OTHER}",
+                [["page", "2"], ["token", _REDACTED], ["token", _REDACTED]],
+                ["token"],
+            ),
+        ],
+    )
+    def test_a_recorded_query_holds_the_marker_and_names_the_parameter(
+        self, store: CassetteStore, query: str, document_query: list[list[str]], keys: list[str]
+    ) -> None:
+        live = _json_stub()
+        session = CassetteSession(_QUERY_NODEID, mode="record", store=store, live_transport=live)
+        response = _get(session.transport(), f"{_REPLAY_HOST}/health?{query}")
+        written = session.finish()
+        session.close()
+        assert response.text == _JSON_BODY and written is not None
+        text = written.read_text(encoding="utf-8")
+        payload = _parsed(text)
+        assert payload["interactions"][0]["request"]["path"] == "/health"
+        assert payload["interactions"][0]["request"]["query"] == document_query
+        assert payload["redacted_keys"] == keys
+        assert _QUERY_SENTINEL not in text and _QUERY_OTHER not in text
+
+    @pytest.mark.parametrize(
+        ("query", "source", "miss_path"),
+        [
+            (f"token={_QUERY_SENTINEL}&page=2", SOURCE_CASSETTE, None),
+            (f"token={_QUERY_OTHER}&page=2", SOURCE_CASSETTE, None),
+            (f"token={_QUERY_SENTINEL}&page=3", None, f"/health?page=3&token={_REDACTED}"),
+        ],
+    )
+    def test_a_recorded_token_bearing_request_replays_and_a_changed_plain_value_misses(
+        self, store: CassetteStore, query: str, source: str | None, miss_path: str | None
+    ) -> None:
+        live = _json_stub()
+        record = CassetteSession(_QUERY_NODEID, mode="record", store=store, live_transport=live)
+        _get(record.transport(), f"{_REPLAY_HOST}/health?token={_QUERY_SENTINEL}&page=2")
+        assert record.finish() is not None
+        record.close()
+        replay = CassetteSession(_QUERY_NODEID, mode="replay", store=store)
+        transport = replay.transport()
+        try:
+            if source is None:
+                with pytest.raises(CassetteMissError) as raised:
+                    _get(transport, f"{_OTHER_HOST}/health?{query}")
+                error = raised.value
+                expected = (miss_path, store.path_for(_QUERY_NODEID))
+                assert (error.method, error.path, error.cassette_path) == ("GET", *expected)
+                assert "GET" in error.message and str(expected[1]) in error.message
+                assert _QUERY_SENTINEL not in error.message and _QUERY_SENTINEL not in error.path
+            else:
+                response = _get(transport, f"{_OTHER_HOST}/health?{query}")
+                assert response.extensions[SOURCE_EXTENSION_KEY] == source
+                assert response.text == _JSON_BODY
+        finally:
+            replay.close()
+
+    def test_a_cassette_holding_a_plaintext_query_value_still_replays(
+        self, store: CassetteStore
+    ) -> None:
+        path = store.path_for(_QUERY_NODEID)
+        query = normalise_query(f"token={_QUERY_LEGACY}&page=2")
+        request = RecordedRequest(method="GET", path="/health", query=query)
+        recorded = RecordedResponse(status=200, body=_JSON_BODY)
+        path.write_text(to_json_text(_document(Interaction(request, recorded))), encoding="utf-8")
+        before = path.read_text(encoding="utf-8")
+        assert _QUERY_LEGACY in before
+        session = CassetteSession(_QUERY_NODEID, mode="replay", store=store)
+        url = f"{_OTHER_HOST}/health?token={_QUERY_SENTINEL}&page=2"
+        try:
+            response = _get(session.transport(), url)
+        finally:
+            session.close()
+        assert response.extensions[SOURCE_EXTENSION_KEY] == SOURCE_CASSETTE
+        assert response.text == _JSON_BODY
+        assert path.read_text(encoding="utf-8") == before

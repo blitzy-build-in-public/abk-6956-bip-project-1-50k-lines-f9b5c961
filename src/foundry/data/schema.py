@@ -1,31 +1,27 @@
 """JSON Schema enforcement for the rows of a data file.
 
-A data file may carry a *sidecar* schema: a JSON Schema document beside it, discovered under the
-data file's full name plus ``.schema.json`` or its bare stem plus the same suffix. Nothing else
-declares a schema, so the sidecar's presence is the whole declaration. Two checks run for a row, in
-this order, and both report through :func:`foundry.data.loaders.base.data_error`, the package's
-single ``DataError`` construction site, so every fault names the file and, where they are known, the
-line and the column:
+A data file may carry a *sidecar* schema: a JSON Schema document beside it, discovered under
+the data file's full name plus ``.schema.json`` or its bare stem plus the same suffix. Two
+checks run for a row, in this order, and both report through
+:func:`foundry.data.loaders.base.data_error`, the package's single ``DataError`` site, so every
+fault names the file and, where known, the line and the column:
 
 1. **Structure, before values.** A column the schema lists in ``required`` that the row does not
    carry is reported by name, and a column the schema's ``properties`` does not declare is
-   reported by name when ``data.schema_strict`` is on. Running this first is what keeps a missing
-   column nameable: the ``required`` complaint a JSON Schema walk produces is located at the
-   document root, where there is no column to report.
+   reported by name when ``data.schema_strict`` is on. Running this first keeps a missing column
+   nameable: a JSON Schema walk's ``required`` complaint sits at the document root, where there is
+   no column to report.
 2. **Values, through the contract layer.** :func:`foundry.contract.validate.find_violation` returns
    the first violation in Foundry's own order instead of raising, so this module turns it into a
    located :class:`~foundry.core.exceptions.DataError` whose ``column`` comes from the violation's
    ``path_parts``; ``jsonschema`` is never imported here.
-
-A schema document that loads but is unusable is refused by the contract layer inside that same walk,
-as a :class:`~foundry.core.exceptions.ContractError` naming the sidecar it came from.
+A schema document that loads but is unusable is refused by the contract layer inside that same
+walk, as a :class:`~foundry.core.exceptions.ContractError` naming the sidecar it came from.
 ``strict=False`` tolerates extra columns: they stay in the row the caller carries forward but are
 left out of the projection the schema validates. Every check is order-stable -- the ``required``
-names, the declared property set and the extra columns are each sorted before the first of them is
-reported -- so the same file reports the same message on every run and on every worker. Enforcement
-precedes case construction, so no case exists for a rejected row and the fault surfaces at
-collection time rather than inside a test. Importing the module defines names and does nothing else:
-no schema is loaded, no file is opened and no environment variable is read.
+names, the declared property set and the extra columns are each sorted before the first is
+reported -- so one file reports one message on every run and worker. Importing the module defines
+names only: no schema is loaded, no file opened, no environment variable read.
 """
 
 from __future__ import annotations
@@ -96,7 +92,7 @@ def load_row_schema(
     A missing sidecar is the ordinary state of a data file that declares no schema, so it returns
     ``None`` rather than raising; every other fault in the document -- unreadable, not valid JSON or
     YAML, not a schema object, a reference outside itself -- is the
-    :class:`~foundry.core.exceptions.ContractError` that :func:`foundry.contract.schema.load_schema`
+    :class:`~foundry.core.exceptions.ContractError` :func:`foundry.contract.schema.load_schema`
     raises.
 
     Args:
@@ -184,7 +180,6 @@ def enforce_row(
     3. the remaining values, in the violation order
        :func:`foundry.contract.validate.find_violation` establishes, reported with the offending
        property as the column.
-
     The violation's own rendering is what reaches the message: it is redacted through ``redact`` --
     the run's engine, built from ``secrets.redact_keys`` -- and flattened to one line by
     :mod:`foundry.contract.violations`, the only party that may print a validator message because

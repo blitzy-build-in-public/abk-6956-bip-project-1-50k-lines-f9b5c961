@@ -51,11 +51,9 @@ def _override_option_table() -> tuple[_OverrideOption, ...]:
 
     One option for every scalar key -- the generic ``--foundry-<dotted.key>`` form -- plus every
     named alias a :class:`foundry.config.keys.KeySpec` declares, plus the file-selecting
-    ``--foundry-config``. A container key is skipped: a header table or a list has no faithful
-    single-token command-line form, so it is reachable only through the file and environment layers.
-    An alias that spells the same string as a key's generic option is registered once, through the
-    generic destination, so click sees one parameter per spelling. Entries come back sorted by
-    spelling, so two runs print the same ``--help``.
+    ``--foundry-config``. An alias that spells the same string as a key's generic option is
+    registered once, through the generic destination, so click sees one parameter per spelling.
+    Entries come back sorted by spelling, so two runs print the same ``--help``.
     """
     entries: dict[str, _OverrideOption] = {}
     for spec in keys.KEY_SPECS:
@@ -112,13 +110,11 @@ def _option_decorator(option: _OverrideOption) -> Callable[[_F], _F]:
 def override_options(command: _F) -> _F:
     """Declare every ``--foundry-*`` override option on a config subcommand.
 
-    The same override set is required on every subcommand that resolves project configuration, so it
-    is applied as one decorator rather than listed per command, and it is built from
-    :data:`foundry.config.keys.KEY_SPECS`. The decorator is defined here because the group builder
-    imports every subcommand module: importing it back from there would close that cycle and leave
-    this module unimportable on its own. This module is therefore the one home of the override set,
-    so the shared spellings exist once and cannot drift. The callback is returned unchanged, which
-    is why the decorator is applied beneath :func:`click.command`.
+    The same override set is required on every subcommand that resolves project configuration, so
+    it is applied as one decorator rather than listed per command, and it is built from
+    :data:`foundry.config.keys.KEY_SPECS`. This module is therefore the one home of the override
+    set, so the shared spellings exist once and cannot drift. The callback is returned unchanged,
+    which is why the decorator is applied beneath :func:`click.command`.
     """
     decorated: _F = command
     for option in reversed(_OVERRIDE_OPTIONS):
@@ -150,8 +146,8 @@ def _deferred_input(supplied: cli_layer.CliInput) -> cli_layer.CliInput:
 
     Without ``--resolved`` the resolution covers defaults, file, profile and environment only, so
     the resolved configuration keeps the configuration-file path alone. The dropped overrides are
-    not lost: the caller passes the original input as the not-applied section, which is where the
-    operator reads them.
+    not lost: the caller passes the original input as the not-applied section, where the operator
+    reads them.
     """
     return replace(supplied, overrides={}, spellings={})
 

@@ -1,5 +1,8 @@
 """Unit tests for ``src/foundry/config/``: the registry, the five-step discovery, the ``FOUNDRY_``
-environment encoding, the four-layer ladder and ``config show``, with literals kept on purpose."""
+environment encoding, the four-layer ladder, ``config show`` and the file layer, with literals kept
+on purpose. An unparsable candidate is a fault and never a silent return to the defaults, a
+``pyproject.toml`` without ``[tool.foundry]`` is no configuration file, and a section header is
+checked as a key of its own (AAP 0.4.5, AAP 0.4.7)."""
 
 from __future__ import annotations
 
@@ -12,7 +15,7 @@ from typing import Final
 
 import pytest
 
-from foundry.config import cli_layer, env, keys, layers, merge, render, validation
+from foundry.config import cli_layer, env, files, keys, layers, merge, render, validation
 from foundry.config.enums import ProfileName
 from foundry.config.models import FoundryConfig
 from foundry.config.sources import ConfigSource
@@ -36,6 +39,15 @@ _EXPECTED_KEYS: Final[str] = (
     "reporting.html, reporting.json, data.dir, data.schema_strict, cassette.dir, cassette.mode, "
     "execution.retries, execution.timeout, execution.quarantine_mode, secrets.redact_keys, "
     "logging.level, logging.capture_lines"
+)
+_KEYLESS_TABLES: Final[tuple[tuple[str, str | None, str | None], ...]] = (
+    ("[data.bogus]\n", "data.bogus", "file"),
+    ("[data.bogus.deep]\n", "data.bogus.deep", "file"),
+    ("[http.retries.bogus]\n", "http.retries.bogus", "file"),
+    ("[artefacts]\n", "artefacts", "file"),
+    ("[profiles.ci.data.bogus]\n", "data.bogus", "profile:ci"),
+    ("[data.bogus]\nk = 1\n", "data.bogus.k", "file"),
+    ("[data]\n[http]\n[http.auth]\n[http.retries]\n[http.headers]\n[profiles.ci]\n", None, None),
 )
 
 
@@ -230,3 +242,43 @@ def test_the_preparse_folding_and_a_repair_that_cannot_run(
     assert repaired is False
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1 and "config.cli_layer" in warnings[0].getMessage()
+
+
+def test_a_pyproject_candidate_is_read_the_same_way_with_or_without_the_table(
+    tmp_path: Path, clean_foundry_env: None, write_project: Callable[..., Path]
+) -> None:
+    write_project(tmp_path, files={_PYPROJECT_TOML: "[tool.foundry\n"})
+    path = (tmp_path / _PYPROJECT_TOML).resolve()
+    with pytest.raises(ConfigError) as caught:
+        _resolve(tmp_path)
+    assert caught.value.message.startswith("invalid TOML in ") and str(path) in caught.value.message
+    assert (caught.value.path, caught.value.layer) == (path, "file")
+    other = tmp_path / "other"
+    write_project(other, files={_PYPROJECT_TOML: '[project]\nname = "something-else"\n'})
+    assert files.discover_file(environ={}, cwd=other) is None
+    config = _resolve(other)
+    assert config.http.timeout == 10.0 and config.source_of("http.timeout").layer == "default"
+
+
+@pytest.mark.parametrize(("toml_text", "key", "layer"), _KEYLESS_TABLES)
+def test_a_section_header_is_checked_as_a_key_of_its_own(
+    toml_text: str,
+    key: str | None,
+    layer: str | None,
+    tmp_path: Path,
+    clean_foundry_env: None,
+    write_project: Callable[..., Path],
+) -> None:
+    write_project(tmp_path, foundry_toml=toml_text)
+    path = tmp_path / _FOUNDRY_TOML
+    if key is None:
+        config = _resolve(tmp_path)
+        assert config.http.timeout == 10.0
+        assert config.source_of("http.timeout").layer == "default"
+        return
+    with pytest.raises(ConfigError) as caught:
+        _resolve(tmp_path)
+    error = caught.value
+    assert error.key == key and error.message == f"unknown configuration key: {key}"
+    assert error.layer == layer
+    assert error.hint is not None and str(path.resolve()) in error.hint

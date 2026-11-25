@@ -1,19 +1,22 @@
-"""Bounded per-test log capture for Foundry: a ring of the last N ``logging`` records.
+"""Bounded per-test log capture for Foundry: a log-record ring and a redacting terminal writer.
 
 Foundry retains at most ``logging.capture_lines`` records per test, so a failed test carries a
-readable tail into ``log_tail.log`` and the report's failure panel (AAP 0.4.6; AAP 0.14.2 budgets
-that tail at 200 lines). :class:`LogRing` and :func:`format_record` are its only storage and
-formatter, and formatting happens only when read, so two runs write identical tails (AAP 0.14.3).
+readable tail into ``log_tail.log`` and the failure panel (AAP 0.4.6, AAP 0.14.2). :class:`LogRing`
+and :func:`format_record` store and format the ring, :func:`scrub_terminal_writer` is the terminal
+sink AAP 0.14.3 names, and formatting happens on read, so two runs write identical tails.
 """
 
+import contextlib
 import logging
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from types import TracebackType
-from typing import Final
+from typing import Final, Protocol, cast
 
 from foundry.core.limits import CAPTURE_LINES_DEFAULT, CAPTURE_LINES_MAX, CAPTURE_LINES_MIN
+from foundry.obs.events import emit_plumbing_failure
 from foundry.obs.logging import LOGGER_NAME, attach_handler, detach_handler, get_logger
+from foundry.obs.redaction import Redactor
 
 __all__ = [
     "DEFAULT_CAPTURE_LINES",
@@ -23,6 +26,7 @@ __all__ = [
     "MIN_CAPTURE_LINES",
     "TRUNCATION_MARKER",
     "format_record",
+    "scrub_terminal_writer",
     "tail_lines",
 ]
 
@@ -58,6 +62,9 @@ The prefix is the logger name plus its separator, built here from
 :data:`foundry.obs.logging.LOGGER_NAME` so the two cannot drift apart, and no import outside
 ``foundry.obs`` and ``foundry.core`` is added to recognise it (AAP 0.4.8).
 """
+
+_COMPONENT: Final[str] = "obs.capture"
+"""The component name a plumbing warning from :func:`scrub_terminal_writer` carries, as its path."""
 
 
 def _clamp_capacity(capacity: int) -> int:
@@ -232,3 +239,43 @@ def tail_lines(records: Sequence[logging.LogRecord], n: int) -> tuple[str, ...]:
     if n <= 0:
         return ()
     return tuple(format_record(record) for record in records[-n:])
+
+
+class _Writable(Protocol):
+    write: Callable[..., None]
+
+
+def scrub_terminal_writer(writer: object, redactor: Redactor) -> bool:
+    """Route every ``write`` on ``writer`` through ``redactor``, so no secret reaches the terminal.
+
+    pytest prints failures, capture sections, live log records and summaries through one
+    ``TerminalWriter``, so wrapping its ``write`` puts the single engine of AAP 0.3.2 ahead of the
+    sink AAP 0.14.3 names. A redaction fault writes the chunk as it stands, after one ``WARNING``,
+    so it changes neither an outcome nor an exit code (AAP 0.1.2).
+
+    Returns:
+        Whether a ``write`` was found and wrapped; a value without one answers ``False``.
+    """
+    write = getattr(writer, "write", None)
+    if not callable(write):
+        return False
+    faulted = False
+
+    def scrubbed(text: str, *, flush: bool = False, **markup: bool) -> None:
+        """Write one terminal chunk with the secrets the engine resolves masked."""
+        nonlocal faulted
+        if not faulted:
+            try:
+                text = redactor.text(text)
+            except Exception as exc:
+                # Failure-isolation rule (AAP 0.1.2): one WARNING, then the chunk as it stands, and
+                # no second attempt: a warning written here would re-enter the failed engine.
+                faulted = True
+                with contextlib.suppress(Exception):
+                    emit_plumbing_failure(
+                        _COMPONENT, "could not redact a line of terminal output", exc=exc
+                    )
+        write(text, flush=flush, **markup)
+
+    cast("_Writable", writer).write = scrubbed
+    return True

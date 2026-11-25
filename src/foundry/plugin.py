@@ -55,7 +55,12 @@ _CONFIG_EXIT: Final[int] = 2
 """The exit code a configuration or usage fault ends the session with, on both surfaces (A4)."""
 
 _USAGE_EXIT: Final[int] = 4
-"""pytest's usage-error code, preserved unchanged, and the one code a run writes no report for."""
+"""pytest's usage-error code, preserved unchanged: no run at this code writes a report.
+
+The other codes skip the write only in the named empty states: exit 5 when a deselecting filter
+emptied the run, exit 0 under ``--collect-only``, and any code whose configuration fault left no
+session state.
+"""
 
 _JSON_REPORT_OPTION_DEST: Final[str] = "foundry_json_report"
 """The ``dest`` :func:`foundry.config.cli_layer.alias_dest` gives ``--foundry-json-report``."""
@@ -68,19 +73,6 @@ _START_PHASE: Final[str] = "setup"
 
 _DATA_MARKER: Final[str] = "foundry_data"
 """The opt-in marker binding a test to one data file's cases, delegated to ``foundry.data``."""
-
-_ATTEMPT_REPORTS: Final[pytest.StashKey[list[pytest.TestReport]]] = pytest.StashKey[
-    "list[pytest.TestReport]"
-]()
-"""The reports of the attempt in flight, newest last, cleared when its ``setup`` report arrives.
-
-Transient attempt state rather than run state: discarded by the next attempt's first phase.
-"""
-
-_RUN_RECORDS: Final[pytest.StashKey[dict[str, TestPayload]]] = pytest.StashKey[
-    "dict[str, TestPayload]"
-]()
-"""The payloads this process recorded, by node id: a lost worker's item included, as ``not_run``."""
 
 
 class _TerminalReporter(typing.Protocol):
@@ -291,6 +283,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     The bootstrap already created it, so this is idempotent for a worker; an unwritable directory is
     the writer's single ``WARNING`` and leaves every record carrying ``artifacts_disabled`` (0.4.7).
+    The same hook puts the run's redactor in front of pytest's terminal (AAP 0.14.3).
     """
     state = session.config.stash.get(exec_state.SESSION_STATE, None)
     if state is None:
@@ -300,6 +293,18 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     except Exception as exc:
         # Failure-isolation rule: an artifact directory may not change an outcome or an exit code.
         _warn("could not prepare this run's artifact directory", exc)
+    try:
+        _scrub_terminal(session.config, state)
+    except Exception as exc:  # Failure-isolation rule: neither outcome nor exit code changes
+        _warn("could not install the terminal redactor", exc)
+
+
+def _scrub_terminal(config: pytest.Config, state: SessionState) -> None:
+    """Make pytest's terminal a sink of the run's redactor, so no secret is printed (AAP 0.14.3)."""
+    from foundry.obs import capture
+
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    capture.scrub_terminal_writer(getattr(reporter, "_tw", None), state.redactor)
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -359,13 +364,14 @@ def pytest_runtest_makereport(
 def _stamp(item: pytest.Item, report: pytest.TestReport) -> None:
     """Assemble the item's payload from the data available and write it onto ``report``.
 
-    The attempt's reports live in :data:`_ATTEMPT_REPORTS`, cleared by that attempt's ``setup``,
-    since a ``teardown`` report alone cannot tell a pass from a skip. The verdict is the registry's.
+    The attempt's reports live in :data:`~foundry.execution.state.ATTEMPT_REPORTS`, cleared by that
+    attempt's ``setup``, since a ``teardown`` report alone cannot tell a pass from a skip. The
+    verdict is the registry's.
     """
     from foundry.execution import coordinator, quarantine, session
 
     state = session.session_state(item.config)
-    reports = item.stash.setdefault(_ATTEMPT_REPORTS, [])
+    reports = item.stash.setdefault(exec_state.ATTEMPT_REPORTS, [])
     if report.when == _START_PHASE:
         reports.clear()
     reports.append(report)
@@ -434,7 +440,7 @@ class _RecordCollector:
             if payload is None and report.when not in exec_state.PHASES:
                 payload = not_run_payload(session_state(self._config), report.nodeid)
             if payload is not None:
-                self._config.stash.setdefault(_RUN_RECORDS, {})[payload.nodeid] = payload
+                self._config.stash.setdefault(exec_state.RUN_RECORDS, {})[payload.nodeid] = payload
         except Exception as exc:
             # Failure-isolation rule: a bookkeeping fault may not change an outcome or exit code.
             _warn("could not record a test's result payload", exc)
@@ -568,7 +574,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     # filter (-k, -m or --deselect) emptied writes no file, nor does a --collect-only run.
     filters = config.option.keyword or config.option.markexpr or config.option.deselect
     emptied = exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and bool(filters)
-    if not config.stash.get(_RUN_RECORDS, None) and (config.option.collectonly or emptied):
+    if not config.stash.get(exec_state.RUN_RECORDS, None) and (
+        config.option.collectonly or emptied
+    ):
         return
     state = config.stash.get(exec_state.SESSION_STATE, None)
     if state is None:
@@ -601,7 +609,7 @@ def _assemble(
     from foundry.execution.session import not_run_payload, sharding_service
     from foundry.reporting import parse_element
 
-    payloads = config.stash.setdefault(_RUN_RECORDS, {})
+    payloads = config.stash.setdefault(exec_state.RUN_RECORDS, {})
     service = sharding_service(config)
     service.verify(collected or service.nodes.expected_nodes())
     for nodeid in service.missing_after_run(payloads):
@@ -676,7 +684,7 @@ def _publish_nodeids(config: pytest.Config) -> None:
     if not isinstance(output, dict):
         return
     try:
-        records = config.stash.get(_RUN_RECORDS, None) or {}
+        records = config.stash.get(exec_state.RUN_RECORDS, None) or {}
         output[WORKER_OUTPUT_KEY] = tuple(sorted(records))
     except Exception as exc:
         # Failure-isolation rule: a bookkeeping fault may not change an outcome or exit code.

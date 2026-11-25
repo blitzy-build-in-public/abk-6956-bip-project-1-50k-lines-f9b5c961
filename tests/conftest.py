@@ -1,8 +1,9 @@
 """Shared fixtures and process-wide guards for Foundry's own test suite.
 
 Holds the top-level ``pytest_plugins`` declaration, the session environment pinning (``TZ``,
-``LC_ALL``, ``LANG``, ``PYTEST_ADDOPTS``, ``locale``), the shared fixtures, and the loopback-only
-socket guard of AAP 0.14.3, which refuses every non-loopback target before the syscall.
+``LC_ALL``, ``LANG``, ``PYTEST_ADDOPTS``, ``locale``, ``PYTEST_DEBUG_TEMPROOT``/``TMPDIR``), the
+shared fixtures, and the loopback-only socket guard of AAP 0.14.3, which refuses every non-loopback
+target before the syscall.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -42,6 +44,47 @@ try:
     locale.setlocale(locale.LC_ALL, "C")
 except locale.Error as exc:  # pragma: no cover - the C locale exists on every supported host
     raise RuntimeError(f"foundry test suite: could not pin the process locale: {exc}") from exc
+
+# The session runs under a private temporary root: the pytest 8.4.2 that AAP 0.5.1 pins builds the
+# predictable <tempdir>/pytest-of-<user> of GHSA-6w46-j5rx-g56g (docs/verification.md).
+_PRIVATE_TEMPROOT: Final[pathlib.Path | None] = (
+    None
+    if os.environ.get("PYTEST_DEBUG_TEMPROOT")
+    else pathlib.Path(tempfile.mkdtemp(prefix="foundry-pytest-"))
+)
+"""The private root this process created, or ``None`` when a caller pinned one of its own."""
+if _PRIVATE_TEMPROOT is not None:
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(_PRIVATE_TEMPROOT)
+    os.environ.setdefault("TMPDIR", str(_PRIVATE_TEMPROOT))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    """Point the session's basetemp inside the private root whenever the caller named none.
+
+    A given basetemp is used directly, so ``_pytest.tmpdir`` never enters the ``pytest-of-<user>``
+    branch this mitigation avoids; the hook runs first because that plugin reads the option in its
+    own configure hook.
+    """
+    if _PRIVATE_TEMPROOT is not None and config.option.basetemp is None:
+        config.option.basetemp = str(_PRIVATE_TEMPROOT / "basetemp")
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Remove the private root after a clean run, and keep it after a failing one to inspect.
+
+    A failing run's tree is evidence, so it survives and the controlling process names it; a worker
+    stays quiet, because the controller's line is the one a reader can act on.
+    """
+    if _PRIVATE_TEMPROOT is None:
+        return
+    if exitstatus == 0:
+        shutil.rmtree(_PRIVATE_TEMPROOT, ignore_errors=True)
+        return
+    if not os.environ.get("PYTEST_XDIST_WORKER"):
+        print(f"foundry test suite: kept the temporary root {_PRIVATE_TEMPROOT} for inspection")
+
 
 _INET_FAMILIES: Final[frozenset[int]] = frozenset({socket.AF_INET, socket.AF_INET6})
 """The families the guard polices; every other family is local by construction."""

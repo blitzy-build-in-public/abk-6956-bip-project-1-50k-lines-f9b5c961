@@ -115,8 +115,7 @@ def _split_authority(authority: str) -> tuple[str | None, str, int | None]:
     """Split an authority into its userinfo, host and port.
 
     An IPv6 literal keeps its brackets so the host goes back into a URL unchanged, and an authority
-    whose port is not a number keeps the ``host:port`` text as the host with no port, so no part of
-    the input is lost.
+    whose port is not a number keeps the ``host:port`` text with no port, losing nothing.
     """
     userinfo: str | None = None
     hostport = authority
@@ -169,8 +168,7 @@ def _base_url_invalid() -> ConfigError:
     """Build the error for a base URL that is not an absolute ``http``/``https`` URL.
 
     One message covers every shape of the fault -- a relative value, an unsupported scheme and a
-    missing host -- because the correction is the same in each case and a test can assert on one
-    text.
+    missing host -- because the correction is the same and a test can assert on one text.
     """
     return ConfigError(
         "http.base_url must be an absolute http or https URL",
@@ -320,8 +318,7 @@ def require_same_origin(base_url: str | None, target: str) -> None:
     another scheme, host or port would carry the session's credential to a host the configuration
     never named, and the target can arrive from a data row or any helper forwarding user input
     (AAP 0.3.2; implicit requirement I9). The rule lives here once so :func:`join_url` and the
-    session's own guard cannot disagree about it, and its error quotes neither the target nor any
-    credential.
+    session's own guard cannot disagree, and its error quotes neither the target nor any credential.
 
     Returns:
         ``None``, and the caller sends ``target`` as given, when no base URL is configured or the
@@ -346,7 +343,6 @@ def join_url(base_url: str | None, path: str) -> str:
     absolute path replaces the base URL's path, and a relative path is appended with exactly one
     ``/`` between the two, its query travelling with it. A fragment is dropped from either side, the
     base URL's own query is never inherited, and ``"//host/path"`` is treated as a path.
-
     A configured base URL contains every request to its own origin, so an absolute target naming
     another scheme, host or port is refused rather than sent with the session's credential: a path
     forwarded from a data row cannot move the request, or the secret, to a host the configuration

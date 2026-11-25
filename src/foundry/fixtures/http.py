@@ -11,11 +11,9 @@ attached, ``http.headers`` applied and ``cassette.mode`` honoured; a run whose `
 unset errors on the one test that requested it, naming ``http.base_url``, while the rest of the
 session still runs.
 
-**The pipeline belongs to :mod:`foundry.http.session`.** Joining the base URL, merging headers,
-resolving the timeout, selecting the transport and running the retry loop are
-:class:`foundry.http.FoundrySession`'s; this module builds the plain settings that session is
-constructed from. Every status is therefore *returned* as a :class:`foundry.http.FoundryResponse`,
-4xx and 5xx included, and only a transport fault raises:
+**The pipeline belongs to :mod:`foundry.http.session`.** This module builds the plain settings that
+:class:`foundry.http.FoundrySession` is constructed from. Every status is therefore *returned* as a
+:class:`foundry.http.FoundryResponse`, 4xx and 5xx included, and only a transport fault raises:
 :class:`foundry.core.exceptions.TransportError` for a fault the policy does not retry, and
 :class:`foundry.core.exceptions.RetryExhaustedError` once the attempts are spent.
 
@@ -25,17 +23,15 @@ environment variables holding a credential and this module copies those names in
 value reaches this file, a message, a log line or a repr. A variable the configuration named but the
 environment does not set raises :class:`foundry.core.exceptions.ConfigError` naming that variable
 alone. Only ``foundry_api`` honours ``cassette.mode``: a ``replay`` run drives the recorded surface
-through it, on a transport built from the document that never reaches ``httpcore``, while
-``foundry_http`` always sends live.
+from the document alone, never reaching ``httpcore``, while ``foundry_http`` always sends live.
 
 **Teardown changes no outcome.** Both fixtures close their session in a ``finally`` -- idempotent,
 releasing the transport and saving the cassette -- and report either fault as one ``WARNING`` on the
 ``foundry`` logger, so a recorded cassette is flushed even when a test failed.
 
-**Imported lazily.** ``foundry.plugin`` imports this module during ``pytest_configure`` inside the
-150 ms budget, so module scope imports ``pytest``, :mod:`collections.abc`, :mod:`pathlib` and
-:mod:`typing` only, and the imports pulling in ``httpx``, :mod:`foundry.cassette` and
-:mod:`foundry.obs` sit inside the helper that first needs them.
+**Imported lazily.** Module scope imports ``pytest``, :mod:`collections.abc`, :mod:`pathlib` and
+:mod:`typing` only (implicit requirement I5); ``httpx``, :mod:`foundry.cassette` and
+:mod:`foundry.obs` load inside the helper that first needs them.
 """
 
 from __future__ import annotations

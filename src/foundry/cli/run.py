@@ -50,18 +50,17 @@ def build_pytest_argv(
     """Return the argument list that carries ``foundry_options`` and ``pytest_args`` to pytest.
 
     Every supplied Foundry option becomes the canonical ``--foundry-<dotted.key>`` spelling
-    :mod:`foundry.plugin` registers, followed by its value unless it is one of the two switches, and
-    the caller's own pytest arguments are appended afterwards, unchanged and in the order given. The
-    result therefore contains no plugin selector and no argument the caller did not supply. The
-    order is fixed rather than incidental, so two runs and two xdist workers build identical
-    argument lists: options are emitted in the registry order of
+    :mod:`foundry.plugin` registers, followed by its value unless it is one of the two switches,
+    and the caller's own pytest arguments are appended afterwards, unchanged and in the order
+    given. The result therefore contains no plugin selector and no argument the caller did not
+    supply. The order is fixed rather than incidental, so two runs and two xdist workers build
+    identical argument lists: options are emitted in the registry order of
     :data:`foundry.config.keys.KEY_SPECS`, then the four
     :data:`foundry.config.cli_layer.SPECIAL_OPTIONS` in their documented order, then
-    ``pytest_args``. The function is pure -- no environment, no filesystem, no clock, no mutation of
-    its arguments -- which is what lets a unit test assert the whole list. An option is recognised
-    by its dotted key, by a named alias word or by an option spelling, and whichever form arrived is
-    emitted in the one canonical spelling. A value of ``None`` means the option was not supplied and
-    is skipped -- the same reading :func:`foundry.config.cli_layer.from_mapping` applies.
+    ``pytest_args``. The function is pure -- no environment, no filesystem, no clock, no mutation
+    of its arguments -- which is what lets a unit test assert the whole list. A value of ``None``
+    means the option was not supplied and is skipped -- the same reading
+    :func:`foundry.config.cli_layer.from_mapping` applies.
 
     Raises:
         foundry.core.exceptions.ConfigError: When an entry names no documented option or key, in
@@ -167,8 +166,7 @@ def _supplied_options(parameters: Mapping[str, object]) -> dict[str, object]:
     :func:`build_pytest_argv`, so the values are keyed by that spelling here and nowhere else: the
     record and replay switches keep their own spelling, and every other option is keyed by the
     ``--foundry-<dotted.key>`` form of the key it sets. Parameters whose value is ``None`` are
-    dropped, which is how click reports an option that was not supplied. Iteration follows sorted
-    parameter order, so the mapping is the same on every run and every worker.
+    dropped, which is how click reports an option that was not supplied.
 
     Raises:
         foundry.core.exceptions.ConfigError: When a parameter names no documented option, rather
@@ -190,10 +188,9 @@ def _option_spelling(name: str) -> str | None:
     """Return the canonical ``--foundry-*`` spelling a parameter name or mapping key stands for.
 
     One name can arrive in several forms and all of them mean the same option: the spelling an
-    operator typed, the name click derives from it, the dotted configuration key, a named alias word
-    or the ``dest`` :mod:`foundry.plugin` gives the option. :data:`_PARAMETER_TABLE` holds each of
-    them, so this is a lookup with a fallback for a spelling the table does not carry. ``None``
-    means the name configures no documented option.
+    operator typed, the name click derives from it, the dotted configuration key, a named alias
+    word or the ``dest`` :mod:`foundry.plugin` gives the option. ``None`` means the name configures
+    no documented option.
     """
     trimmed = name.strip()
     if not trimmed:
@@ -247,8 +244,7 @@ def _switch_on(value: object) -> bool:
         value: The value supplied for the switch.
 
     Returns:
-        ``True`` unless the value is ``False``, an empty string or one of the words that spell
-        "off".
+        ``True`` unless the value is ``False``, an empty string or a word that spells "off".
     """
     if isinstance(value, bool):
         return value

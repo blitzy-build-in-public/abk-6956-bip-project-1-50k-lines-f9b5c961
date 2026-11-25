@@ -128,7 +128,6 @@ def render_value(spec: keys.KeySpec, value: object, redactor: Redactor) -> str:
     by the member's value rather than its name, a path in POSIX form, a number in its shortest exact
     form, a list comma-joined in authored order, and a header table as ``name=value`` pairs sorted
     by name.
-
     Two shapes can carry a credential and both are redacted here: the ``http.headers`` table through
     :meth:`foundry.obs.redaction.Redactor.header`, and the text a ``str``- or ``path``-kind key
     holds through ``Redactor.text``, which drops URL userinfo and redacts deny-listed parameters.
@@ -163,7 +162,6 @@ def rows(config: FoundryConfig, *, not_applied: CliInput | None = None) -> tuple
     The rows are derived from :func:`foundry.config.keys.leaf_keys`, so a key the published surface
     does not declare has no row even if the settings model holds a value for it, and each Source
     cell is :meth:`foundry.config.sources.ConfigSource.label`.
-
     ``not_applied`` carries the overrides of a command that resolved without them: listed apart from
     the resolution, so their rows come after every resolved row and their Source cell reads
     ``not-applied:<--option>``, which no layer label resembles.
@@ -234,10 +232,8 @@ def resolved_document(config: FoundryConfig) -> dict[str, object]:
     The nesting is restored by :func:`foundry.config.layers.unflatten`, which the merge also uses
     just before it constructs the settings model, so the document a person reads and the model the
     run uses describe the same table, keys sorted at every level.
-
-    Values are rendered for a document rather than a terminal: an unset key stays ``None``, an
-    enumeration becomes its value, a path its POSIX string, a header table a mapping of redacted
-    values, and text is scrubbed. ``layers.flatten`` of the result yields exactly the keys of
+    Values are rendered for a document rather than a terminal, as :func:`_document_value` describes,
+    and ``layers.flatten`` of the result yields exactly the keys of
     :func:`foundry.config.keys.leaf_keys`.
     """
     redactor = redactor_for(config)
@@ -275,8 +271,6 @@ def to_json_text(config: FoundryConfig, *, not_applied: CliInput | None = None) 
     One document and nothing else: keys sorted at every level, two-space indentation, non-ASCII text
     left readable, and exactly one trailing newline. Sorting also places ``resolved`` and
     ``sources`` first whenever no override was deferred, and makes two invocations byte-identical.
-    ``config`` is the resolved configuration to document and ``not_applied`` the overrides it
-    supplied but did not apply, or ``None``.
 
     Returns:
         The document as JSON text, ending with one newline.
@@ -296,7 +290,6 @@ def to_toml_text(config: FoundryConfig, *, not_applied: CliInput | None = None) 
     The resolved values are written as the document they nest into, followed by the companion
     ``[sources]`` table and, when the command deferred overrides, a ``[not_applied]`` table. A key
     with no value is dropped rather than written, because TOML has no null.
-
     ``tomli-w`` writes the values, imported inside this function so a run that never renders TOML
     never imports it, and the source table is composed from its quoting so one escaper serves both.
     """
@@ -314,9 +307,7 @@ def to_toml_text(config: FoundryConfig, *, not_applied: CliInput | None = None) 
 def _leaf_values(config: FoundryConfig) -> dict[str, object]:
     """Return the resolved values by the registry's leaf keys.
 
-    The settings model knows its own fields; the registry knows the published surface. Selecting by
-    the registry keeps a field that no key declares out of every rendering, the same rule
-    :func:`rows` follows for its keys. ``config`` is the resolved configuration to read.
+    The settings model knows its own fields; the registry knows the published surface.
 
     Returns:
         One entry per leaf key, holding the resolved value or ``None`` when no layer set it.
@@ -348,12 +339,12 @@ def _document_value(value: object, redactor: Redactor) -> object:
 
     The document form is not the table form: a value keeps its type where the document can carry it
     and loses it only where the format has no equivalent -- an enumeration becomes its value, a path
-    its POSIX string, a header table a mapping of redacted values. ``value`` is the resolved value,
-    or ``None`` for a key no layer set, and ``redactor`` the redactor credentials are scrubbed
-    through.
+    its POSIX string, a header table a mapping of redacted values, text scrubbed through
+    ``redactor``; ``None`` stays for a key no layer set.
 
-    Returns: ``None``, a boolean, a number, a string, a list or a mapping, ready for
-        :func:`json.dumps` or ``tomli-w``.
+    Returns:
+        ``None``, a boolean, a number, a string, a list or a mapping, ready for :func:`json.dumps`
+        or ``tomli-w``.
     """
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -419,8 +410,7 @@ def _header_pairs(table: Mapping[object, object], redactor: Redactor) -> str:
 def _header_table(table: Mapping[object, object]) -> dict[str, str]:
     """Return a header table as the ``str``-to-``str`` mapping the redactor accepts.
 
-    A name or value of another type is rendered rather than dropped, so the row still shows the
-    header.
+    A name or value of another type is rendered rather than dropped, so the row shows the header.
     """
     return {_text_of(name): _text_of(value) for name, value in table.items()}
 

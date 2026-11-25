@@ -58,9 +58,8 @@ def tabular_case_id(stem: str, row_index: int) -> str:
 def matrix_case_id(stem: str, values: Mapping[str, object]) -> str:
     """Build the id of one expanded matrix case.
 
-    Axes are sorted by name and each value rendered as canonical JSON by the core helper, so
-    two collections agree however the axes were written down and ``1`` stays distinct from
-    ``"1"``.
+    Axes are sorted by name and each value rendered as canonical JSON by the core helper, so two
+    collections agree however the axes were written down and ``1`` stays distinct from ``"1"``.
 
     Args:
         stem: The matrix file's stem, as :func:`case_stem` returns it.

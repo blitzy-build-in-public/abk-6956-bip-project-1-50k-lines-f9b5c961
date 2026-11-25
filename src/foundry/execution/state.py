@@ -587,6 +587,12 @@ SESSION_NODES: Final[pytest.StashKey[NodeLedger]] = pytest.StashKey["NodeLedger"
 SESSION_RUN_ERRORS: Final[pytest.StashKey[RunErrorLedger]] = pytest.StashKey["RunErrorLedger"]()
 SESSION_STASH_KEYS: Final = (SESSION_STATE, SESSION_CONFIG, SESSION_NODES, SESSION_RUN_ERRORS)
 
+# This process's payloads by node id, a lost worker's item included as ``not_run`` (A12): the
+# collector's working set rather than state a fixture hands on, so the tuple above omits it.
+RUN_RECORDS: Final[pytest.StashKey[dict[str, TestPayload]]] = pytest.StashKey[
+    dict[str, TestPayload]
+]()
+
 # The per-item ledger holds the accumulated attempt records (AAP 0.7.1), declared against state's
 # own record type so the key does not depend on the driver module that fills it.
 ITEM_ATTEMPTS: Final[pytest.StashKey[list[AttemptRecord]]] = pytest.StashKey[list[AttemptRecord]]()
@@ -611,6 +617,12 @@ ITEM_STASH_KEYS: Final = (
     ITEM_ATTEMPT_STARTED_MONOTONIC,
 )
 
+# The reports of the attempt in flight, newest last, cleared when its ``setup`` report arrives:
+# transient attempt state the next attempt discards, so the tuple above omits it.
+ATTEMPT_REPORTS: Final[pytest.StashKey[list[pytest.TestReport]]] = pytest.StashKey[
+    list[pytest.TestReport]
+]()
+
 
 def bounded_tail(lines: Iterable[str], limit: int) -> tuple[str, ...]:
     """Return the newest ``limit`` lines, each cut at ``foundry.obs.capture``'s line cap.
@@ -631,6 +643,7 @@ def bounded_tail(lines: Iterable[str], limit: int) -> tuple[str, ...]:
 
 
 __all__: Final[tuple[str, ...]] = (
+    "ATTEMPT_REPORTS",
     "ArtifactPayload",
     "AttemptPayload",
     "FOUNDRY_PROPERTY_NAMES",
@@ -662,6 +675,7 @@ __all__: Final[tuple[str, ...]] = (
     "PROPERTY_RUN_ID",
     "PROPERTY_STARTED_AT",
     "QuarantinePayload",
+    "RUN_RECORDS",
     "RunErrorPayload",
     "SESSION_CONFIG",
     "SESSION_NODES",

@@ -95,9 +95,8 @@ _REPAIR_FAULT: Final[str] = (
 class SpecialOption:
     """A named ``--foundry-*`` option that configures no configuration key.
 
-    They are described here rather than in :data:`foundry.config.keys.KEY_SPECS`, because that
-    registry is the table of the configuration surface: ``--foundry-json-report`` in particular is
-    not a key, moving a file without changing a resolved value.
+    They are described here rather than in :data:`foundry.config.keys.KEY_SPECS`, the registry of
+    the configuration surface, because ``--foundry-json-report`` changes no resolved value.
 
     Attributes:
         spelling: The option as an operator writes it, also the ``cli:<option>`` detail reported.
@@ -239,7 +238,6 @@ def unregistered_spellings(args: Iterable[str]) -> tuple[str, ...]:
 
     Every token starting with :data:`GENERIC_OPTION_PREFIX` is examined, in the order it was typed
     and once each, with an inline value dropped, so what comes back is the spelling alone.
-
     Two consumers, one scan: :func:`register_unregistered_options` registers a placeholder for each
     spelling before pytest parses the command line, and :func:`collect_from_pytest` reads the value
     back through it so the configuration layer can reject the key.
@@ -275,9 +273,8 @@ def register_unregistered_options(
     ``pytest_configure`` runs, while AAP 0.4.5 and AAP 0.4.7 publish exit 2 for an unknown key in
     *any* layer, the command line included. Registering the spelling exactly as it was typed keeps
     the token parseable; :func:`collect_from_pytest` then hands its value to :func:`from_mapping`,
-    which rejects the key naming ``difflib``'s nearest valid spelling and ends the session at exit 2
-    through the ordinary configuration-error path. Nothing is applied: the option exists to be
-    refused. Called from :func:`foundry.plugin.pytest_addoption`, the one registration point.
+    which rejects the key naming ``difflib``'s nearest valid spelling and ends the session at exit
+    2 through the ordinary configuration-error path.
     """
     config = pluginmanager.get_plugin(_CONFIG_PLUGIN_NAME)
     if config is None:
@@ -299,16 +296,13 @@ def from_mapping(raw: Mapping[str, object], *, cwd: Path | None = None) -> CliIn
 
     The entry point both surfaces share -- click's mapping and the one :func:`collect_from_pytest`
     reads from a :class:`pytest.Config` -- so the spelling rules, the coercions and the error
-    wording exist once. An entry is keyed by an option spelling, optionally carrying its value
-    inline, or by a dotted key, and entries are visited in sorted order. An entry whose value is
-    ``None`` is skipped, as is a path option given as an empty string.
-
+    wording exist once. An entry whose value is ``None`` is skipped, and a path option given as an
+    empty string.
     ``--foundry-config`` and ``--foundry-json-report`` are recorded exactly as typed, ``cwd``
     changing nothing that is recorded; ``--foundry-record`` with ``--foundry-replay`` is a usage
     error, and either alone sets ``cassette.mode``, winning over a mode in the same mapping. Every
-    value is coerced by :func:`foundry.config.validation.coerce_cli_value`, with the spelling that
-    supplied it recorded beside it, and a table- or list-valued key raises because the generic
-    option is registered for the scalar keys only.
+    value is coerced by :func:`foundry.config.validation.coerce_cli_value`, its spelling recorded
+    beside it; a table- or list-valued key raises, the generic option taking scalars only.
 
     Returns:
         The overrides, the spelling behind each of them and the two path options.

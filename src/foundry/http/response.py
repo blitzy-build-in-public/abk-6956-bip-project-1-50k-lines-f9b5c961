@@ -40,11 +40,9 @@ name.
 def _folded(headers: Mapping[str, str]) -> dict[str, str]:
     """Return ``headers`` keyed by case-folded name, so equality ignores the names' case.
 
-    ``headers`` is any header mapping, ``httpx``'s own included.
-
     Returns:
-        A plain ``dict`` with case-folded names. A name repeated in the input keeps its last value,
-        which is the rule a mapping already has.
+        A plain ``dict`` of any header mapping, ``httpx``'s own included, with case-folded names. A
+        name repeated in the input keeps its last value, which is the rule a mapping already has.
     """
     return {name.casefold(): value for name, value in headers.items()}
 
@@ -53,12 +51,12 @@ class _FrozenHeaders(Mapping[str, str]):
     """An immutable, case-insensitive view of the headers a peer returned.
 
     ``FoundryResponse.headers`` is published as ``Mapping[str, str]`` (AAP 0.4.3), but a header
-    lookup has to ignore case, and ``httpx``'s own ``Headers`` already implements that over its
-    normalized name list. This is the read-only view that exposes it as a ``Mapping`` -- no method
-    that adds, replaces or removes a header -- so the published annotation and the behaviour a test
-    relies on both hold; ``get``, ``__contains__`` and ``items`` come from
-    :class:`collections.abc.Mapping`. Every value rendered here passes through the injected
-    :class:`~foundry.obs.redaction.Redactor` (AAP 0.3.2, AAP 0.14.3).
+    lookup has to ignore case, which ``httpx``'s own ``Headers`` already does over its normalized
+    name list; this read-only view exposes that as a ``Mapping``, with no method that adds, replaces
+    or removes a header, so the published annotation and the behaviour a test relies on both hold;
+    ``get``, ``__contains__`` and ``items`` come from :class:`collections.abc.Mapping`. Every value
+    rendered here passes through the injected :class:`~foundry.obs.redaction.Redactor` (AAP 0.3.2,
+    AAP 0.14.3).
     """
 
     __slots__ = ("_headers", "_redactor")
@@ -103,9 +101,8 @@ class _FrozenHeaders(Mapping[str, str]):
         """Report whether ``other`` holds the same headers, ignoring the case of their names.
 
         Returns:
-            ``True`` when both sides carry the same case-folded name-to-value pairs, and
-            ``NotImplemented`` for a value that is not a mapping, so Python falls back to the other
-            operand's comparison.
+            ``True`` when both sides carry the same case-folded pairs, and ``NotImplemented`` for a
+            value that is not a mapping, so Python falls back to the other operand's comparison.
         """
         if not isinstance(other, Mapping):
             return NotImplemented
@@ -118,7 +115,8 @@ class _FrozenHeaders(Mapping[str, str]):
         name is shown free-text scrubbed, so the echo a peer answers with cannot reach a log line or
         a terminal through a header's representation (AAP 0.3.2, AAP 0.14.3).
 
-        Returns: ``_FrozenHeaders({'<name>': '<value>', ...})``, sorted by name so two runs render
+        Returns:
+            ``_FrozenHeaders({'<name>': '<value>', ...})``, sorted by name so two runs render
             the same.
         """
         shown = ", ".join(
@@ -132,9 +130,8 @@ class _FrozenHeaders(Mapping[str, str]):
 class _RequestSnapshot:
     """The parts of the outgoing request a dump reports, read once when the response is built.
 
-    The body is kept as raw bytes, because the hash a dump reports is computed over exactly those
-    bytes, and the query pairs stay in the order the request carried them for
-    :meth:`FoundryResponse.request_dump` to sort.
+    The body is kept as raw bytes, the hash a dump reports being computed over exactly those bytes,
+    and the query pairs in request order, for :meth:`FoundryResponse.request_dump` to sort.
     """
 
     method: str
@@ -155,13 +152,17 @@ class FoundryResponse:
     from :mod:`foundry.http.retries`. Construction goes through :func:`from_httpx`, so the private
     members carrying the request and the redaction engine are filled in one place.
 
-    Attributes: status_code: The numeric status, ``4xx`` and ``5xx`` included (AAP 0.4.3). headers:
-        The response headers, case-insensitive and read-only; a name ``secrets.redact_keys`` lists
-        is still readable here, and every route that persists or displays a header value redacts it
-        first (AAP 0.3.2). text: The body decoded with the charset the response declared.
-        elapsed_ms: Wall-clock milliseconds for the whole request, every attempt and backoff
-        included, measured by the session around the retry loop. source: ``"live"`` or
-        ``"cassette"``, from the tag :mod:`foundry.cassette.transport` puts on each reply.
+    Attributes:
+        status_code: The numeric status, ``4xx`` and ``5xx`` included (AAP 0.4.3).
+        headers: The response headers, case-insensitive and read-only. A name the configuration
+            lists in ``secrets.redact_keys`` is still readable here; every route that persists or
+            displays a header value passes it through the redaction engine first (AAP 0.3.2).
+        text: The body decoded as text, using the charset the response declared.
+        elapsed_ms: Wall-clock milliseconds for the whole logical request, every attempt and its
+            backoff included. The session measures it with :func:`time.monotonic` around the retry
+            loop and passes it in, so it is no per-attempt timer and no clock is read here.
+        source: ``"live"`` or ``"cassette"``, taken from the tag :mod:`foundry.cassette.transport`
+            puts on every reply it returns.
     """
 
     status_code: int
@@ -182,10 +183,11 @@ class FoundryResponse:
         Returns:
             The decoded value: a ``dict``, a ``list``, a ``str``, a number, a ``bool`` or ``None``.
 
-        Raises: ContractError: The body is not JSON. ``json_path`` is ``$``, the whole document
-            being the violation, and ``detail`` is a single-line redacted excerpt of at most
-            :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, the bound AAP 0.4.7 fixes for
-            it; the message quotes no part of the body.
+        Raises:
+            ContractError: The body is not JSON. ``json_path`` is ``$``, the whole document
+                being the violation, and ``detail`` is a single-line redacted excerpt of at most
+                :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES` bytes, the bound AAP 0.4.7 fixes
+                for it; the message quotes no part of the body.
         """
         try:
             return json.loads(self.text)
@@ -272,11 +274,11 @@ def _dumped_body(body: str | bytes, redactor: Redactor) -> str | None:
 def _request_body(request: httpx.Request) -> bytes:
     """Return the body of ``request``, or ``b""`` when it was never read into memory.
 
-    ``httpx`` raises :class:`httpx.RequestNotRead` for a request built around a caller's own stream
-    until it is sent. Foundry does not stream a request body (AAP 0.9.2), and
-    :func:`foundry.cassette.transport.fingerprint_from_request` resolves the same case the same way,
-    so a request that carries one dumps the empty body it fingerprints rather than failing the
-    exchange.
+    ``httpx`` raises :class:`httpx.RequestNotRead` for a request built around a caller's own
+    stream until it is sent. Foundry does not stream a request body (AAP 0.9.2), and
+    :func:`foundry.cassette.transport.fingerprint_from_request` resolves the same case the same
+    way, so a request that carries one dumps the empty body it fingerprints rather than failing
+    the exchange.
 
     Returns:
         The raw body bytes, or ``b""`` when the body has not been read.
@@ -375,17 +377,22 @@ def from_httpx(
     asserts against, capturing the request it answered so the two dumps can be produced later (AAP
     0.4.6). Nothing here reads a clock, so the elapsed measurement is the caller's.
 
-    Args: response: The reply ``httpx`` produced, or the one a cassette transport served.
-        elapsed_ms: Wall-clock milliseconds the whole logical request took, retries and backoff
-        included; a negative measurement is clamped to zero rather than raised, because only
-        :class:`~foundry.core.exceptions.ContractError` may cross this module's boundary (AAP
-        0.14.3) and an artefact of the caller's timing must never fail a test (AAP 0.1.2). redactor:
-        The run's redaction engine, from which both dumps and every representation take their
-        redaction. request: The request ``response`` answers, which
-        :meth:`FoundryResponse.request_dump` reports.
+    Args:
+        response: The reply ``httpx`` produced, or the one a cassette transport served.
+        elapsed_ms: Wall-clock milliseconds the whole logical request took, retries and their
+            backoff included, as measured by the session with :func:`time.monotonic`. A negative
+            measurement cannot arise from a monotonic clock; it is clamped to zero rather than
+            raised, because only :class:`~foundry.core.exceptions.ContractError` may cross this
+            module's boundary (AAP 0.14.3) and an artefact of the caller's timing must never fail a
+            test (AAP 0.1.2).
+        redactor: The run's redaction engine, built from ``secrets.redact_keys``. Both dumps and
+            every representation of this response take their redaction from it.
+        request: The request ``response`` answers, whose method, target, query, headers and body
+            :meth:`FoundryResponse.request_dump` reports.
 
-    Returns: The response, with case-insensitive headers, the body decoded once, the status
-        untouched and the source taken from the transport's tag.
+    Returns:
+        The response, with case-insensitive headers, the body decoded once, the status untouched
+        and the source taken from the transport's tag.
     """
     return FoundryResponse(
         status_code=response.status_code,

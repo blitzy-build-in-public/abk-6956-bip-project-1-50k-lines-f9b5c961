@@ -10,9 +10,8 @@ plain :class:`~sqlalchemy.Table` too, calling either a "model-like" value. Two r
 Models travel as a value, never as module state: there is no global ``Base``, no registry and no
 cache, since a shared registry would leak one test's schema into the next and the layering contract
 (AAP 0.4.8) permits import-time mutation only in the two registration tables of
-:mod:`foundry.data.registry` and :mod:`foundry.reporting.renderers`. SQLAlchemy is imported lazily,
-because the plugin has a 150 ms startup budget (implicit requirement I5): every annotation name
-comes from ``TYPE_CHECKING`` and every runtime name from inside the function that needs it. It
+:mod:`foundry.data.registry` and :mod:`foundry.reporting.renderers`. SQLAlchemy is imported lazily
+inside the functions that use it, with ``TYPE_CHECKING`` annotations (implicit requirement I5). It
 imports :mod:`foundry.core.exceptions` and nothing else of Foundry (AAP 0.4.8 places ``foundry.db``
 on the foundation rung), defines no exception type of its own and raises nothing but
 :class:`~foundry.core.exceptions.FoundryError` (AAP 0.14.3). Importing it does no work at all.
@@ -109,9 +108,7 @@ def metadata_for(models: ModelSpec) -> tuple[MetaData, ...]:
 
     Several declarative classes sharing one ``Base`` share one :class:`~sqlalchemy.MetaData`, so
     five models from one ``Base`` name one schema, not five; creating that schema once per class
-    would be wasted work at best and an ``OperationalError`` at worst. Metadata is de-duplicated by
-    identity, because :class:`~sqlalchemy.MetaData` defines no value comparison and two distinct
-    instances are two distinct schemas even when their tables share names. A caller may pass models
+    would be wasted work at best and an ``OperationalError`` at worst. A caller may pass models
     from more than one ``Base`` -- two declarative bases build two independent databases on one
     engine -- which is why the result is a tuple :func:`create_all` loops over.
 

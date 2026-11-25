@@ -11,10 +11,10 @@ test annotates its parameter without reaching into the capability package that d
 named beside its fixture, and the object its fixture returns satisfies it structurally.
 
 **Registration is not this module's job.** ``foundry.fixtures.plugin`` registers the twelve fixtures
-during ``pytest_configure``, and this barrel deliberately does not import it: a package is
-initialised before any of its submodules finishes importing, so that import would be the package's
-one cycle. Importing this module defines names only -- no ``pytest_plugins`` declaration, no
-``pytest.fixture`` call, no I/O, no logger configuration and no module state.
+during ``pytest_configure``, and this barrel does not import it: a package is initialised before any
+submodule finishes importing, so that import would be the package's one cycle. Importing this module
+defines names only -- no ``pytest_plugins`` declaration, no ``pytest.fixture`` call, no I/O, no
+logger configuration, no module state.
 
 **Import form.** Every name below is imported as ``X as X``: that spelling is the explicit re-export
 ``mypy --strict``'s no-implicit-reexport requires, and with this isort configuration a single block
@@ -22,11 +22,10 @@ of aliased names is reported as unsorted (I001), so each name keeps its own stat
 
 **Import cost and layering.** The re-exports are eager on purpose: the nine sibling modules defer
 every third-party import (``httpx``, ``SQLAlchemy``, ``Faker``, ``pydantic``, ``jsonschema``) into
-the fixture bodies that need them, so the barrel adds no distribution to the ``pytest_configure``
-path. Those nine modules are this file's only Foundry imports; the one upward edge,
-``foundry.config``, is exercised inside ``foundry.fixtures.config`` rather than here, and
-:mod:`foundry.execution`, :mod:`foundry.reporting`, :mod:`foundry.cli` and :mod:`foundry.plugin`
-stay unreachable.
+the fixture bodies that need them, so the barrel adds nothing to the ``pytest_configure`` path.
+Those nine modules are this file's only Foundry imports; the one upward edge, ``foundry.config``, is
+exercised inside ``foundry.fixtures.config``, so :mod:`foundry.execution`,
+:mod:`foundry.reporting`, :mod:`foundry.cli` and :mod:`foundry.plugin` stay unreachable.
 """
 
 from __future__ import annotations

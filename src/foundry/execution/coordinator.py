@@ -425,13 +425,11 @@ def _start_capture(item: pytest.Item, state: SessionState) -> None:
 
     AAP 0.4.6 gives every collected test one directory under ``artifacts/<run_id>/`` and AAP 0.14.2
     bounds its log tail at ``logging.capture_lines``, so both are created here, once per item, and
-    published on the typed item stash :func:`capture_artifacts` reads. The ring is attached for the
-    whole protocol -- setup, every attempt and teardown -- so the tail answers "what did this test
-    log", and the writer becomes the process's active one so the HTTP layer records the exchange
-    (AAP 0.4.6, requirement I5). A fault is one ``WARNING`` and leaves the test with no artifacts
-    rather than a new outcome, and the writer is bound even when the artifact directory could not
-    be created: it shares the run's disabled state, so every write records nothing and a capture
-    fault never becomes the test's own failure (AAP 0.4.7, AAP 0.1.2).
+    published on the typed item stash :func:`capture_artifacts` reads. A fault is one ``WARNING``
+    and leaves the test with no artifacts rather than a new outcome, and the writer is bound even
+    when the artifact directory could not be created: it shares the run's disabled state, so no
+    write records anything and a capture fault never becomes the test's own failure (AAP 0.4.7, AAP
+    0.1.2).
     """
     try:
         from foundry.obs.artifacts import set_active_writer
@@ -479,10 +477,9 @@ def capture_artifacts(
     ``plugin.py`` stamps every phase's report and the controller keeps the teardown phase's
     payload, so the files are written there: both captured streams, ``traceback.txt`` from the
     first failing phase, ``log_tail.log`` from the bounded ring, then ``manifest.json`` through
-    :meth:`foundry.obs.artifacts.ArtifactWriter.finalize`, which leaves a passing test with only its
-    manifest (AAP 0.4.5, AAP 0.4.6). The HTTP layer writes the request and response dumps itself, as
-    the test makes its request. Both answers are empty for any other phase and for a test that
-    captured nothing.
+    :meth:`foundry.obs.artifacts.ArtifactWriter.finalize`, which leaves a passing test with only
+    its manifest (AAP 0.4.5, AAP 0.4.6). Both answers are empty for any other phase and for a test
+    that captured nothing.
     """
     ring = item.stash.get(ITEM_LOG_RING, None)
     log_tail = () if ring is None else ring.tail()

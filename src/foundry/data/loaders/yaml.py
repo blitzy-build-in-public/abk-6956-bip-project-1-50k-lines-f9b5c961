@@ -24,12 +24,11 @@ class YamlLoader:
     The class holds no state beyond the two suffixes it accepts, which is what makes :data:`LOADER`
     a singleton the registry builds once at import: a reader is a pure function of the file it is
     given, so two workers reading the same file derive the same document and a sharded run collects
-    the same cases as a serial one (implicit requirement I6). Both suffixes run through one code
-    path, because PyYAML does not choose a parser by suffix. A record read from a YAML document
-    carries ``line=None``: the parser reports a position for a syntax fault but not for each mapping
-    it built, so the row's real line is unknown and :class:`base.RawRow` records that honestly
-    instead of inventing one -- the case id then comes from the row's index rather than from a line
-    (AAP 0.7.2).
+    the same cases as a serial one (implicit requirement I6). A record read from a YAML document
+    carries ``line=None``: the parser reports a position for a syntax fault but not for each
+    mapping it built, so the row's real line is unknown and :class:`base.RawRow` records that
+    honestly instead of inventing one -- the case id then comes from the row's index rather than
+    from a line (AAP 0.7.2).
 
     Attributes:
         extensions: The suffixes this reader accepts, lowercase and without a leading dot,

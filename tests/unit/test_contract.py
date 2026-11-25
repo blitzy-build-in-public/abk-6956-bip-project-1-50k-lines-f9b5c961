@@ -50,6 +50,16 @@ _DEPTH_INSTANCE: Final[dict[str, object]] = {"b": {"x": "not-an-int"}, "a": "not
 _SIBLINGS = {"properties": {"a": {"type": "object"}, "b": {"type": "object"}}}
 _MESSAGES: Final[dict[str, object]] = {"properties": {"a": {"enum": ["x"], "type": "string"}}}
 _NOTE_SCHEMA: Final[dict[str, object]] = {"properties": {"note": {"pattern": "^[a-z]+$"}}}
+_SENTINEL: Final[str] = "_".join(("QA_BEARER", "9f3ab1c77d2e4ff0a5c3d81b"))
+_NESTED_PASSWORD_SCHEMA: Final[dict[str, object]] = {
+    "type": "object",
+    "properties": {"account": {"type": "object", "properties": {"password": {"type": "integer"}}}},
+}
+
+
+def _integer_key(key: str) -> dict[str, object]:
+    """Return a schema requiring ``key`` to be an integer, so a string there is one type fault."""
+    return {"type": "object", "properties": {key: {"type": "integer"}}}
 
 
 def _errors(schema: Mapping[str, object], instance: object) -> list[ValidationError]:
@@ -221,6 +231,59 @@ def test_redaction_and_the_excerpt_budget_hold_on_every_rendered_surface() -> No
     redacted = excerpt("x" * 180 + f" password={_SECRET}" + "z" * 50)
     assert f"password={REDACTED}" in redacted and "hunter" not in redacted
     assert _SECRET not in json.dumps(f"JSON expected but the body was: {redacted}")
+
+
+@pytest.mark.parametrize(
+    ("instance", "schema", "json_path", "masked"),
+    (
+        pytest.param(
+            {"password": _SENTINEL}, _integer_key("password"), "$.password", True, id="password"
+        ),
+        pytest.param(
+            {"api_key": _SENTINEL}, _integer_key("api_key"), "$.api_key", True, id="api-key"
+        ),
+        pytest.param({"token": _SENTINEL}, _integer_key("token"), "$.token", True, id="token"),
+        pytest.param(
+            {"account": {"password": _SENTINEL}},
+            _NESTED_PASSWORD_SCHEMA,
+            "$.account.password",
+            True,
+            id="nested-password",
+        ),
+        pytest.param({"note": _SENTINEL}, _integer_key("note"), "$.note", False, id="innocent-key"),
+    ),
+)
+def test_a_violation_at_a_secret_key_masks_the_value_it_quotes(
+    instance: dict[str, object], schema: dict[str, object], json_path: str, masked: bool
+) -> None:
+    assert isinstance(violation := find_violation(instance, schema), Violation)
+    assert violation.json_path == json_path and _SENTINEL in violation.message
+    error = to_contract_error(violation)
+    assert error.json_path == json_path
+    surfaces = (
+        render_violation(violation),
+        to_contract_error(violation, redact=default_redactor().text).detail,
+        error.detail,
+    )
+    for surface in surfaces:
+        assert surface.startswith(f"{json_path}: ") and "validator: type" in surface
+        if masked:
+            assert REDACTED in surface
+            assert not any(fragment in surface for fragment in _SENTINEL.split("_"))
+        else:
+            assert f"'{_SENTINEL}'" in surface
+
+
+def test_a_line_break_in_a_message_cannot_hide_a_credential_from_the_scan() -> None:
+    violation = Violation(
+        json_path="$.note",
+        schema_path="#/properties/note/type",
+        validator="type",
+        message=f"'Bearer\n{_SENTINEL}' is not of type 'integer'",
+        path_parts=("note",),
+    )
+    line = render_violation(violation)
+    assert "\n" not in line and "Bearer ***" in line and _SENTINEL not in line
 
 
 def test_importing_the_package_pulls_in_neither_jsonschema_nor_yaml(

@@ -92,10 +92,13 @@ def resolve(
     :data:`foundry.config.layers.LAYER_ORDER` states, so precedence holds by construction, and
     :meth:`foundry.config.models.FoundryConfig.source_of` reports which layer won each key.
 
-    Args: cli_overrides: What the command line supplied, already coerced by
-        :mod:`foundry.config.cli_layer`, or ``None`` when the caller has no command line. environ:
-        The environment to read ``FOUNDRY_*`` variables from, or ``None`` for the process one. cwd:
-        The invocation directory file discovery and a relative ``--foundry-config`` resolve against.
+    Args:
+        cli_overrides: What the command line supplied, already coerced by
+            :mod:`foundry.config.cli_layer`, or ``None`` when the caller has no command line.
+        environ: The environment to read ``FOUNDRY_*`` variables from, or ``None`` for the process
+            one.
+        cwd: The invocation directory file discovery and a relative ``--foundry-config`` resolve
+            against.
 
     Returns:
         The resolved, frozen configuration carrying one
@@ -349,9 +352,9 @@ def _attributed_failure(exc: ValidationError, recorded: Mapping[str, ConfigSourc
     pydantic's location format is never parsed here. A fault the recorder cannot place is returned
     as the first call built it: the cross-field rule case, whose message is already complete.
 
-    Returns: The :class:`foundry.core.exceptions.ConfigError` the caller raises, with ``from None``
-        so the pydantic error -- which echoes the offending input -- is not chained into a
-        traceback.
+    Returns:
+        The :class:`foundry.core.exceptions.ConfigError` the caller raises, with ``from None`` so
+        the pydantic error -- which echoes the offending input -- is not chained into a traceback.
     """
     unattributed = validation.translate_validation_error(exc)
     if unattributed.key is None:
@@ -391,8 +394,9 @@ def _refuse_unregistered_keys(recorded: Mapping[str, ConfigSource]) -> None:
     Returns:
         Nothing, when every recorded key is registered.
 
-    Raises: foundry.core.exceptions.ConfigError: For the first unregistered key in sorted order,
-        carrying the closest valid spelling and the layer the record attributes it to.
+    Raises:
+        foundry.core.exceptions.ConfigError: For the first unregistered key in sorted order,
+            carrying the closest valid spelling and the layer the record attributes it to.
     """
     for dotted in sorted(recorded):
         if keys.spec_for(dotted) is not None:
@@ -410,13 +414,12 @@ def _complete_sources(config: FoundryConfig, recorded: Mapping[str, ConfigSource
     """Return a provenance record for every key the resolved configuration publishes.
 
     Total, so :meth:`foundry.config.models.FoundryConfig.source_of` has an answer for any published
-    key and ``config show`` prints one row per key rather than one per key some layer set. The key
-    set comes from the configuration itself and is ordered by sorted key, so two resolutions of the
-    same inputs compare and iterate identically (AAP 0.4.5, AAP 0.13.1). ``recorded`` holds only the
-    keys some layer supplied.
+    key and ``config show`` prints one row per key rather than one per key some layer set.
+    ``recorded`` holds only the keys some layer supplied.
 
-    Returns: One :class:`foundry.config.sources.ConfigSource` per published key: the recorded origin
-        for a key a layer supplied, and the ``default`` record for every other key.
+    Returns:
+        One :class:`foundry.config.sources.ConfigSource` per published key: the recorded origin for
+        a key a layer supplied, and the ``default`` record for every other key.
 
     Raises:
         foundry.core.exceptions.ConfigError: For a recorded key the registry does not declare, as

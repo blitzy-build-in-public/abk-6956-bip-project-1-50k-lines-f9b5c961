@@ -6,7 +6,6 @@ under ``data.dir`` as a :class:`foundry.data.cases.Case`, and ``matrix("pricing.
 cases a matrix document's cross-product expands to. Both hand back immutable tuples in the order the
 loader produced them -- file order for a table, sorted-axis expansion order for a matrix -- so a
 test parametrises over a deterministic sequence.
-
 A test names a file relative to ``data.dir`` (default ``testdata``) and nothing outside that
 directory is addressable: :func:`foundry.data.registry.resolve_data_file` refuses an escaping name
 through :func:`foundry.core.paths.resolve_under`. ``data.schema_strict`` is passed to the loader as
@@ -39,8 +38,7 @@ class FoundryDataLoader:
     ``cases(name)`` returns one :class:`foundry.data.cases.Case` per data row of the named file and
     ``matrix(name)`` one per combination of the named matrix document, both as immutable tuples. A
     name is relative to :attr:`directory` and nothing outside it is addressable. Frozen, because a
-    loader captured at collection must not be re-pointed at another directory while the run planned
-    around it executes.
+    loader captured at collection must not be re-pointed at another directory mid-run.
 
     Attributes:
         directory: The resolved ``data.dir`` the names are resolved against, made absolute against

@@ -78,6 +78,11 @@ _INJECTIONS: Final[dict[str, str]] = {
         return write_sep(self, sep, title, **markup)
     TerminalReporter.write_sep = _raising_write_sep
 """,
+    "terminal_sink": """    import foundry.obs.capture as capture
+    def _raising_scrub(writer, redactor):
+        raise RuntimeError("injected terminal sink failure")
+    capture.scrub_terminal_writer = _raising_scrub
+""",
 }
 
 
@@ -221,4 +226,19 @@ def test_a_terminal_fault_does_not_change_a_passing_test(pytester: pytest.Pytest
     assert "INTERNALERROR" not in terminal and "Traceback" not in terminal
     fired = _plumbing(pytester.path)
     assert len(fired) == 1 and "activation banner" in fired[0], fired
+    assert (_record(pytester.path, "test_probe.py::test_ok") or {}).get("outcome") == "passed"
+
+
+def test_a_terminal_sink_install_fault_does_not_change_a_passing_test(
+    pytester: pytest.Pytester,
+) -> None:
+    control = _baseline(pytester, 0, test_probe=_PASSING)
+    assert all((pytester.path / name).is_file() for name in _DOCS)
+    injected = _run(pytester, "terminal_sink", control)
+    assert _errors(pytester.path) == [], "an install fault may never be logged above WARNING"
+    terminal = injected.stdout.str() + injected.stderr.str()
+    assert "INTERNALERROR" not in terminal, "a sink that cannot install may not end the session"
+    fired = _plumbing(pytester.path)
+    assert len(fired) == 1 and "terminal redactor" in fired[0], fired
+    assert all((pytester.path / name).is_file() for name in _DOCS)
     assert (_record(pytester.path, "test_probe.py::test_ok") or {}).get("outcome") == "passed"

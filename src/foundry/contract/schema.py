@@ -51,8 +51,7 @@ def resolve_schema_path(source: str | Path, *, base_dir: Path | None = None) -> 
     is ``None``, and an absolute one is used as given; the result passes through
     :meth:`pathlib.Path.resolve`, so ``..`` segments and symlinks are gone before the containment
     check -- which is what stops a data file from naming a schema anywhere on the disk. ``~`` is
-    deliberately not expanded: it would name a different file on every machine. Nothing is opened
-    here; this function is path arithmetic.
+    deliberately not expanded: it would name a different file on every machine.
 
     Args:
         source: A path to a schema file, absolute or relative.
@@ -362,7 +361,7 @@ def _child(path: str, key: object) -> str:
 
     Returns:
         The child path: ``$.properties.items`` for a plain name, ``$.items.$ref`` for a schema
-        keyword, ``$["a.b"]`` for a key a dot would make ambiguous, and ``$[3]`` for a non-string
+        keyword, ``$["a.b"]`` for a key a dot would make ambiguous and ``$[3]`` for a non-string
         key.
     """
     if isinstance(key, str) and _is_dotted_key(key):
@@ -374,10 +373,9 @@ def _is_dotted_key(key: str) -> bool:
     """Return whether ``key`` renders in dotted form rather than as a quoted subscript.
 
     Returns:
-        ``True`` for a name that reads as a Python identifier and is not a keyword, and for a
-        schema keyword such as ``$ref`` or ``@context`` whose leading punctuation is not part of
-        the name; ``False`` for anything a dot would make ambiguous, such as an empty key or
-        ``a.b``.
+        ``True`` for a name that reads as a Python identifier and is not a keyword, and for a schema
+        keyword such as ``$ref`` or ``@context`` whose leading punctuation is not part of the name;
+        ``False`` for anything a dot would make ambiguous, such as an empty key or ``a.b``.
     """
     if not key:
         return False

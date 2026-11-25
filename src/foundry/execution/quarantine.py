@@ -71,7 +71,8 @@ def is_quarantined(markers: Iterable[str]) -> bool:
             marker machinery. Order is irrelevant, another ``foundry_*`` marker is ignored and an
             entry that is not a name is skipped: this reports a fact and never raises (AAP 0.1.2).
 
-    Returns: ``True`` when :data:`QUARANTINE_MARKER` is among the names.
+    Returns:
+        ``True`` when :data:`QUARANTINE_MARKER` is among the names.
     """
     return any(isinstance(name, str) and name == QUARANTINE_MARKER for name in markers)
 
@@ -130,14 +131,13 @@ class QuarantineDecision:
 class QuarantineRegistry:
     """The session's quarantine mode, and the decisions taken under it.
 
-    Constructed once per session from the resolved ``execution.quarantine_mode`` value and stored in
-    pytest stash. It accumulates nothing -- callers aggregate over the decisions it returns -- so
-    two items on two workers share no state and a run's exit code never depends on execution order
-    (AAP 0.4.8). Passing text rather than a member is tolerated, so ``mode="strict"`` resolves to
-    :attr:`foundry.config.enums.QuarantineMode.STRICT`, and a value outside the enum falls back to
-    :attr:`foundry.config.enums.QuarantineMode.REPORT`, the mode that fails the fewest runs: a
-    defect in Foundry's own wiring may not change a run's exit code (AAP 0.1.2).
-    (AAP 0.1.2).
+    Constructed once per session from the resolved ``execution.quarantine_mode`` value and stored
+    in pytest stash. It accumulates nothing -- callers aggregate over the decisions it returns --
+    so two items on two workers share no state and a run's exit code never depends on execution
+    order (AAP 0.4.8). Passing text rather than a member is tolerated, so ``mode="strict"``
+    resolves to :attr:`foundry.config.enums.QuarantineMode.STRICT`, and a value outside the enum
+    falls back to :attr:`foundry.config.enums.QuarantineMode.REPORT`, the mode that fails the
+    fewest runs: a defect in Foundry's own wiring may not change a run's exit code (AAP 0.1.2).
     """
 
     mode: QuarantineMode = QuarantineMode.REPORT
@@ -168,13 +168,11 @@ class QuarantineRegistry:
         """Return the decision for one test, given whether it carries the marker and its outcome.
 
         The outcome and the flags follow one table (AAP 0.4.7). A failure carrying no marker keeps
-        its outcome and fails the run; a marked failure becomes ``quarantined_failed`` and fails the
-        run only in ``strict`` mode; a marked pass becomes ``quarantine_passed`` with
+        its outcome and fails the run; a marked failure becomes ``quarantined_failed`` and fails
+        the run only in ``strict`` mode; a marked pass becomes ``quarantine_passed`` with
         :data:`QUARANTINE_PASSED_NOTE` and fails nothing (assumption A11); a pass, skip, xfail,
         xpass or ``not_run`` is listed nowhere, ``not_run`` being the absence of a result rather
-        than a failure (assumption A12). An outcome that already names a quarantine verdict keeps
-        the decision it records, making this idempotent; a value outside the published nine counts
-        as a failure.
+        than a failure (assumption A12).
         """
         if _is_quarantine_outcome(outcome):
             return _already_decided(outcome, strict=self.is_strict)
@@ -232,8 +230,7 @@ class QuarantineRegistry:
 def quarantined_outcomes() -> tuple[OutcomeValue, ...]:
     """Return the two outcome values a quarantine decision can produce.
 
-    Exposed so the exit-code composition and the tests can name the quarantine outcomes without
-    retyping them.
+    Exposed so the exit-code composition and the tests can name the quarantine outcomes.
 
     Returns:
         ``("quarantined_failed", "quarantine_passed")``, in the order AAP 0.4.6 lists them.
@@ -274,9 +271,8 @@ def _is_quarantine_outcome(outcome: OutcomeValue) -> bool:
 def _already_decided(outcome: OutcomeValue, *, strict: bool) -> QuarantineDecision:
     """Return the decision an outcome that already names a quarantine verdict keeps.
 
-    Rebuilding the decision from the outcome alone is what makes
-    :meth:`QuarantineRegistry.decide` idempotent. ``strict`` decides whether the marked failure
-    fails the run.
+    Rebuilding the decision from the outcome alone is what makes :meth:`QuarantineRegistry.decide`
+    idempotent. ``strict`` decides whether the marked failure fails the run.
     """
     if outcome == "quarantine_passed":
         return QuarantineDecision(

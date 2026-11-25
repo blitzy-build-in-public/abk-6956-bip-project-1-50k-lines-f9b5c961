@@ -1,5 +1,7 @@
 """Unit tests for the ``foundry.reporting`` package: record schema, store, JUnit, formats, compare.
-The HTML page's own cases live in ``tests/unit/test_reporting_html.py``."""
+Every record-derived string the JUnit document carries is reduced to XML 1.0's ``Char`` production
+first, and the artifact properties keep their order (AAP 0.4.6). The HTML page's own cases live in
+``tests/unit/test_reporting_html.py``."""
 
 from __future__ import annotations
 
@@ -8,6 +10,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_args
+from xml.dom import minidom
 from xml.etree import ElementTree
 
 import pydantic
@@ -32,22 +35,56 @@ _RUN_ID = "20250102T030405-abc123"
 _STARTED_AT = datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
 _FINISHED_AT = datetime(2025, 1, 2, 3, 4, 5, 250_000, tzinfo=UTC)
 _MODULE = "tests/test_cart.py"
+_PROFILE = "ci"
 _SECRET = "hunter2-secret-9f3"
 _RENDERER_IDS = ("json", "html", "junit")
 _BASE = {
     "run_id": _RUN_ID,
     "started_at": _STARTED_AT,
     "finished_at": _FINISHED_AT,
-    "profile": "ci",
+    "profile": _PROFILE,
     "outcome": Outcome.PASSED,
     "attempts": 1,
     "duration_ms": 12.5,
 }
+# Every character XML 1.0's Char production excludes, one case each, and the three it allows.
+_FORBIDDEN = {
+    "ansi-escape": "\x1b",
+    "nul": "\x00",
+    "vertical-tab": "\x0b",
+    "form-feed": "\x0c",
+    "backspace": "\x08",
+    "lone-surrogate": "\ud800",
+    "noncharacter-fffe": "\ufffe",
+    "noncharacter-ffff": "\uffff",
+}
+_LEGAL = {"del": "\x7f", "c1-open": "\x80", "c1-close": "\x9f"}
+_ARTIFACTS = tuple(
+    ArtifactRecord(kind=kind, path=f"tests__test_cart.py__test_total/{name}", bytes=len(name))
+    for kind, name in (
+        ("request", "request.json"),
+        ("response", "response.json"),
+        ("stdout", "stdout.log"),
+        ("stderr", "stderr.log"),
+        ("traceback", "traceback.txt"),
+    )
+)
+_EXPECTED_PROPERTIES = [
+    ("foundry.profile", _PROFILE),
+    ("foundry.outcome", "passed"),
+    ("foundry.attempts", "3"),
+    ("foundry.quarantine", "none"),
+    *[(f"foundry.artifact.{artifact.kind}", artifact.path) for artifact in _ARTIFACTS],
+]
 
 
 def _record_for(name: str = "total", **overrides: object) -> ResultRecord:
     fields = {**_BASE, "nodeid": f"{_MODULE}::{name}", **overrides}
     return ResultRecord.model_validate(fields)
+
+
+def _failed_record(**overrides: object) -> ResultRecord:
+    return _record_for("test_total", outcome=Outcome.FAILED, **overrides)
 
 
 def _run_error(worker_id: str = "gw1", message: str = "worker lost") -> RunError:
@@ -65,6 +102,13 @@ def _artifact(path: str) -> ArtifactRecord:
 def _properties(element: ElementTree.Element) -> dict[str, str]:
     found = element.findall("properties/property")
     return {prop.get("name", ""): prop.get("value", "") for prop in found}
+
+
+def _property_pairs(element: ElementTree.Element) -> list[tuple[str, str]]:
+    # The published property order, which a dict would lose.
+    holder = element.find("properties")
+    assert holder is not None
+    return [(prop.get("name", ""), prop.get("value", "")) for prop in holder.findall("property")]
 
 
 def test_the_package_publishes_the_documented_enumeration() -> None:
@@ -165,7 +209,7 @@ def test_the_suite_carries_the_run_identity_and_a_testcase_its_attributes() -> N
     errored = ElementTree.fromstring(junit.render([_record_for(outcome=Outcome.ERROR)]))
     assert errored.find("testcase/error") is not None and errored.get("errors") == "1"
     # AAP 0.4.6: the case carries its module, its name and its duration; the artifact properties
-    # are tests/unit/test_junit_serialisation.py's subject.
+    # are the subject of the cases below.
     case = ElementTree.fromstring(junit.render([_record_for("a", attempts=3)]))
     el = case.find("testcase")
     assert el is not None and (el.get("classname"), el.get("name")) == ("tests.test_cart", "a")
@@ -222,3 +266,50 @@ def test_the_format_table_is_stable_and_writes_three_documents(tmp_path: Path) -
 
 def test_the_comparison_is_reachable_from_the_package_barrel() -> None:
     assert reporting.diff is compare.diff
+
+
+@pytest.mark.parametrize(("label", "forbidden"), _FORBIDDEN.items(), ids=list(_FORBIDDEN))
+def test_a_forbidden_character_never_reaches_the_document(
+    label: str, forbidden: str, tmp_path: Path
+) -> None:
+    failures = (FailureRecord(phase="call", message=f"AssertionError: nope{forbidden}"),)
+    artifact = ArtifactRecord(kind="request", path=f"run/request{forbidden}[31m.json", bytes=10)
+    nodeid = f"{_MODULE}::test_{forbidden}total"
+    elements = [_failed_record(nodeid=nodeid, failures=failures, artifacts=(artifact,))]
+    elements += [_failed_record(), _run_error(message=f"worker lost{forbidden}")]
+    document = junit.render(elements)
+    assert forbidden not in document
+    survivors = ("AssertionError: nope", "test_total", "worker lost", "request[31m.json")
+    assert all(word in document for word in survivors)
+    assert junit.NO_FAILURE_DETAIL_MESSAGE in document
+    ElementTree.fromstring(document)
+    minidom.parseString(document.encode("utf-8"))
+    target = tmp_path / f"{label}.xml"
+    assert junit.write(elements, target) == target
+    assert target.read_text(encoding="utf-8") == document
+
+
+@pytest.mark.parametrize(("label", "legal"), _LEGAL.items(), ids=list(_LEGAL))
+def test_the_characters_xml_allows_survive_unchanged(label: str, legal: str) -> None:
+    message = f"keep{legal}inside"
+    failures = (FailureRecord(phase="call", message=message),)
+    document = junit.render([_failed_record(failures=failures)])
+    assert legal in document
+    failure = ElementTree.fromstring(document).find("testcase/failure")
+    assert failure is not None and failure.get("message") == message
+
+
+def test_the_documented_properties_and_artifact_references_are_unchanged() -> None:
+    verdict = QuarantineRecord(state="none")
+    chosen = {"outcome": Outcome.PASSED, "attempts": 3, "artifacts": _ARTIFACTS}
+    record = _record_for(quarantine=verdict, **chosen)
+    testcase = ElementTree.fromstring(junit.render([record])).find("testcase")
+    assert testcase is not None and _property_pairs(testcase) == _EXPECTED_PROPERTIES
+
+
+def test_a_markup_node_id_is_still_escaped() -> None:
+    nodeid = f"{_MODULE}::test_<script>alert(1)</script>"
+    document = junit.render([_failed_record(nodeid=nodeid)])
+    assert "&lt;script&gt;" in document and "<script" not in document
+    testcase = ElementTree.fromstring(document).find("testcase")
+    assert testcase is not None and testcase.get("name") == "test_<script>alert(1)</script>"

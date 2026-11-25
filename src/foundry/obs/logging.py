@@ -75,7 +75,6 @@ def get_logger(name: str | None = None) -> logging.Logger:
         dotted children such as ``"foundry.obs.artifacts"``, so calling this with ``__name__`` from
         a Foundry module is idempotent; a name merely beginning with the same letters, such as
         ``"foundrydb"``, lands outside the tree and inherits neither level nor null handler.
-
     Nothing is configured here: no level is set, no handler is attached, no side effects.
     """
     if name is None:

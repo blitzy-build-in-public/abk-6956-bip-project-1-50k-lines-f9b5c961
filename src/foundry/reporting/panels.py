@@ -106,8 +106,7 @@ _PHASE_ORDER_INDEX: Final[Mapping[Phase, int]] = MappingProxyType(
 def _clamp_lines(value: int) -> int:
     """Clamp a requested tail size into the range ``logging.capture_lines`` accepts.
 
-    The value arrives from a hand-editable configuration file, so it may be negative, too large or
-    not an integer at all.
+    It arrives from a hand-editable file, so it may be negative, too large or not an integer.
 
     Returns:
         A size between ``0`` and :data:`MAX_LOG_TAIL_LINES`. A non-integer -- ``bool`` included --
@@ -202,8 +201,7 @@ def visible_control_characters(text: str) -> str:
     :func:`foundry.reporting.html.build_context`, and nothing here raises (AAP 0.14.3).
 
     Returns:
-        The text with every :data:`_CONTROL_ESCAPE` match replaced in place, or unchanged if it
-        holds none.
+        The text with every :data:`_CONTROL_ESCAPE` match replaced in place, else unchanged.
     """
     return _CONTROL_ESCAPE.sub(lambda match: f"\\x{ord(match.group()):02x}", text)
 
@@ -244,7 +242,6 @@ def href_for(artifact: ArtifactRecord, *, run_dir: Path, report_dir: Path) -> st
     Returns:
         The artifact's path relative to ``report_dir``, with ``/`` separators and no scheme, or
         ``None`` when the recorded path would escape ``run_dir``.
-
     The result is a relative filesystem path by construction, so a rendered report never carries an
     external reference to one of its own artifacts (criterion 9).
     """
@@ -491,7 +488,6 @@ def build_panels(
     two runs of the same suite (criterion 14). Every message and log line is redacted before its
     panel is constructed, and every artifact read is isolated, so a missing or escaping artifact
     leaves that section out and logs one ``WARNING`` instead of failing the report (AAP 0.14.3).
-
     ``report_dir`` is the directory the document will be written into, and every artifact href is
     relative to it; omitted, the link base is the process working directory (assumption A5).
 

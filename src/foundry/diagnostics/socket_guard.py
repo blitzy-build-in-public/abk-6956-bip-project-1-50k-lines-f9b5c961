@@ -93,11 +93,11 @@ def _published_attempt_count(holder: object) -> int | None:
 def detect_socket_guard(modules: Mapping[str, object] | None = None) -> SocketGuardState:
     """Return the socket-guard state published anywhere in ``modules``.
 
-    Names are visited in sorted order and the search ends at the first publisher, so the answer
-    never depends on the insertion order of :data:`sys.modules`; the sorted key list is materialised
-    first, so an attribute access that imports something cannot disturb the iteration. ``modules``
-    defaults to :data:`sys.modules` read at call time. Returns the first published state, or
-    :meth:`SocketGuardState.absent` when no module published one.
+    Returns the first published state, or :meth:`SocketGuardState.absent` when no module published
+    one. Names are visited in sorted order and the search ends at the first publisher, so the answer
+    never depends on the insertion order of :data:`sys.modules`; the sorted key list is
+    materialised first, so an attribute access that imports something cannot disturb the iteration.
+    ``modules`` defaults to :data:`sys.modules` read at call time.
     """
     namespace = sys.modules if modules is None else modules
     for name in sorted(key for key in namespace if isinstance(key, str)):

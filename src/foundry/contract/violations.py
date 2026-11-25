@@ -1,6 +1,7 @@
 """Deterministic ordering, rendering and redaction of JSON Schema violations (AAP 0.4.3).
 
-Shallowest path first, then structurally, then the key; redaction runs on the way out (AAP 0.14.3).
+Shallowest path first, then structurally, then the key; redaction runs on the way out, over the JSON
+path and the message as one span and never over the schema path and validator (AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -91,8 +92,7 @@ def format_schema_path(parts: Sequence[PathPart]) -> str:
     """Render a schema location as a ``#``-rooted JSON pointer.
 
     Returns:
-        ``#`` for the schema root, otherwise ``#/`` followed by the escaped steps joined with
-        ``/``.
+        ``#`` for the schema root, otherwise ``#/`` followed by the escaped steps joined with ``/``.
     """
     if not parts:
         return "#"
@@ -125,8 +125,9 @@ class Violation:
     def render(self, *, redact: RedactorCallable | None = None) -> str:
         """Render the violation as the single line Foundry reports.
 
-        ``redact`` is the callable that scrubs secrets out of the message, normally the redactor
-        built from ``secrets.redact_keys``; ``None`` applies the built-in deny-lists.
+        ``redact`` is the callable that scrubs secrets out of the rendered path and message,
+        normally the redactor built from ``secrets.redact_keys``; ``None`` applies the built-in
+        deny-lists.
         """
         return render_violation(self, redact=redact)
 
@@ -318,16 +319,21 @@ def render_violation(violation: Violation, *, redact: RedactorCallable | None = 
     Redaction happens here, on the way out, because the message may quote an instance value:
     scrubbing once keeps one text in ``results.json``, ``junit.xml``, ``report.html``, a
     ContractError detail and the terminal; ``redact`` is the caller's redactor or ``None``.
+    The JSON path and the message are scrubbed as one span. The engine recognises a secret by name
+    or by credential shape, and the name of the key that failed is the path's final step, so a
+    message quoting only its value carries neither and would survive: ``'abc' is not of type
+    'integer'`` says nothing a deny-list or a shape can key on, while ``$.password: 'abc' is not of
+    type 'integer'`` names the key. The schema location and the validator name that close the line
+    locate the rule rather than the instance, so they are appended outside the scrubbed span and a
+    mask there cannot cost the reader ``validator: type``. The span is scrubbed before it is
+    flattened, because a pattern that keys on a line break must still see the break it matches.
 
     Returns:
         ``<json_path>: <redacted message> (schema path: <schema_path>, validator: <validator>)``,
-        with the message flattened to one line.
+        with the scrubbed span flattened to one line.
     """
-    message = _single_line(_redact_text(violation.message, redact))
-    return (
-        f"{violation.json_path}: {message} "
-        f"(schema path: {violation.schema_path}, validator: {violation.validator})"
-    )
+    head = _single_line(_redact_text(f"{violation.json_path}: {violation.message}", redact))
+    return f"{head} (schema path: {violation.schema_path}, validator: {violation.validator})"
 
 
 def to_contract_error(
@@ -337,11 +343,13 @@ def to_contract_error(
 
     This is the single construction site for a :class:`~foundry.core.exceptions.ContractError`, so
     the path a caller branches on, the detail it reads and the message it greps for cannot diverge
-    between the response validator, the data loader and the schema assertion.
+    between the response validator, the data loader and the schema assertion. The detail is built
+    by :func:`render_violation`, so it arrives redacted rather than as the validator's raw text: the
+    public attribute is safe to render wherever a consumer reads it.
 
     Returns:
-        A ``ContractError`` whose ``json_path`` is the violation's path and whose ``detail`` is
-        :func:`render_violation`; the text carries no timestamp, run id or address.
+        A ``ContractError`` whose ``json_path`` is the violation's path and whose ``detail`` is the
+        redacted :func:`render_violation` line; the text carries no timestamp, run id or address.
     """
     return ContractError(
         f"contract validation failed at {violation.json_path}",
