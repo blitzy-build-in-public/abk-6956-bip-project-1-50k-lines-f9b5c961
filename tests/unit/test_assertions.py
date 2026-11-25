@@ -1,44 +1,29 @@
 """Unit tests for the four public assertion helpers of :mod:`foundry.assertions`.
 
-The helpers are the whole of Foundry's assertion surface (AAP 0.4.3, AAP 0.7.3), and this module is
-their unit contract. Nothing here drives pytest, the CLI or a report renderer, which AAP 0.14.5
-places in ``tests/plugin`` and ``tests/e2e``; every payload is built in this module, and the only
-file read is the committed ``tests/fixtures/response.schema.json`` reached through ``repo_root``.
+The helpers are the whole of Foundry's assertion surface (AAP 0.4.3, AAP 0.7.3). Nothing here drives
+pytest, the CLI or a report renderer, which AAP 0.14.5 places in ``tests/plugin`` and ``tests/e2e``;
+every payload is built here, and the only file read is the committed
+``tests/fixtures/response.schema.json``.
 
-* ``status`` reports the received status, the expected set and a redacted body excerpt that is a
-  prefix of the body and no longer than
-  :data:`~foundry.obs.redaction.MAX_EXCERPT_BYTES`, quotes no header at all, and reads no body on
-  the passing path.
-* ``json_subset`` reports the first mismatching JSON path from ``$``, refuses the ``True == 1``
-  false pass, and withholds every value under a secret-bearing key.
-* ``json_schema`` raises :class:`~foundry.core.exceptions.ContractError` -- never an
-  ``AssertionError`` -- carrying the deterministic shallowest ``json_path`` and a ``detail`` that
-  names the validator.
-* ``eventually`` returns the first truthy value and quotes the last value or exception together
-  with the poll count once the deadline passes, and it never spends real time: the sleep is a
-  recording fake and the time source is a fake :class:`foundry.core.types.ClockLike`.
+* ``status`` reports the received status, the expected set and a redacted excerpt that is a bounded
+  prefix of the body, quotes no header at all, and reads no body on the passing path.
+* ``json_subset`` reports the first mismatching path from ``$``, refuses the ``True == 1`` false
+  pass, and withholds every value under a secret-bearing key.
+* ``json_schema`` raises :class:`~foundry.core.exceptions.ContractError`, never an
+  ``AssertionError``, carrying the deterministic shallowest ``json_path``.
+* ``eventually`` returns the first truthy value and quotes the last value or exception with the poll
+  count once the deadline passes, spending no real time: the sleep is a recording fake and the time
+  source is a fake clock.
 
-Determinism (AAP 0.13.1, AAP 0.14.3): ``time.sleep`` appears nowhere in this file, no wall-clock
-value is read or asserted, poll counts and recorded intervals stand in for elapsed time, and every
-collection compared in an assertion is built in a fixed order.
+Determinism (AAP 0.13.1, AAP 0.14.3): ``time.sleep`` appears nowhere in this file and no wall-clock
+value is read or asserted.
 
-Five points where the behaviour on disk differs from the brief this file was written against, the
-modules being authoritative:
-
-1. ``eventually`` carries two additive keyword-only arguments beyond the AAP 0.4.3 signature --
-   ``clock`` and ``redactor``, which AAP 0.4.9 permits -- and these tests need ``clock``: a deadline
-   observed through a supplied clock is the only way to assert timeout behaviour without waiting.
-2. ``assert_json_subset`` walks the expectation in **sorted** key order rather than in the
-   expectation's document order, so when two keys disagree the reported path is the alphabetically
-   first one. That is the property pinned here, because it is what makes the message reproducible.
-3. "A ``timeout`` shorter than the first interval yields exactly one poll" holds exactly for
-   ``timeout == 0``: with a positive timeout the poll precedes the deadline check, so the observable
-   facts are two polls and a single wait clamped to the remaining time.
-4. The excerpt inside an ``assert_status`` message is the ``repr`` of the redacted excerpt, so these
-   tests parse it back with :func:`ast.literal_eval` before asserting the byte bound and the prefix
-   property; the assertion is about the rendered string, never about an object attribute.
-5. The redaction engine scrubs a single-line JSON body, a bare URL carrying a secret query parameter
-   and a header line cleanly, so the sentinel payloads take those shapes.
+Five points where the behaviour on disk differs from the brief this file was written against: the
+two additive keyword-only arguments ``eventually`` carries (``clock`` and ``redactor``, which AAP
+0.4.9 permits); the sorted key order ``assert_json_subset`` walks, which is what makes the reported
+path reproducible; "a timeout shorter than the first interval yields one poll" holding exactly for
+``timeout == 0``; the excerpt being parsed back with :func:`ast.literal_eval` because it is the
+``repr`` of the redacted value; and the secret-bearing payload shapes the redaction engine scrubs.
 """
 
 from __future__ import annotations

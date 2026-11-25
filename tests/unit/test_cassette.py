@@ -1,9 +1,8 @@
 """Unit tests for ``foundry.cassette``: document, matcher, store, modes and transports.
 
 ``foundry.cassette`` owns record/replay (AAP 0.3.2), and AAP 0.10.1 places its unit module here.
-What is pinned below is what a regression would break silently, because a cassette is a file that
-outlives the run that wrote it: a later suite replays it on another machine, behind another port,
-from a checkout where the peer does not exist.
+What is pinned is what a regression would break silently, because a cassette is a file that outlives
+the run that wrote it: a later suite replays it on another machine, behind another port.
 
 * The document shape of AAP 0.4.6 -- ``recorded_at``, ``redacted_keys`` and an ordered list of
   ``{request, response}`` interactions, a request holding ``method``, ``path``, ``query``,
@@ -11,29 +10,27 @@ from a checkout where the peer does not exist.
   survives the serialize/load round trip exactly, with no extra key and no reordering.
 * A match is decided by the method, the path, the decoded query pairs and the body hash and by
   nothing else (AAP 0.2.1, AAP 0.3.2, assumption A7): parameter order and percent-encoding are
-  irrelevant, request headers are irrelevant, and no host or port reaches the comparison at all.
+  irrelevant, so are request headers, and no host or port reaches the comparison.
 * Redaction happens at capture (implicit requirement I4), so a recorded ``Authorization`` or
   ``Cookie`` value never reaches the file and ``redacted_keys`` names what was scrubbed, sorted.
 * The four rows of the mode table (AAP 0.7.3, assumption A8) behave as the table states, and a
   ``replay`` session holds no live transport whatever the caller passes it.
 * A :class:`~foundry.cassette.transport.ReplayTransport` answers from the document and raises the
   typed miss naming method, path and cassette file, touching no socket on either path (criterion 8).
-* The store's loader is JSON, so no YAML loader sits on the replay path.
+  The store's loader is JSON, so no YAML loader sits on the replay path.
 
-Three departures from the brief this module was written against, recorded rather than dropped.
-AAP 0.7.1 names the matcher seam ``match(request, interactions)`` while the module calls it
-:func:`~foundry.cassette.matcher.match_interaction` -- ``match`` is a soft keyword since Python
-3.10 -- and returns the matching position for the replay cursor. ``off`` and ``passthrough`` differ
-in two of the five mode flags rather than one: ``reads``, and the ``falls_through`` that follows
-from it, since a live-transport mode that reads a cassette is exactly a mode that falls through on
-a miss. ``FoundryResponse.source`` (AAP 0.4.3) is filled by ``foundry.http.response`` from the
-``foundry.cassette.source`` extension, which is not one of this module's dependencies, so the tag
-itself is asserted -- as is the redaction marker, in the ``***`` form the criteria require.
+Three departures from the brief this module was written against: AAP 0.7.1 names the matcher seam
+``match(request, interactions)`` while the module calls it
+``foundry.cassette.matcher.match_interaction`` -- ``match`` is a soft keyword since Python 3.10 --
+and returns the matching position for the replay cursor; ``off`` and ``passthrough`` differ in two
+of the five mode flags, ``reads`` and the ``falls_through`` that follows from it; and
+``FoundryResponse.source`` is filled by ``foundry.http.response`` from the
+``foundry.cassette.source`` extension, so the tag itself is asserted, as is the ``***`` redaction
+marker.
 
 Everything is built under ``tmp_path``: no socket is opened, no server is started, and the committed
 fixture ``tests/fixtures/cassettes/replay_echo.json`` is only read, its SHA-256 checked before and
-after this module runs. No test sleeps, and the one timestamp a document carries is the fixed
-:data:`_RECORDED_AT`, so nothing here depends on the wall clock (AAP 0.14.3).
+after. No test sleeps, and the one timestamp a document carries is fixed (AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -382,11 +379,7 @@ def test_matching_interactions_are_served_in_recording_order() -> None:
 def test_capture_redacts_denied_headers_and_records_the_sorted_names(
     store: CassetteStore,
 ) -> None:
-    """Denied values never reach the file, and every scrubbed name is recorded, sorted.
-
-    A kept header proves the capture wrote something, and the two cases at the end cover the rest of
-    the capture rule: a name a document already carried, and a secret-bearing key in a JSON body.
-    """
+    """Denied values never reach the file, and every scrubbed name is recorded, sorted."""
     capture = Interaction(
         request=_request(
             headers={
@@ -628,11 +621,7 @@ def test_session_arguments_are_validated(store: CassetteStore) -> None:
 
 
 def test_replay_transport_serves_a_recorded_interaction(cassette_dir: Path) -> None:
-    """A match returns the recorded status, headers and body, tagged as a cassette, on any host.
-
-    The suite's socket guard refuses every non-loopback resolution, so the second URL below could
-    not be resolved at all: a reply here is positive evidence that the replay opened no socket.
-    """
+    """A match returns the recorded status, headers and body, tagged as a cassette, on any host."""
     transport = ReplayTransport(
         _document(_get_interaction(), _post_interaction()),
         cassette_dir / cassette_filename(_NODEID),
@@ -665,11 +654,7 @@ def test_replay_transport_raises_the_typed_miss(cassette_dir: Path) -> None:
 
 
 def test_store_loader_is_json_and_never_an_unsafe_yaml_parse() -> None:
-    """A cassette is JSON, so no YAML loader -- unsafe or otherwise -- sits on the replay path.
-
-    The mechanical scan of the whole tree belongs to ``tests/unit/test_no_unsafe_parsing.py``;
-    this is the store's own contract, asserted against the module that owns the read path.
-    """
+    """A cassette is JSON, so no YAML loader -- unsafe or otherwise -- sits on the replay path."""
     source = Path(cassette_store.__file__).read_text(encoding="utf-8")
     assert "json.loads" in source
     assert re.search(r"\byaml\.(?:unsafe_|full_)?load\s*\(", source) is None

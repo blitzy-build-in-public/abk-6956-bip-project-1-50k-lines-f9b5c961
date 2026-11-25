@@ -234,13 +234,7 @@ def test_both_ends_of_every_numeric_range_are_accepted(
 def test_a_value_outside_its_range_names_the_key_the_value_and_the_range(
     dotted: str, literal: str, constraint: str, tmp_path: Path, clean_foundry_env: None
 ) -> None:
-    """A value beyond a range is refused in AAP 0.4.5's wording, with nothing of pydantic in it.
-
-    The worked case is ``http.timeout = -1``; the same three facts are asserted for every numeric
-    key, and pydantic's own message, documentation URL and echoed input stay out of the text. The
-    layer the fault is attributed to is published as text, so the error's own representation reads
-    ``layer='file'`` rather than echoing the layer vocabulary's type.
-    """
+    """A value beyond a range is refused in AAP 0.4.5's wording, with nothing of pydantic in it."""
     _write(tmp_path, _FOUNDRY_TOML, f"{dotted} = {literal}\n")
 
     with pytest.raises(ConfigError) as caught:
@@ -298,12 +292,7 @@ def test_a_strategy_with_its_companion_keys_resolves_and_holds_no_secret(
 def test_the_provenance_is_read_only_and_still_dumps_as_a_json_object(
     tmp_path: Path, clean_foundry_env: None
 ) -> None:
-    """``sources`` keeps the published JSON object and cannot be rewritten (AAP 0.7.2).
-
-    The field is declared as the ``Mapping[str, ConfigSource]`` alias, so a consumer holding a
-    resolved configuration cannot rewrite the provenance ``config show``, ``doctor`` and the report
-    read, and a ``model_dump`` still carries it as an object of records rather than warning.
-    """
+    """``sources`` keeps the published JSON object and cannot be rewritten (AAP 0.7.2)."""
     config = _resolve(tmp_path)
 
     with pytest.raises(TypeError):

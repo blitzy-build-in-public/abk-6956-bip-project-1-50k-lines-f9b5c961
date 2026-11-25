@@ -82,11 +82,7 @@ def test_the_panel_builder_skips_a_foreign_element() -> None:
 
 
 def test_the_panel_builder_still_reads_the_records_it_can() -> None:
-    """A foreign element beside a failing record costs that record no panel.
-
-    The guard is a skip and not an abort: the report's own records are still rendered when one
-    element of the sequence is not one of them.
-    """
+    """A foreign element beside a failing record costs that record no panel."""
     failing = _record_for(
         "a", outcome=Outcome.FAILED, failures=(FailureRecord(phase="call", message="boom"),)
     )

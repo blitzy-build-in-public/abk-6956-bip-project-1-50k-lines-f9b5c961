@@ -1,41 +1,30 @@
 """Unit tests for ``foundry.http``: URL joining, the header merge, retries, auth and responses.
 
-AAP 0.10.1 places the HTTP layer's unit module here. What it pins is AAP 0.7.3's request pipeline
-and AAP 0.4.3's response contract as a caller observes them:
+AAP 0.10.1 places the HTTP layer's unit module here; what it pins is AAP 0.7.3's request pipeline
+and AAP 0.4.3's response contract as a caller observes them, all served by
+:class:`httpx.MockTransport`, so no test opens a socket.
 
-* :func:`foundry.http.url.join_url` keeps the base URL's path, replaces it for an absolute path,
-  accepts an absolute URL unchanged and appends a query exactly once; a relative path with no
-  ``http.base_url`` raises :class:`~foundry.core.exceptions.ConfigError` naming that key, both at
-  the request and, for ``foundry_api``, at session construction (AAP 0.4.5, AAP 0.4.7).
-* :func:`foundry.http.url.redact_url` strips URL userinfo and masks a deny-listed query
-  parameter, which is what keeps a credential out of a dump (AAP 0.3.2).
+* ``join_url`` keeps the base URL's path, replaces it for an absolute path and appends a query
+  exactly once; a relative path with no ``http.base_url`` raises ``ConfigError`` naming that key,
+  both at the request and, for ``foundry_api``, at session construction (AAP 0.4.5, AAP 0.4.7).
+  ``redact_url`` strips URL userinfo and masks a deny-listed query parameter (AAP 0.3.2).
 * Headers merge ``http.headers`` -> the auth strategy's pair -> the per-request mapping, the later
-  source winning case-insensitively (AAP 0.7.3).
-* A request carries the per-request deadline when given and ``http.timeout`` otherwise, asserted
-  on the ``timeout`` extension the transport receives.
-* Retry predicates map ``timeout`` to :class:`httpx.TimeoutException`, ``connect`` to
-  :class:`httpx.ConnectError`, ``status_5xx`` to any status from 500 up and ``status_429`` to 429
-  alone; the backoff of attempt *n* is ``min(base * 2 ** (n - 1), max)`` and the sleep is injected,
-  so the delays are asserted instead of paid (AAP 0.7.3, AAP 0.14.2).
-* An exhausted request raises :class:`~foundry.core.exceptions.RetryExhaustedError` carrying one
-  :class:`~foundry.core.types.AttemptRecord` per attempt (AAP 0.4.3).
+  source winning case-insensitively; a request carries the per-request deadline when given and
+  ``http.timeout`` otherwise, asserted on the transport's ``timeout`` extension.
+* Retry predicates map ``timeout``, ``connect``, ``status_5xx`` and ``status_429``; the backoff of
+  attempt *n* is ``min(base * 2 ** (n - 1), max)``; the sleep is injected, so delays are asserted
+  rather than paid (AAP 0.7.3, AAP 0.14.2); and exhaustion raises ``RetryExhaustedError`` carrying
+  one ``AttemptRecord`` per attempt (AAP 0.4.3).
 * The four auth strategies resolve the environment variable *names* configuration holds, and no
-  representation of the settings or of the resolved header carries the value (AAP 0.3.3, I9).
-* A 4xx, a 5xx and an unfollowed 3xx are returned as values; the five verbs delegate to
-  :meth:`FoundrySession.request` (AAP 0.4.3, assumption A13).
+  representation of the settings or of the header carries the value (AAP 0.3.3, I9); a 4xx, a 5xx
+  and an unfollowed 3xx return as values, and the five verbs delegate to ``request`` (assumption
+  A13).
 
-Recorded differences from the plan's names, as the pipeline is spelled on disk: the retry settings
-are :class:`foundry.http.retries.RetryPolicy` -- a frozen dataclass of ``max_attempts``,
-``backoff_base``, ``backoff_max`` and a ``retry_on`` frozenset -- with ``delay_for(attempt)``,
-beside ``classify``, ``should_retry`` and ``backoff``; credentials resolve through
-``resolve_auth(AuthSettings, environ=...)`` into an ``AuthHeader`` or ``None``; ``foundry_api``'s
-mandatory base URL is ``SessionSettings(require_base_url=True)``, refused at construction; and
-``FoundryResponse`` is built by ``from_httpx``, so every response asserted here came from a real
-request call.
-
-Everything is served by :class:`httpx.MockTransport`, so no test opens a socket (AAP 0.14.3). No
-test imports ``foundry.reporting`` (AAP 0.4.8), and no test waits: every wait is an injected
-recorder, which is why the module finishes in well under a second (AAP 0.14.2).
+As spelled on disk: ``RetryPolicy.delay_for(attempt)`` beside ``classify``, ``should_retry`` and
+``backoff``; ``resolve_auth(AuthSettings, environ=...)`` into an ``AuthHeader`` or ``None``;
+``SessionSettings(require_base_url=True)`` refusing ``foundry_api``'s missing base URL at
+construction; and ``from_httpx``, so every response asserted here came from a real request call. No
+test imports ``foundry.reporting`` (AAP 0.4.8) and every wait is an injected recorder (AAP 0.14.3).
 """
 
 from __future__ import annotations

@@ -198,12 +198,7 @@ def _rendered_text(root: ElementTree.Element, location: str) -> str:
 def test_a_forbidden_character_never_reaches_the_document(
     label: str, forbidden: str, location: str, tmp_path: Path
 ) -> None:
-    """A character outside the ``Char`` production is removed, and the document still parses.
-
-    The two parsers are independent (``xml.etree`` and ``xml.dom.minidom``), so agreement between
-    them is what makes the document readable by "any CI system" rather than by one library, and
-    the same check is repeated on the file :func:`foundry.reporting.junit.write` produces.
-    """
+    """A character outside the ``Char`` production is removed, and the document still parses."""
     elements, survivor = _elements(location, forbidden)
     document = junit.render(elements)
     assert forbidden not in document
@@ -234,11 +229,7 @@ def test_the_characters_xml_allows_survive_unchanged(label: str, legal: str) -> 
 
 
 def test_a_forbidden_character_inside_a_property_value_is_removed() -> None:
-    """The walk covers a property value as well as an element's text and a failure's message.
-
-    An artifact reference is the property value a run corrupts most easily: the path is derived
-    from a node id, and a node id collected from a coloured terminal carries escape sequences.
-    """
+    """The walk covers a property value as well as an element's text and a failure's message."""
     path = f"tests__test_cart.py__test_total/request{_ANSI_ESCAPE}[31m.json"
     record = _record(artifacts=(ArtifactRecord(kind="request", path=path, bytes=10),))
     document = junit.render([record])

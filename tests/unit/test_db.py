@@ -2,31 +2,27 @@
 
 ``foundry_db`` (AAP 0.4.3) promises "a transactional session on a fresh in-memory sqlite schema
 built from the models the test registers, rolled back at teardown", and AAP 0.7.1 splits that
-promise across three public calls: :func:`foundry.db.create_engine`,
-:func:`foundry.db.open_session` and :func:`foundry.db.rollback_and_close`. This module pins the
-properties a regression would break -- a per-test engine that touches no filesystem, a schema
-created from the models the caller registers, a transaction whose rows vanish at teardown, a
-teardown that never raises and never disposes a connection it does not own -- rather than the
-implementation that happens to provide them today.
+promise across three public calls: ``foundry.db.create_engine``, ``foundry.db.open_session`` and
+``foundry.db.rollback_and_close``. This module pins the properties a regression would break -- a
+per-test engine that touches no filesystem, a schema created from the models the caller registers,
+a transaction whose rows vanish at teardown, a teardown that never raises and never disposes a
+connection it does not own -- rather than the implementation that provides them.
 
 The package is exercised through its public API. ``src/foundry/fixtures/db.py``, which defines the
 ``foundry_db`` fixture itself, is not one of this module's dependencies, so the three calls that
-fixture makes are what these tests drive; the fixture's registration is covered elsewhere.
+fixture makes are what these tests drive.
 
-Two expectations differ from the brief this file was written against, because the module on disk is
-authoritative (AAP 0.4.3, AAP 0.7.1, AAP 0.4.9):
-
-* SQLAlchemy 2.0 has no ``Session.closed`` attribute, so "the session is closed" is observed the two
-  ways the contract actually allows: ``in_transaction()`` is false afterwards, and a recording
-  wrapper proves ``close()`` runs as the second of the teardown's three steps.
-* Two ``create_engine()`` calls return engines whose ``URL`` values compare equal, because the
-  default URL is a constant and every in-memory sqlite database is named ``:memory:``, so "a fresh
-  database per test" is proven by distinct engine objects holding independent data rather than by
-  differing URL text.
+Two expectations differ from the brief this file was written against, the module on disk being
+authoritative (AAP 0.4.3, AAP 0.7.1, AAP 0.4.9): SQLAlchemy 2.0 has no ``Session.closed`` attribute,
+so "the session is closed" is observed as ``in_transaction()`` false afterwards plus a recording
+wrapper proving ``close()`` runs as the second of the teardown's three steps; and two
+``create_engine()`` calls return engines whose ``URL`` values compare equal, because every in-memory
+sqlite database is named ``:memory:``, so "a fresh database per test" is proven by distinct engine
+objects holding independent data.
 
 Determinism (AAP 0.14.3): every engine is in memory, nothing is written outside ``tmp_path``, no
-wall-clock value is asserted, no sleep is introduced and no socket is opened. Table names are
-sorted and rows are counted rather than read in insertion order.
+wall-clock value is asserted and no socket is opened. Table names are sorted and rows are counted
+rather than read in insertion order.
 """
 
 from __future__ import annotations
@@ -206,12 +202,7 @@ def test_create_engine_reports_a_credential_bearing_url_without_echoing_it() -> 
 
 
 def test_open_session_creates_the_schema_for_the_registered_models(engine: Engine) -> None:
-    """Every table of the registered models' metadata exists before the transaction opens.
-
-    Both models are declared on one ``Base``, so they share one ``MetaData`` and creating the
-    schema for either creates both of its tables -- the behaviour
-    :func:`foundry.db.schema.create_all` documents.
-    """
+    """Every table of the registered models' metadata exists before the transaction opens."""
     session = open_session(engine, [Widget])
     try:
         assert _table_names(engine) == [_GADGET_TABLE, _WIDGET_TABLE]

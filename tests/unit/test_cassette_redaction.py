@@ -1,32 +1,25 @@
 """Unit tests for query-value redaction in ``foundry.cassette``: capture, replay and the miss.
 
-``foundry.cassette`` owns record/replay (AAP 0.3.2), and a cassette is a file this plan commits, so
-a query parameter whose name the redaction engine redacts must never be written in the clear
+``foundry.cassette`` owns record/replay (AAP 0.3.2), and a cassette is a file this plan commits,
+so a query parameter whose name the redaction engine redacts must never be written in the clear
 (AAP 0.2.1, AAP 0.3.2 "Security architecture"). Masking it is only half the rule: the marker a
 document holds has to be the marker the replay lookup compares against, or the recording stops
-replaying the run that wrote it, and AAP 0.4.9 forbids a matching change that invalidates a cassette
-already on disk.
+replaying the run that wrote it, and AAP 0.4.9 forbids a matching change that invalidates a
+cassette already on disk.
 
-What is pinned here:
+What is pinned here: a ``record`` run writes the marker in the document's ``query`` and names the
+parameter in ``redacted_keys``, keeping the other parameters and a repeated name (AAP 0.4.6); a
+token-bearing recording replays through the same session stack with the same token and with a
+different one, because both are the same parameter, while a changed value under a name the engine
+does not redact is another request and misses; a miss carries the marker in the message and in the
+``path`` attribute while still naming the method, the path and the cassette file (AAP 0.4.7), which
+keeps the value out of ``failures[].message`` and out of the report's panel; and a cassette written
+before this rule existed, holding a plaintext query value, still replays, because the matcher reads
+a marker on either side as a value that matches any (AAP 0.4.9).
 
-* A ``record`` run writes the marker in the document's ``query`` and names the parameter in
-  ``redacted_keys``, keeping the other parameters and a repeated name (AAP 0.4.6).
-* A recording of a token-bearing request replays through the same session stack -- with the same
-  token and with a different one, because both are the same parameter -- while a changed value under
-  a name the engine does not redact is another request and misses.
-* A miss on a token-bearing request carries the marker in the message and in the ``path`` attribute
-  while still naming the method, the path and the cassette file (AAP 0.4.7), which is what keeps the
-  value out of ``failures[].message`` in ``results.json`` and out of the report's panel.
-* A cassette written before this rule existed -- one whose stored query value is plaintext -- still
-  replays, because the matcher reads a marker on either side as a value that matches any
-  (AAP 0.4.9).
-
-One departure from the brief this module was written against, recorded rather than dropped: the
-brief asked for these cases inside ``tests/unit/test_cassette.py``, which stands at its 700-line
-ceiling (``scripts/count_lines.sh``, AAP 0.14.2), so they live beside it in this module instead. No
-case the brief names was dropped. Every cassette is built under ``tmp_path`` and every exchange goes
-through ``httpx.MockTransport``, so no socket is opened, nothing sleeps and no assertion reads the
-clock.
+The cases live here rather than in ``tests/unit/test_cassette.py``, which stands at its 700-line
+ceiling (``scripts/count_lines.sh``, AAP 0.14.2). Every cassette is built under ``tmp_path`` and
+every exchange goes through ``httpx.MockTransport``, so no socket is opened and nothing sleeps.
 """
 
 from __future__ import annotations
@@ -139,11 +132,7 @@ def test_a_recorded_query_holds_the_marker_and_names_the_parameter(
     expected_query: list[list[str]],
     expected_keys: list[str],
 ) -> None:
-    """The capture masks a secret value, keeps the other parameters and names the key.
-
-    A parameter that repeats keeps both of its pairs, and the name is recorded once, because
-    ``redacted_keys`` is a de-duplicated set of names rather than a count of replacements.
-    """
+    """The capture masks a secret value, keeps the other parameters and names the key."""
     session = CassetteSession(_NODEID, mode="record", store=store, live_transport=_live())
     response = _get(session.transport(), f"{_HOST}/health?{query}")
     captured = session.session_requests()
@@ -178,12 +167,7 @@ def test_a_recorded_query_holds_the_marker_and_names_the_parameter(
 def test_a_recorded_token_bearing_request_replays_and_a_changed_plain_value_misses(
     store: CassetteStore, query: str, source: str | None, miss_path: str | None
 ) -> None:
-    """Record then replay: the masked parameter matches, a changed plain one is another request.
-
-    The second case is the symmetry rule: the document stores the marker, the lookup masks the
-    arriving value, and the two compare equal although the token differs from the recorded one --
-    which is what stops the fix from making a recorded cassette unplayable for its own request.
-    """
+    """Record then replay: the masked parameter matches, a changed plain one is another request."""
     record = CassetteSession(_NODEID, mode="record", store=store, live_transport=_live())
     _get(record.transport(), f"{_HOST}/health?token={_SENTINEL}&page=2")
     assert record.finish() is not None
@@ -218,12 +202,7 @@ def test_a_recorded_token_bearing_request_replays_and_a_changed_plain_value_miss
 def test_a_miss_on_a_token_bearing_request_carries_the_marker(
     cassette_dir: Path, query: str, expected_target: str
 ) -> None:
-    """The message and the ``path`` attribute show the marker and still name what a person needs.
-
-    AAP 0.4.7 keeps the method, the path and the cassette path in the diagnostic; the value a query
-    parameter carried is not part of that, so it appears as the marker the HTTP layer prints for the
-    same target (AAP 0.3.2).
-    """
+    """The message and the ``path`` attribute show the marker and still name what a person needs."""
     path = cassette_dir / cassette_filename(_NODEID)
     transport = ReplayTransport(
         _document(
@@ -254,12 +233,7 @@ def test_a_miss_on_a_token_bearing_request_carries_the_marker(
 
 
 def test_a_cassette_holding_a_plaintext_query_value_still_replays(cassette_dir: Path) -> None:
-    """A recording made before the masking rule replays: the marker matches any value.
-
-    The document is written by hand rather than through :meth:`CassetteStore.save`, because the
-    store is the sink that masks a value on the way to disk; this is the file an earlier release
-    left behind, and AAP 0.4.9 does not let a matching change invalidate it.
-    """
+    """A recording made before the masking rule replays: the marker matches any value."""
     path = cassette_dir / cassette_filename(_NODEID)
     earlier = _document(
         Interaction(

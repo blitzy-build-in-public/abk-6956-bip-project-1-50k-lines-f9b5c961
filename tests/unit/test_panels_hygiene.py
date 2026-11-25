@@ -69,11 +69,7 @@ def _write_tail(directory: Path, *lines: str) -> Path:
 def test_zero_limit_reads_nothing_and_reports_nothing(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A zero limit is the supported no-capture state: ``((), False)`` and no ``WARNING``.
-
-    The tail file holds real lines, so a change that starts reading at limit ``0`` fails the
-    return-value assertion as well as the level one.
-    """
+    """A zero limit is the supported no-capture state: ``((), False)`` and no ``WARNING``."""
     tail = _write_tail(tmp_path, _OLDER_LINE, _DENIED_LINE)
     with caplog.at_level(logging.DEBUG, logger="foundry"):
         lines, available = panels.read_log_tail(tail, limit=0, redactor=default_redactor())
@@ -102,12 +98,7 @@ def test_genuine_fault_still_warns_once(tmp_path: Path, caplog: pytest.LogCaptur
 
 
 def test_phase_order_index_is_read_only_and_complete() -> None:
-    """``_PHASE_ORDER_INDEX`` rejects mutation and still maps every phase to its position.
-
-    AAP 0.4.8 forbids mutable module-level state, so the mapping is not a ``dict`` and a write
-    into it raises :exc:`TypeError`; the completeness assertion keeps that read-only change from
-    silently losing the deterministic panel order :func:`panels._panel_sort_key` depends on.
-    """
+    """``_PHASE_ORDER_INDEX`` rejects mutation and still maps every phase to its position."""
     index = panels._PHASE_ORDER_INDEX
     assert not isinstance(index, dict)
     phase: Phase = panels.PHASE_ORDER[0]
@@ -127,12 +118,7 @@ def test_positive_limit_still_returns_the_newest_redacted_lines(tmp_path: Path) 
 def test_a_captured_event_line_carries_its_prefix_once_end_to_end(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """One lifecycle line reaches ``log_tail.log`` and this reader with one ``foundry: `` prefix.
-
-    ``foundry.obs.events.event_line`` renders the logger name as the prefix, and
-    :func:`foundry.obs.capture.format_record` adds the logger name only to a message that does not
-    already carry it, so the ring, the artifact and the panel agree on one line.
-    """
+    """One lifecycle line reaches ``log_tail.log`` and this reader with one ``foundry: `` prefix."""
     expected = "WARNING foundry: plumbing_failure component=probe message='message 3'"
     ring = capture.LogRing(capacity=1)
     with caplog.at_level(logging.DEBUG, logger="foundry"), ring:

@@ -91,12 +91,7 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 def test_refused_settings_announce_once_across_many_item_calls(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Four per-item calls against a refusing peer log exactly one ``WARNING``.
-
-    A bare ``object()`` item is enough for the set seam: the installed peer stores its cancel
-    callable on the item, and an object with no instance dictionary refuses that assignment with
-    ``AttributeError`` -- the fault an incompatible release raises.
-    """
+    """Four per-item calls against a refusing peer log exactly one ``WARNING``."""
     policy = timeout.TimeoutPolicy(seconds=1.0)
     with caplog.at_level(logging.DEBUG, logger=_FOUNDRY_LOGGER):
         results = [

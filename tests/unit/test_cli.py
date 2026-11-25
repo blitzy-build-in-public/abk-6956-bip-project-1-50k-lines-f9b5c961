@@ -1,45 +1,26 @@
 """Unit tests for ``foundry.cli``: the argv builder, the command bodies and the renderers.
 
 AAP 0.4.4 fixes what each command does and which code it publishes, AAP 0.7.3 fixes the single
-document ``--format json`` and ``--json`` emit, and AAP 0.7.4 fixes the three terminal tables. What
-this module pins is that surface, through the ``CliRunner`` one command at a time:
+document ``--format json`` and ``--json`` emit, and AAP 0.7.4 fixes the three terminal tables. This
+module pins that surface through the ``CliRunner``, one command at a time:
+``build_pytest_argv`` translates an option into the canonical ``--foundry-<dotted.key>`` spelling,
+emits the registry order and then the caller's pytest arguments verbatim, and is pure;
+``foundry run`` returns pytest's own status with the ``None`` a run can produce normalised to ``0``;
+``config show`` prints its table and exactly one ``{"resolved": ..., "sources": ...}`` document;
+``report compare`` prints the three labelled groups and exits ``1`` when something newly fails; and
+the four renderers write the columns, the ``(none)`` marker and the ``***`` a redacted value
+becomes.
 
-* :func:`~foundry.cli.run.build_pytest_argv` translates a Foundry option into the one canonical
-  ``--foundry-<dotted.key>`` spelling however the caller named it, emits the registry order and then
-  the special options and then the caller's pytest arguments verbatim, and is pure.
-* ``foundry run`` passes that list to ``pytest.main`` and returns pytest's own status, with the
-  ``None`` a run can produce normalised to ``0`` (AAP 0.4.4, AAP 0.7.3); a configuration fault
-  raises before pytest starts, so nothing is collected.
-* ``foundry config show`` prints the ``Key``/``Value``/``Source`` table, lists an override it did
-  not apply in a separate ``not applied`` section, attributes an applied one to ``cli:<option>``,
-  and emits exactly one ``{"resolved": ..., "sources": ...}`` document -- plus the additive
-  ``not_applied`` member when this invocation supplied an override (AAP 0.4.9).
-* ``foundry report compare`` prints the three labelled groups in their fixed order, exits ``0``
-  when nothing newly fails and ``1`` when something does, and emits the three-set document.
-* the four renderers write the columns, the row content, the ``(none)`` marker, the doctor count
-  line and the ``***`` marker a redacted value becomes, and an empty ``not applied`` section prints
-  nothing at all.
+``foundry.cli.main`` is a sibling deliverable, so the exit code ``2`` a configuration or document
+fault earns is asserted where it is decided: the command raises the typed error that mapping
+consumes, prints nothing on stdout, and ``USAGE_OR_CONFIG`` is the published code. The run bootstrap
+``foundry run`` ends in is covered too: it resolves the configuration once, mints the run id,
+creates ``artifacts/<run_id>/`` and returns the two banner lines, all under ``tmp_path``.
 
-``foundry.cli.main`` is a sibling deliverable and is not in this tree, so the exit code ``2`` a
-configuration or document fault earns is asserted where it is decided: the command raises exactly
-the typed error that mapping consumes, prints nothing on stdout, and ``USAGE_OR_CONFIG`` is the code
-the vocabulary publishes for it. A usage error click itself raises is asserted as the real exit
-``2`` it produces.
-
-The last section covers the run bootstrap ``foundry run`` ends in once pytest starts
-(``foundry.execution.session.bootstrap_session``), which the same review found unreached: it
-resolves the configuration once, mints the run id, creates ``artifacts/<run_id>/`` and returns the
-two banner lines. Every path is under ``tmp_path``, so nothing writes inside the repository, and
-nothing here starts a real pytest session.
-
-The package's import closure and the single owner of the override option set are guarded here too.
-AAP 0.4.4 requires the same ``--foundry-*`` set on every subcommand that resolves project
-configuration -- ``run``, ``config show``, ``config validate`` and ``doctor`` -- so the group exists
-once, in :mod:`foundry.cli.config_cmd`, and the group builder imports every subcommand module: a
-decorator taken back from the builder would close an import cycle, and a second copy of the group
-would let the spellings the commands publish drift apart. Every module ``pkgutil`` finds in
-``foundry.cli`` is imported, so a module naming something that does not exist fails as a test rather
-than as a gate outage.
+The package's import closure and the single owner of the override option set are guarded here: AAP
+0.4.4 requires the same ``--foundry-*`` set on every subcommand that resolves project configuration,
+so the group exists once, and every module ``pkgutil`` finds is imported, so a module naming
+something that does not exist fails as a test rather than as a gate outage.
 """
 
 from __future__ import annotations

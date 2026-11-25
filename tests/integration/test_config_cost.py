@@ -1,42 +1,19 @@
 """Timing instrument for configuration resolution: twenty resolutions inside the AAP 0.14.2 budget.
 
-AAP 0.14.2 budgets configuration resolution at "<= 50 ms, median of 20 resolutions", and AAP 0.10.1
-names this module as the instrument that fails when the budget is exceeded. What is timed is
-:func:`foundry.config.merge.resolve` -- the one entry point AAP 0.7.1 gives a resolution: a pytest
-session calls it once when it boots and ``foundry run``, ``foundry config show`` and
-``foundry doctor`` call it once per invocation -- reached through the package surface
-:mod:`foundry.config` publishes, with no stub, no monkeypatch and no private helper in the way.
-Measuring a hand-rolled merge instead would time code no user runs, and the four-layer precedence
-plus the per-key source attribution (implicit requirement I2) exist only behind that call.
+AAP 0.14.2 budgets configuration resolution at "<= 50 ms, median of 20 resolutions". What is timed
+is :func:`foundry.config.merge.resolve`, the one entry point a resolution has (AAP 0.7.1): a session
+boot calls it once and every CLI invocation calls it once, so the figure is what a user pays, and
+the four-layer precedence plus per-key source attribution (implicit requirement I2) exist only
+behind that call. The document measured is one a real team writes -- every ``[section]`` of the
+AAP 0.4.5 surface plus the ``[profiles.ci]`` table it selects -- and ``[http.auth]`` carries
+variable *names* and never a value (implicit requirement I9).
 
-The configuration measured is one a real team writes, not the smallest document that parses: every
-``[section]`` of the AAP 0.4.5 surface -- ``[http]`` with its ``[http.headers]``, ``[http.retries]``
-and ``[http.auth]`` tables, ``[artifacts]``, ``[reporting]``, ``[data]``, ``[cassette]``,
-``[execution]``, ``[secrets]`` and ``[logging]`` -- plus the one ``[profiles.ci]`` table the
-document selects. ``[http.auth]`` carries variable *names* and never a value, so the measured
-configuration holds no credential (implicit requirement I9), and the placeholder the environment
-supplies under the named variable is shaped like no credential at all:
-:func:`foundry.config.merge.resolve` membership-tests the name and never reads the value.
-
-What the measurement holds to, and why:
-
-* the figure is the **median** of twenty resolutions, as AAP 0.14.2 states, not the mean -- one
-  scheduling outlier on a shared 2-vCPU host cannot move it;
-* **one untimed resolution precedes the loop**, so the figure is the steady-state cost of resolving
-  rather than the first call's import and class-construction cost (AAP 0.14.2 measures resolving a
-  configuration a run already has, which is what ``config show`` and every session boot repeat);
-* the **correctness guard runs before the budget assertion**, because a resolution that had silently
-  fallen back to the field defaults would be fast and meaningless;
-* the twenty resolutions are asserted **equivalent** afterwards, so a future refactor cannot make
-  the loop cheap by making it a no-op;
-* the environment is supplied explicitly and the ambient one is purged by the ``clean_foundry_env``
-  fixture, so a developer's exported ``FOUNDRY_HTTP__TIMEOUT`` cannot change what is measured;
-* the environment and override mappings are built **before** the loop, so the file's own overhead
-  stays outside every timed window.
-
-No subprocess, server, socket or temporary write outside ``tmp_path`` is involved,
-``time.perf_counter`` is the only clock, and nothing here waits: the resolution is pure in-process
-work over a file the test wrote itself (AAP 0.14.3).
+The figure is the median, so one scheduling outlier cannot move it; one untimed resolution precedes
+the loop, so it is steady-state cost rather than first-call imports; the correctness guard runs
+before the budget assertion, because a resolution that fell back to the field defaults would be fast
+and meaningless; and the twenty resolutions are asserted equivalent afterwards, so a loop that
+stopped resolving cannot look cheap. No subprocess, server, socket or write outside ``tmp_path`` is
+involved (AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -71,9 +48,8 @@ SAMPLE_COUNT: Final[int] = 20
 PUBLISHED_KEY_COUNT: Final[int] = 28
 """Leaf keys the resolved configuration carries, as AAP 0.4.5 publishes them.
 
-Asserted so the measured document is known to exercise the whole surface rather than a corner of
-it: a document that resolved three keys and defaulted the other twenty-five would be fast for the
-wrong reason.
+Asserted so the measured document is known to exercise the whole surface: a document that resolved
+three keys and defaulted the other twenty-five would be fast for the wrong reason.
 """
 
 CONFIG_FILE_NAME: Final[str] = "foundry.toml"
@@ -138,11 +114,9 @@ retries = 3
 """
 """The realistic ``foundry.toml`` written into ``tmp_path`` before every measurement.
 
-Every key is one AAP 0.4.5 publishes, so no resolution here fails on an unknown key, and the two
-``[profiles.ci]`` tables override the base file's ``http.timeout`` and ``execution.retries``, which
-is what makes the profile layer part of the measured work. The constants below state what the
-document declares; the correctness guard compares the resolved configuration against them, so text
-and expectation cannot drift apart unnoticed.
+Every key is one AAP 0.4.5 publishes, and the two ``[profiles.ci]`` tables override the base file's
+``http.timeout`` and ``execution.retries``, which is what puts the profile layer inside the measured
+work. The constants below state what the document declares, so text and expectation cannot drift.
 """
 
 # --- What the document declares, and the layer that supplies it -------------
@@ -222,13 +196,8 @@ PROFILE_DETAIL: Final[str] = "ci"
 class Measurement:
     """One measured run: the elapsed milliseconds per resolution and what each resolution returned.
 
-    Frozen and slotted, because a measurement is reported after the fact and nothing may edit the
-    figure it reports. Keeping the twenty configurations beside the twenty samples is what lets the
-    caller prove the loop did the work it timed instead of trusting the clock.
-
-    Attributes:
-        samples: One elapsed figure in milliseconds per resolution, in the order they ran.
-        configurations: The configuration each of those resolutions returned, same order.
+    Keeping the twenty configurations beside the twenty samples is what lets the caller prove the
+    loop did the work it timed instead of trusting the clock.
     """
 
     samples: tuple[float, ...]
@@ -238,8 +207,7 @@ class Measurement:
     def median_ms(self) -> float:
         """Return the median of :attr:`samples`, which is the figure AAP 0.14.2 budgets.
 
-        The median rather than the mean: on a shared host one descheduled sample would drag a mean
-        over the ceiling while every other resolution stayed far below it.
+        The median rather than the mean: one descheduled sample would drag a mean over the ceiling.
         """
         return float(statistics.median(self.samples))
 
@@ -247,17 +215,9 @@ class Measurement:
 def write_configuration(directory: Path) -> Path:
     """Write :data:`CONFIGURATION_DOCUMENT` into ``directory`` and return its path.
 
-    The file is named ``foundry.toml`` because that is the discovery step AAP 0.4.5 places third and
-    the one a project actually writes; the document is written through
-    :meth:`pathlib.Path.write_text` with an explicit encoding and an LF line ending, so the bytes
-    the resolution parses are the bytes this module states whatever the host's newline convention
-    is.
-
-    Args:
-        directory: The invocation directory to write into -- the test's ``tmp_path``.
-
-    Returns:
-        The path of the written ``foundry.toml``.
+    The file is named ``foundry.toml`` because that is the discovery step AAP 0.4.5 places third
+    and the one a project actually writes; it is written with an explicit encoding and LF endings,
+    so the bytes parsed are the bytes this module states on any host.
     """
     path = directory / CONFIG_FILE_NAME
     path.write_text(CONFIGURATION_DOCUMENT, encoding="utf-8", newline="\n")
@@ -270,18 +230,11 @@ def write_configuration(directory: Path) -> Path:
 def measurement_environment() -> dict[str, str]:
     """Return the whole environment the measured resolution reads, built once by the caller.
 
-    The mapping is passed to :func:`foundry.config.merge.resolve` as ``environ``, which makes it the
-    *only* environment for that resolution: a supplied mapping is used verbatim and the process
-    environment is never consulted, so nothing the developer exported can reach the measurement.
-    The ``clean_foundry_env`` fixture purges the ambient ``FOUNDRY_*`` variables as well, so a
-    resolution that read them anyway would be caught rather than merely unnoticed.
-
-    It holds exactly two entries: the variable the configuration names for its auth header --
-    present so the resolution's presence check passes, with a value no code path reads -- and the
-    ``FOUNDRY_LOGGING__LEVEL`` override that puts the environment layer inside the measured work.
-
-    Returns:
-        A fresh two-entry mapping, so a caller cannot mutate another caller's environment.
+    A supplied ``environ`` is the *only* environment for that resolution, so the developer's own
+    cannot reach it, and ``clean_foundry_env`` purges the ambient ``FOUNDRY_*`` variables too. It
+    holds two entries: the variable the configuration names for its auth header, present so the
+    presence check passes with a value no path reads, and the ``FOUNDRY_LOGGING__LEVEL`` override
+    that puts the environment layer inside the measured work.
     """
     return {
         DECLARED_HEADER_VALUE_ENV: PLACEHOLDER_CREDENTIAL,
@@ -292,16 +245,9 @@ def measurement_environment() -> dict[str, str]:
 def assert_declared_values(config: FoundryConfig) -> None:
     """Assert the resolved configuration holds what :data:`CONFIGURATION_DOCUMENT` declares.
 
-    The guard that keeps the budget honest. Every asserted value differs from its field default
-    (``http.timeout`` 3.0 against 10.0, ``execution.retries`` 3 against 0, ``cassette.mode``
-    ``replay`` against ``off``, ``http.auth.header_value_env`` a name against ``None``,
-    ``logging.capture_lines`` 500 against 200), so a resolution that had fallen back to the defaults
-    -- or skipped the profile and environment layers -- fails here instead of being timed as a fast
-    no-op. The two values the profile table overrides are asserted at their *profile* value, which
-    proves the profile layer was applied inside the timed call.
-
-    Args:
-        config: The configuration one measured resolution returned.
+    The guard that keeps the budget honest: every asserted value differs from its field default, so
+    a resolution that had fallen back to the defaults -- or skipped the profile and environment
+    layers -- fails here instead of being timed as a fast no-op.
     """
     assert config.http.timeout == PROFILE_HTTP_TIMEOUT, (
         f"http.timeout resolved to {config.http.timeout!r}, not the profile's "
@@ -347,21 +293,11 @@ def assert_declared_values(config: FoundryConfig) -> None:
 def measure_resolutions(environ: Mapping[str, str], cwd: Path) -> Measurement:
     """Time :data:`SAMPLE_COUNT` resolutions and return the samples with what each returned.
 
-    The measured call is exactly one :func:`foundry.config.merge.resolve` per iteration, with the
-    environment mapping and the invocation directory passed in as they were built by the caller:
-    nothing is composed, copied or looked up inside a timed window, so the figure is the
-    resolution's own cost. One untimed resolution runs first -- AAP 0.14.2 measures the
-    steady-state cost a run pays, and the first call of a process additionally imports ``pydantic``,
-    builds the field validators and warms the import machinery, which no repeated invocation after a
-    session boot pays again. Exactly one such warm-up runs: no extra iterations, and no sample is
-    retried, because a budget that discards its slow samples measures nothing.
-
-    Args:
-        environ: The whole environment to resolve against.
-        cwd: The invocation directory holding the ``foundry.toml`` to discover.
-
-    Returns:
-        The elapsed milliseconds per resolution and the configuration each one returned.
+    Each iteration is exactly one :func:`foundry.config.merge.resolve` call, with the environment
+    and invocation directory passed in, so nothing composed or copied sits inside a timed window.
+    One untimed resolution runs first, because the first call of a process also imports ``pydantic``
+    and builds the field validators, which no later invocation pays again. No sample is retried,
+    because a budget that discards its slow samples measures nothing.
     """
     resolve(environ=environ, cwd=cwd)
 
@@ -378,13 +314,7 @@ def measure_resolutions(environ: Mapping[str, str], cwd: Path) -> Measurement:
 def test_the_measured_configuration_resolves_to_the_values_it_declares(
     clean_foundry_env: None, tmp_path: Path
 ) -> None:
-    """The document this module times resolves to what it declares, layer by layer.
-
-    Runs the same resolution the budget times, once, and asserts both halves of the reason it is
-    worth timing: the values are the document's -- not the field defaults -- and each one is
-    attributed to the layer that supplied it, so the file, the profile table and the environment are
-    all inside the measured call (AAP 0.4.5, criterion 4).
-    """
+    """The document this module times resolves to what it declares, layer by layer."""
     config_path = write_configuration(tmp_path)
     config = resolve(environ=measurement_environment(), cwd=tmp_path)
 
@@ -410,16 +340,7 @@ def test_the_measured_configuration_resolves_to_the_values_it_declares(
 def test_twenty_resolutions_stay_inside_the_fifty_millisecond_budget(
     clean_foundry_env: None, tmp_path: Path
 ) -> None:
-    """Twenty resolutions of the realistic configuration finish inside the AAP 0.14.2 budget.
-
-    The figure is the median of the twenty samples, and the failure message carries it beside the
-    sorted samples so a regression is diagnosable from CI output alone. The correctness guard runs
-    before the budget assertion, because a resolution measured over a configuration that had fallen
-    back to the defaults would prove nothing, and the equivalence assertion after it, because a loop
-    that stopped resolving would be fast and meaningless.
-
-    Prints the measured figure under ``-s``, so a passing run still reports what it observed.
-    """
+    """Twenty resolutions of the realistic configuration finish inside the AAP 0.14.2 budget."""
     write_configuration(tmp_path)
     environ = measurement_environment()
     measurement = measure_resolutions(environ, cwd=tmp_path)
@@ -457,13 +378,7 @@ def test_twenty_resolutions_stay_inside_the_fifty_millisecond_budget(
 def test_a_changed_environment_reaches_the_next_resolution(
     clean_foundry_env: None, tmp_path: Path
 ) -> None:
-    """A second resolution with a changed environment observes the change, so nothing is cached.
-
-    This is what makes the budget meaningful: :mod:`foundry.config.merge` holds no memo of a
-    previous resolution, so every one of the twenty timed calls does the whole merge rather than
-    returning an earlier result. A cache introduced later would make the median measure a dictionary
-    lookup, and this test -- not the timing one -- is what would fail.
-    """
+    """A second resolution with a changed environment observes the change, so nothing is cached."""
     write_configuration(tmp_path)
     baseline = resolve(environ=measurement_environment(), cwd=tmp_path)
     changed = resolve(

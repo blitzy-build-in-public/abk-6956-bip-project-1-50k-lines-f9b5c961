@@ -167,12 +167,7 @@ def test_a_quarantined_failure_is_listed_in_its_own_section() -> None:
 
 
 def test_each_row_is_headed_by_its_test_and_every_region_is_a_named_landmark() -> None:
-    """Each result row is headed by its test, and the counted regions sit in a named landmark.
-
-    The summary strip renders inside ``<main>`` so landmark navigation reaches the outcome counts,
-    and the Quarantined and Errors sections are named by the heading their ``aria-labelledby``
-    points at.
-    """
+    """Each result row is headed by its test, and the counted regions sit in a named landmark."""
     records = [
         _record(),
         _record_for(
@@ -215,10 +210,7 @@ def _hrefs(document: str) -> list[str]:
 def test_the_link_base_defaults_to_the_working_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An omitted ``report_dir`` links from the working directory, where ``report.html`` is written.
-
-    AAP 0.14.6 A5 writes the report there, so a document rendered for another directory is told it.
-    """
+    """An omitted ``report_dir`` links from the working directory, where the report is written."""
     record, run_dir = _failing_capture(tmp_path)
     monkeypatch.chdir(tmp_path)
     from_working_directory = _hrefs(_render([record], artifacts_root=run_dir))

@@ -170,12 +170,7 @@ def test_retry_policy_default_is_the_single_source_value(field: str, expected: o
 
 
 def test_session_settings_default_timeout_is_the_single_source_value() -> None:
-    """A hand-built ``SessionSettings`` carries the published ``http.timeout`` default.
-
-    ``foundry.http`` may not read the configuration model (AAP 0.4.8), so the session's own default
-    is the one copy of ``http.timeout`` a suite sees before any fixture runs: a changed published
-    default must move it, and this assertion is what fails when it does not.
-    """
+    """A hand-built ``SessionSettings`` carries the published ``http.timeout`` default."""
     assert session.SessionSettings().timeout == limits.HTTP_TIMEOUT_DEFAULT
 
 
@@ -200,13 +195,7 @@ def test_range_template_is_the_single_source_template() -> None:
     ),
 )
 def test_range_fault_message_renders_the_value(value: object, expected: str) -> None:
-    """An already-rendered ``str`` is used as it stands; any other value is rendered by ``repr``.
-
-    The configuration layer hands over the raw text of a file, an environment variable or an
-    option, so quoting it here would change the wording AAP 0.4.5 pins (``http.timeout = -1``
-    reports ``-1``); a capability package hands over the value it was given, which ``repr``
-    renders so an ``int`` reads ``11`` and a ``float`` keeps its ``.0``.
-    """
+    """An already-rendered ``str`` is used as it stands; any other value is rendered by ``repr``."""
     assert (
         limits.range_fault_message("http.timeout", value, "0 < t <= 300")
         == f"invalid value for http.timeout: {expected} (expected 0 < t <= 300)"
@@ -227,9 +216,5 @@ def test_out_of_range_policy_reports_the_one_wording(
 
 
 def test_cassette_dir_default_is_the_published_value() -> None:
-    """``cassette.dir`` defaults to ``cassettes`` (AAP 0.4.5).
-
-    The registry carries no defaults, so this is the one value this module pins directly rather
-    than reading back out of :data:`foundry.config.keys.KEY_SPECS`.
-    """
+    """``cassette.dir`` defaults to ``cassettes`` (AAP 0.4.5)."""
     assert paths.DEFAULT_CASSETTE_DIR == "cassettes"

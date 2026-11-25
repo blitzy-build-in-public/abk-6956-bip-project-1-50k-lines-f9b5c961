@@ -4,30 +4,26 @@ The package resolves one frozen configuration whose every key carries the layer 
 and this module is the contract of the engine that produces it: the 28 published keys, the
 five-step file discovery order and the sentence a missing explicit path reports, the
 ``FOUNDRY_``/``__`` environment encoding with its comma-separated lists (assumption A3), the
-four-layer precedence ladder with its ``source_of`` attribution (implicit requirement I2), the
-profile merge, the ``difflib`` closest-key suggestion, the pydantic-free import of
-``foundry.config.keys`` (implicit requirement I5), and the ``resolved``/``sources`` documents
-``foundry config show`` writes (AAP 0.7.3). The model's own surface -- every published default,
-both ends of every numeric range, the ``http.auth`` cross-field rules and the read-only provenance
--- belongs to ``src/foundry/config/models.py`` and is proved in ``tests/unit/test_config_model.py``;
-the faults the file layer raises on its own belong to ``src/foundry/config/files.py`` and are
-proved in ``tests/unit/test_config_files.py``.
+precedence ladder with its ``source_of`` attribution (implicit requirement I2), the profile merge,
+the ``difflib`` closest-key suggestion, the pydantic-free import of ``foundry.config.keys``
+(implicit requirement I5), and the ``resolved``/``sources`` documents ``foundry config show``
+writes (AAP 0.7.3). The model's own surface is proved in ``tests/unit/test_config_model.py`` and
+the file faults in ``tests/unit/test_config_files.py``.
 
-Everything is driven through the package's own calls -- :func:`foundry.config.merge.resolve`,
-:func:`foundry.config.env.read_env` and :func:`foundry.config.render.to_json_document` -- because
-AAP 0.14.5 forbids proving a capability only in a unit test and this folder may not patch the click
-CLI or the plugin. Each resolution is one call over a directory under ``tmp_path`` with an explicit
-environment mapping, so no case depends on the ambient environment or on another case's files.
+Everything is driven through the package's own calls -- ``foundry.config.merge.resolve``,
+``foundry.config.env.read_env`` and ``foundry.config.render.to_json_document`` -- because AAP 0.14.5
+forbids proving a capability only in a unit test and this folder may not patch the click CLI. Each
+resolution is one call over a directory under ``tmp_path`` with an explicit environment mapping, so
+no case depends on the ambient environment.
 
-Two points where the modules on disk differ from the brief this file was written against, the
-modules being authoritative (AAP 0.4.3, AAP 0.4.9): the settings model raises pydantic's
-``ValidationError``, which ``resolve`` translates into the wording AAP 0.4.5 pins, so a fault is
-asserted through ``resolve``; and five keys publish their range as the inclusive interval ``0..10``
-rather than as prose, because the registry's constraint text is what a message quotes.
+Two points where the modules on disk differ from the brief, the modules being authoritative (AAP
+0.4.3, AAP 0.4.9): the settings model raises pydantic's ``ValidationError``, which ``resolve``
+translates into the wording AAP 0.4.5 pins; and five keys publish their range as the inclusive
+interval ``0..10`` rather than as prose.
 
 Determinism (AAP 0.14.3): every file lives under ``tmp_path``, no wall-clock value is read or
-asserted, no sleep is introduced, every collection compared in an assertion is built in a fixed or
-sorted order, and the one subprocess runs a two-line interpreter command that opens no socket.
+asserted, every collection compared is built in a fixed or sorted order, and the one subprocess runs
+a two-line interpreter command that opens no socket.
 """
 
 from __future__ import annotations
@@ -141,12 +137,7 @@ def test_leaf_keys_are_the_twenty_eight_published_keys() -> None:
 def test_an_unknown_key_is_refused_by_the_file_layer_and_by_the_model(
     tmp_path: Path, clean_foundry_env: None
 ) -> None:
-    """``extra="forbid"`` rejects a misspelt key in a file and an unexpected constructor keyword.
-
-    The file layer names the closest valid spelling through ``difflib`` (AAP 0.4.5); the settings
-    model rejects the extra field itself, and the translator turns that failure into the same
-    ``ConfigError`` wording without pydantic's documentation URL or echoed input.
-    """
+    """``extra="forbid"`` rejects a misspelt key in a file and an unexpected constructor keyword."""
     _write(tmp_path, _FOUNDRY_TOML, "http.timout = 1.0\n")
 
     with pytest.raises(ConfigError) as caught:
@@ -175,12 +166,7 @@ def test_an_unknown_key_is_refused_by_the_file_layer_and_by_the_model(
 def test_discovery_walks_the_five_steps_in_the_documented_order(
     tmp_path: Path, clean_foundry_env: None
 ) -> None:
-    """First match wins across the five discovery steps of AAP 0.4.5; the defaults come last.
-
-    The steps are walked in one test because they describe one order: defaults, then a local
-    ``pyproject.toml``'s ``[tool.foundry]``, then a local ``foundry.toml``, then ``FOUNDRY_CONFIG``,
-    then ``--foundry-config``.
-    """
+    """First match wins across the five discovery steps of AAP 0.4.5; the defaults come last."""
     bare = tmp_path / "bare"
     bare.mkdir()
     project = tmp_path / "project"
@@ -385,8 +371,10 @@ def test_a_profile_overrides_the_file_and_the_environment_overrides_the_profile(
 def test_keys_imports_without_pydantic_or_pydantic_settings(
     repo_root: Path, subprocess_env: Callable[..., dict[str, str]]
 ) -> None:
-    """The registry imports without the settings stack, in a fresh interpreter (I5), because it is
-    imported on every pytest startup and this process has already imported pydantic."""
+    """The registry imports without the settings stack, in a fresh interpreter (I5).
+
+    It is imported on every pytest startup, and this process has already imported pydantic.
+    """
     command = [
         sys.executable,
         "-c",
@@ -482,13 +470,7 @@ def test_the_table_prints_the_five_source_spellings_and_redacts_a_header(
 
 
 def test_a_source_layer_is_a_config_layer_carrying_its_published_spelling() -> None:
-    """A record's layer is a ``ConfigLayer``, the parameterised ``profile:<name>`` included.
-
-    AAP 0.7.2 types ``ConfigSource.layer`` as ``ConfigLayer`` while AAP 0.4.5 publishes the fifth
-    spelling with the profile's own name inside it, so both hold only when the vocabulary answers
-    that lookup with an instance that carries the name and the five fixed members stay the
-    compatibility surface AAP 0.4.9 fixes.
-    """
+    """A record's layer is a ``ConfigLayer``, the parameterised ``profile:<name>`` included."""
     profiled = ConfigSource.from_profile("ci")
     from_environment = ConfigSource.from_env("FOUNDRY_HTTP__TIMEOUT")
 

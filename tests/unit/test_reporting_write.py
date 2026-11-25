@@ -1,33 +1,26 @@
 """The set of report files one run writes, and the isolation of the write itself (AAP 0.4.5-0.4.7).
 
-Findings this module pins, at the two decision points ``foundry.reporting.renderers.write_all``
-and ``foundry.reporting.store.write_text`` own:
+Findings this module pins, at the two decision points ``foundry.reporting.renderers.write_all`` and
+``foundry.reporting.store.write_text`` own:
 
-* cr06-html-gated-on-json -- ``report.html`` and ``junit.xml`` must not be made dependent on
-  ``results.json`` having been written. AAP 0.4.5 publishes ``reporting.html`` and
-  ``reporting.json`` as independent keys, and every writer consumes the records it is handed, so a
-  run with ``reporting.json`` off still writes its report. The one dependency that remains is the
-  documented fallback of AAP 0.4.7: when the HTML template cannot be rendered, ``report.html`` is
-  skipped and ``junit.xml`` is not produced either, with the exit code untouched.
-* qa04-encode-fault-isolation -- a character UTF-8 cannot encode (a lone surrogate, the shape
-  ``os.fsdecode`` gives a path with undecodable bytes) must cost that one string rather than every
-  document. AAP 0.1.2 and 0.14.3 require a plumbing fault to log at ``WARNING`` on the ``foundry``
+* ``report.html`` and ``junit.xml`` do not depend on ``results.json`` having been written: AAP 0.4.5
+  publishes ``reporting.html`` and ``reporting.json`` as independent keys, and every writer consumes
+  the records it is handed. The one dependency left is the documented fallback of AAP 0.4.7 -- an
+  unrenderable template skips ``report.html`` and ``junit.xml`` both, with the exit code untouched.
+* A character UTF-8 cannot encode (a lone surrogate) costs that one string rather than every
+  document: AAP 0.1.2 and 0.14.3 require a plumbing fault to log at ``WARNING`` on the ``foundry``
   logger and to change neither a test's outcome nor the run's exit code.
-* cr1-f05, cr1-f06 -- the report header's ``finished_at`` and the artifacts-disabled banner are the
-  caller's values, not something the renderer infers: ``write_all`` passes both through to
-  ``report.html`` (AAP 0.4.6, 0.4.7, 0.7.4, 0.13.1).
-* cr1-f01-element-type-boundary -- a writer handed an element that is neither a result record nor a
-  run error must raise the published ``ElementTypeError`` rather than a builtin escaping from a
-  renderer (AAP 0.14.3), which is the exception ``write_all`` and ``write_html_report`` document.
-  The HTML path used to honour that only because ``store.dumps`` ran first, so the cases below
-  refuse the element with ``reporting.json`` both on and off and with the HTML writer called
-  directly, and each one asserts that no document was written on the way out.
+* The report header's ``finished_at`` and the artifacts-disabled banner are the caller's values:
+  ``write_all`` passes both through to ``report.html`` (AAP 0.4.6, 0.4.7, 0.7.4, 0.13.1).
+* A writer handed an element that is neither a result record nor a run error raises the published
+  ``ElementTypeError``, with ``reporting.json`` both on and off and with the HTML writer called
+  directly, and no document is written on the way out (AAP 0.14.3).
 
-Determinism and isolation: records are built inline from fixed timestamps, so no assertion reads
-the wall clock; every document goes under ``tmp_path``; nothing sleeps and nothing touches the
-network. The one record whose message must carry a surrogate is observed on a handler attached to
-the ``foundry`` logger with that logger's propagation off while it is made, so no unencodable
-character reaches pytest's ``TestReport.sections`` and no xdist worker dies ferrying it on.
+Determinism and isolation: records are built inline from fixed timestamps, so no assertion reads the
+wall clock; every document goes under ``tmp_path``; nothing sleeps and nothing touches the network.
+The record whose message carries a surrogate is observed on a handler attached to the ``foundry``
+logger with that logger's propagation off, so no unencodable character reaches pytest's
+``TestReport.sections``.
 """
 
 from __future__ import annotations
@@ -137,12 +130,7 @@ def test_the_result_document_is_written_whatever_the_html_switch_is(
 
 
 def test_the_callers_finish_time_and_banner_flag_reach_the_written_report(tmp_path: Path) -> None:
-    """``write_all`` threads ``finished_at`` and ``artifacts_disabled`` through to ``report.html``.
-
-    Both are values only the caller knows: the session's finish time, which a run with no record has
-    nowhere else to take from, and the artifact writer's own disabled flag, which the report turns
-    into its single banner (AAP 0.4.6, 0.4.7, 0.7.4).
-    """
+    """``write_all`` threads ``finished_at`` and ``artifacts_disabled`` into the written report."""
     written = renderers.write_all(
         [],
         tmp_path,
@@ -185,12 +173,7 @@ def test_the_html_fallback_keeps_only_the_result_document(
 def test_a_foreign_element_is_refused_before_a_document_is_written(
     tmp_path: Path, write_json: bool, document: str
 ) -> None:
-    """Each step reports the element itself, whichever documents are switched on.
-
-    With ``reporting.json`` off the HTML step is the first consumer of the sequence, so it is the
-    case that proves the declared ``ElementTypeError`` no longer depends on ``store.dumps`` having
-    run first; the message names the document that refused the element.
-    """
+    """Each step reports the element itself, whichever documents are switched on."""
     with pytest.raises(ElementTypeError) as excinfo:
         renderers.write_all(_foreign_elements(), tmp_path, write_json=write_json)
     assert document in str(excinfo.value)
@@ -256,19 +239,7 @@ def test_a_lone_surrogate_costs_no_document(
 
 
 def test_an_unencodable_path_is_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A file name UTF-8 cannot encode is a plumbing fault, not an exception for the session.
-
-    A report path can be derived from a node id, and a node id decoded from a path with
-    undecodable bytes carries a surrogate, which the filesystem encoding refuses: the widened
-    guard in :func:`foundry.reporting.store.write_text` turns that into one ``WARNING`` and a
-    ``None`` return rather than an exception out of the write (AAP 0.1.2, AAP 0.14.3).
-
-    The record is observed on :class:`_FoundryRecordCollector` rather than through ``caplog``
-    because its message names the path and so carries the surrogate, and a captured record
-    would reach the report xdist ferries to the controller. The comparisons stay structural --
-    record count, level, logger name, and the text on either side of the surrogate -- so a
-    failing run reports no unencodable character either.
-    """
+    """A file name UTF-8 cannot encode is a plumbing fault, not an exception for the session."""
     foundry_logger = logging.getLogger("foundry")
     collector = _FoundryRecordCollector()
     # Neither propagate the record to pytest's capture nor let a level another test left on the
@@ -296,17 +267,7 @@ def test_an_unencodable_path_is_isolated(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_a_long_failure_message_reaches_both_sinks_whole(tmp_path: Path) -> None:
-    """qa2-i4: the message a run records is what ``results.json`` holds and what the panel shows.
-
-    The redaction engine descended one level per ``name: text`` prefix, so the tenth replaced the
-    rest of a one-line failure message with the redaction marker: a 2062-character message was
-    stored and rendered as its first 885 characters ending in ``***``, the shape a masked
-    credential leaves, with 1177 characters of the failure text gone. Both sinks the finding named
-    read the record's message as recorded (AAP 0.4.6, 0.7.4), so the assertions are byte-for-byte
-    equality with the recorded message and its presence in the rendered document, not a length or
-    a prefix that a truncated copy would also satisfy. The message carries no character Jinja
-    escapes, so the rendered copy is the message itself.
-    """
+    """qa2-i4: the message a run records is what ``results.json`` holds and what the panel shows."""
     failed = _record_for(
         "long_message",
         outcome=Outcome.FAILED,

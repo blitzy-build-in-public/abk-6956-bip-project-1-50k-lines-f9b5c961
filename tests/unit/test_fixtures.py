@@ -1,39 +1,32 @@
 """Unit tests for the ten public fixtures this tree delivers, and the scopes they are cached under.
 
 AAP 0.4.3 publishes twelve fixtures with a scope and a return type each. This module covers the ten
-the tree delivers -- ``foundry_clock`` and ``foundry_poll`` (``clock.py``/``polling.py``),
-``foundry_config`` and ``foundry_profile`` (``config.py``), ``foundry_run_id`` and
-``foundry_artifacts`` (``artifacts.py``), ``foundry_data``, ``foundry_db``, ``foundry_factory`` and
-``foundry_log_capture`` -- because ``foundry_http`` and ``foundry_api`` do not exist in this tree
-yet: ``src/foundry/fixtures/http.py``, ``api.py`` and ``plugin.py`` are sibling deliverables still
-in flight, and those two fixtures land with their modules. Nothing here requests, imports or names
-them as available.
+the tree delivers -- ``foundry_clock``, ``foundry_poll``, ``foundry_config``, ``foundry_profile``,
+``foundry_run_id``, ``foundry_artifacts``, ``foundry_data``, ``foundry_db``, ``foundry_factory`` and
+``foundry_log_capture`` -- because ``foundry_http`` and ``foundry_api`` land with their sibling
+modules.
 
 The fixtures are exercised where a suite meets them, not by calling their functions: the
-``pytest_plugins`` list below loads the eight fixture modules into *this* module's namespace, so
-every test here that names a fixture is a real resolution through pytest's own fixture machinery,
-with the caching and the scope ordering that implies.
+``pytest_plugins`` list below loads the eight fixture modules into this module's namespace, so every
+test that names a fixture is a real resolution through pytest's own machinery, with the caching and
+scope ordering that implies.
 
 A published scope is asserted worker-independently, one fixture per test: the test resolves the
-fixture, then reads the scope its own module declares and the scope on the fixture definition pytest
-built for this node id -- the value that governs caching -- and requires both to be the published
-one. Nothing here compares a value with one that a *different* item received, because pytest-xdist
-schedules two items of this module independently and such a comparison would then depend on the
-scheduler rather than on the fixture (AAP 0.2.2). That a consuming suite's two consecutive tests
-receive one object for the four session-scoped fixtures and a fresh one for the other six is proved
-instead by ``tests/plugin/test_fixture_activation.py``, which runs exactly that pair inside one
-child pytest session and compares the values with ``is``.
+fixture, then reads the scope its own module declares and the scope pytest built for this node id,
+and requires both to be the published one. Nothing here compares a value with one a *different* item
+received, because xdist schedules two items of this module independently (AAP 0.2.2); that a
+consuming suite receives one object for the four session-scoped fixtures and a fresh one for the
+other six is proved by ``tests/plugin/test_fixture_activation.py``.
 
-Beyond name, scope and type, each fixture's own promise is pinned: the run id's published shape,
-the artifact writer's ``dir_for``/``write``/``manifest`` inside the run directory, the
-configuration's per-key provenance, the frozen clock, the data loader over the committed fixture
-files, the sqlite session's transactional isolation, the Faker seed derived from run id and node
+Beyond name, scope and type, each fixture's own promise is pinned: the run id's shape, the artifact
+writer's ``dir_for``/``write``/``manifest``, the configuration's per-key provenance, the frozen
+clock, the data loader, the sqlite session's isolation, the Faker seed derived from run id and node
 id, the bounded log ring, and ``eventually`` both returning and timing out with an injected sleeper.
 
 The artifact and data directories are redirected into the session's temporary directory by the
-``foundry_config`` override below, and every other path a test touches is under ``tmp_path``, so
-nothing is written inside the repository. No test sleeps: the two poll tests inject their own
-``sleep``, and the timeout case advances a frozen clock instead of waiting (AAP 0.14.2).
+``foundry_config`` override below, and every other path is under ``tmp_path``, so nothing is written
+inside the repository. No test sleeps: the poll tests inject their own ``sleep``, and the timeout
+case advances a frozen clock (AAP 0.14.2).
 """
 
 from __future__ import annotations

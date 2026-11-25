@@ -1,30 +1,34 @@
 """Unit tests for ``foundry.diagnostics``: the six doctor probes and the report they build.
 
 AAP 0.4.4 fixes what ``foundry doctor`` answers -- ``0`` when every required probe passes, ``2``
-when a required probe fails, and no change at all for a warning -- and AAP 0.7.1/0.7.3 fix the six
-rows and their words. What is pinned here is that mechanism, probe by probe and then through
+when a required probe fails, and no change at all for a warning -- and AAP 0.7.1/0.7.3 fix the rows
+and their words. Pinned here, probe by probe and then through
 :func:`~foundry.diagnostics.checks.run_checks`:
 
 * the six rows appear in the published order ``interpreter``, ``plugin``, ``configuration``,
   ``artifacts``, ``cassettes``, ``socket_guard``, each with one of the three status words and a
-  non-empty detail;
-* only a ``FAIL`` on a required row clears the report's ``ok``, which is the value that maps to the
-  exit code, so a ``WARN`` -- an unsupported platform, a project with no cassette directory and no
-  socket guard -- never fails the command;
-* ``check_interpreter`` distinguishes an unsupported interpreter, an unsupported platform and a
-  supported pair; ``check_plugin_registered`` reports the ``pytest11`` registration and the module
-  it must be able to import, both halves checked; ``check_configuration`` reports the resolved
-  profile or the configuration fault's own message; the two directory probes create nothing they
-  were not asked to create, count what a cassette directory holds and report an absent one as a
-  warning; and the socket-guard probe reads the convention ``tests/conftest.py`` publishes.
+  non-empty, specific detail;
+* only a ``FAIL`` on a required row clears the report's ``ok`` -- the value that maps to the exit
+  code -- so a ``WARN`` never fails the command;
+* each probe is held to its own rule: the interpreter's platform and version policy, both halves of
+  the ``pytest11`` registration, the resolved profile or the configuration fault's own message, the
+  two directory states, and the socket-guard row.
 
-Every probe is handed a path under ``tmp_path``, and the artifact probe is the only one that creates
-a directory, so no test here writes inside the repository. Nothing opens a socket, and nothing
-sleeps.
+Every probe is handed a path under ``tmp_path``, so no test writes inside the repository, and
+nothing opens a socket or sleeps. Two contracts are judged through the seam the package really
+reads: the interpreter policy through the ``sys.platform``, ``sys.version_info`` and
+``platform.python_implementation()`` that
+:meth:`~foundry.diagnostics.report.InterpreterInfo.current` reads, rather than through
+:func:`platform.system`, which the probe never calls; and the socket guard through the
+``FOUNDRY_SOCKET_GUARD`` and ``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` names ``tests/conftest.py``'s guard
+publishes.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 from collections.abc import Mapping
 from importlib.metadata import entry_points
@@ -110,7 +114,20 @@ def _row(
     return ProbeResult(name=name, status=status, detail=detail, required=required)
 
 
+def _version_info(major: int, minor: int, micro: int) -> SimpleNamespace:
+    """Return a stand-in for :data:`sys.version_info` carrying the three fields the probe reads."""
+    return SimpleNamespace(major=major, minor=minor, micro=micro)
+
+
 # --- The report (AAP 0.4.4, AAP 0.7.3) -----------------------------------
+
+
+def test_the_status_vocabulary_is_the_published_three_words() -> None:
+    """The three words are the whole vocabulary, asserted from both sides (AAP 0.7.3/0.7.4)."""
+    assert {status.value for status in ProbeStatus} == set(_STATUS_WORDS)
+    assert ProbeStatus("pass") is ProbeStatus.PASS
+    assert ProbeStatus("warn") is ProbeStatus.WARN
+    assert ProbeStatus("fail") is ProbeStatus.FAIL
 
 
 def test_run_checks_reports_the_six_probes_in_the_published_order(
@@ -144,7 +161,10 @@ def test_run_checks_reports_the_configuration_it_was_given(tmp_path: Path) -> No
 
 
 def test_run_checks_isolates_a_probe_that_raises(
-    tmp_path: Path, clean_foundry_env: None, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    clean_foundry_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A probe that raises becomes one ``FAIL`` row instead of a traceback (AAP 0.1.2)."""
 
@@ -152,12 +172,21 @@ def test_run_checks_isolates_a_probe_that_raises(
         """Stand in for a probe that cannot do its work."""
         raise FoundryError("the probe could not run")
 
+    caplog.set_level(logging.WARNING, logger="foundry")
     monkeypatch.setattr("foundry.diagnostics.checks.check_cassette_dir", explode)
     report = run_checks(cwd=tmp_path)
     cassettes = next(row for row in report.checks if row.name == PROBE_CASSETTES)
     assert cassettes.status is ProbeStatus.FAIL
     assert cassettes.detail == "probe failed: FoundryError"
     assert len(report.checks) == len(_PROBE_ORDER)
+    # AAP 0.1.2: the fault is reported once, on the foundry logger, and it is the only record the
+    # probe adds -- a diagnostic run must not turn one broken probe into a wall of warnings.
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].name == "foundry"
+    assert PROBE_CASSETTES in warnings[0].getMessage()
+    assert "FoundryError" in warnings[0].getMessage()
+    assert report.ok is False
 
 
 def test_a_warning_never_clears_the_verdict_and_a_required_failure_does() -> None:
@@ -180,10 +209,9 @@ def test_a_warning_never_clears_the_verdict_and_a_required_failure_does() -> Non
 def _published_entry_point_targets() -> tuple[str, ...]:
     """Return the ``pytest11`` targets this environment publishes under the name ``foundry``.
 
-    Read from :mod:`importlib.metadata`, which is the source the probe itself consults when it is
-    handed no pairs, so the expectation follows the environment rather than this tree: a source
-    checkout publishes nothing, and an environment that installed ``pytest-foundry`` publishes
-    ``foundry.plugin``.
+    Read from :mod:`importlib.metadata`, the source the probe consults when handed no pairs, so the
+    expectation follows the environment: a source checkout publishes nothing, an installed
+    ``pytest-foundry`` publishes ``foundry.plugin``.
     """
     return tuple(
         sorted(
@@ -213,15 +241,7 @@ def _entry_point_module_available() -> bool:
 def test_run_checks_reports_the_pytest_entry_point_this_environment_publishes(
     tmp_path: Path, clean_foundry_env: None
 ) -> None:
-    """The plugin row follows the ``pytest11`` metadata the environment actually publishes.
-
-    Three states are possible: nothing registered (a source checkout), registered with an
-    importable module (an installed distribution), and registered with no importable module
-    (``src/foundry/plugin.py`` absent). The expectation is observed here -- the targets the
-    metadata publishes and whether the module they name resolves -- so the probe is held to one
-    rule in all of them: ``FAIL`` naming what the metadata says, ``PASS`` naming the registration
-    it found, and ``report.ok`` never disagreeing with ``report.failed`` (AAP 0.4.2, AAP 0.4.4).
-    """
+    """The plugin row follows the ``pytest11`` metadata this environment actually publishes."""
     registered = _entry_point_registered()
     available = _entry_point_module_available()
     report = run_checks(cwd=tmp_path)
@@ -244,14 +264,7 @@ def test_run_checks_reports_the_pytest_entry_point_this_environment_publishes(
 def test_run_checks_reports_a_registered_entry_point_as_passed(
     tmp_path: Path, clean_foundry_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The installed world's verdict, from the pairs ``run_checks`` already accepts (AAP 0.4.2).
-
-    Both halves of the registration are supplied so the probe's ``PASS`` branch runs here, where
-    no distribution is installed: the pair is the entry-point metadata an installed
-    ``pytest-foundry`` publishes, and the module half stands in for the ``src/foundry/plugin.py``
-    that installation ships. Nothing is installed and no module is created, so the report is the
-    one that world produces without this tree having to become it.
-    """
+    """The installed world's verdict, from the pairs ``run_checks`` already accepts (AAP 0.4.2)."""
     monkeypatch.setattr("foundry.diagnostics.checks._module_importable", lambda _target: True)
     report = run_checks(
         config=resolve(environ={}, cwd=tmp_path),
@@ -295,6 +308,48 @@ def test_check_interpreter_describes_the_running_interpreter() -> None:
     assert row.status is ProbeStatus.PASS
     assert row.detail == f"{current.implementation} {current.version} on {current.platform}"
     assert "CPython 3.11-3.13" not in row.detail
+
+
+@pytest.mark.parametrize(
+    ("version_info", "platform_name", "status", "fragment"),
+    [
+        (_version_info(3, 12, 4), "win32", ProbeStatus.WARN, "on win32 is unsupported"),
+        (_version_info(3, 9, 18), "linux", ProbeStatus.FAIL, "requires CPython 3.11-3.13"),
+        (_version_info(3, 14, 0), "darwin", ProbeStatus.FAIL, "requires CPython 3.11-3.13"),
+    ],
+)
+def test_check_interpreter_judges_the_platform_and_range_it_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    version_info: SimpleNamespace,
+    platform_name: str,
+    status: ProbeStatus,
+    fragment: str,
+) -> None:
+    """A Windows-like platform warns and an unsupported version fails (AAP 0.4.1)."""
+    monkeypatch.setattr(
+        "foundry.diagnostics.report.sys",
+        SimpleNamespace(platform=platform_name, version_info=version_info),
+    )
+    row = check_interpreter()
+    assert row.name == PROBE_INTERPRETER
+    assert row.status is status
+    assert fragment in row.detail
+    assert f"on {platform_name}" in row.detail
+    assert row.required is True
+
+
+def test_check_interpreter_fails_on_an_implementation_other_than_cpython(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An implementation outside the range is a failure naming the one that is supported."""
+    monkeypatch.setattr(
+        "foundry.diagnostics.report.platform",
+        SimpleNamespace(python_implementation=lambda: "PyPy"),
+    )
+    row = check_interpreter()
+    assert row.status is ProbeStatus.FAIL
+    assert "PyPy" in row.detail
+    assert "requires CPython 3.11-3.13" in row.detail
 
 
 # --- check_plugin_registered (AAP 0.4.2) --------------------------------
@@ -360,6 +415,20 @@ def test_check_configuration_reports_the_fault_it_cannot_resolve(
     row = check_configuration()
     assert row.status is ProbeStatus.FAIL
     assert "http.timeout" in row.detail
+    # AAP 0.4.5: the message names the accepted range, not merely the rejected value.
+    assert "0 < t <= 300" in row.detail
+    assert row.required is True
+
+
+def test_check_configuration_names_an_unknown_key(
+    tmp_path: Path, clean_foundry_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key no layer may set is reported by name, which is what makes it fixable."""
+    monkeypatch.setenv("FOUNDRY_HTTP__TIMEOUTT", "1.0")
+    monkeypatch.chdir(tmp_path)
+    row = check_configuration()
+    assert row.status is ProbeStatus.FAIL
+    assert "http.timeoutt" in row.detail
     assert row.required is True
 
 
@@ -397,6 +466,32 @@ def test_check_artifacts_dir_warns_when_no_directory_can_be_determined() -> None
     row = check_artifacts_dir()
     assert row.status is ProbeStatus.WARN
     assert row.detail == "not checked: configuration unavailable"
+
+
+def test_check_artifacts_dir_creates_a_missing_parent_chain(tmp_path: Path) -> None:
+    """A configured path whose parents do not exist yet is created, and the row reports it."""
+    target = tmp_path / "one" / "two" / "artifacts"
+    assert not target.parent.exists()
+    row = check_artifacts_dir(directory=target)
+    assert row.status is ProbeStatus.PASS
+    assert row.detail == f"{target.resolve()} writable"
+    assert target.is_dir()
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="a privileged user writes into a directory whose mode forbids it"
+)
+def test_check_artifacts_dir_fails_on_a_directory_it_may_not_write(tmp_path: Path) -> None:
+    """A directory the process may not write into is a ``FAIL`` naming the path, not a traceback."""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        row = check_artifacts_dir(directory=locked)
+    finally:
+        locked.chmod(0o700)
+    assert row.status is ProbeStatus.FAIL
+    assert row.detail.startswith(f"{locked.resolve()}: ")
 
 
 # --- check_cassette_dir (assumption A8, AAP 0.7.1) ---------------------
@@ -500,6 +595,8 @@ def test_the_socket_guard_row_reports_what_the_count_says(
     assert row.status is status
     assert row.detail == state.describe()
     assert row.required is False
+    if status is ProbeStatus.FAIL:
+        assert f"{state.non_loopback_attempts} non-loopback connection attempt(s)" in row.detail
 
 
 def test_a_guard_publishing_no_count_reads_as_installed_and_unmeasured() -> None:
@@ -507,6 +604,20 @@ def test_a_guard_publishing_no_count_reads_as_installed_and_unmeasured() -> None
     state = detect_socket_guard({"guard": SimpleNamespace(FOUNDRY_SOCKET_GUARD=object())})
     assert state == SocketGuardState(installed=True, non_loopback_attempts=None, source="guard")
     assert check_socket_guard(state).status is ProbeStatus.WARN
+
+
+def test_run_checks_reports_the_guard_state_it_was_given(
+    tmp_path: Path, clean_foundry_env: None
+) -> None:
+    """The optional row carries the supplied state and stays out of the verdict (AAP 0.4.4)."""
+    state = SocketGuardState(installed=True, non_loopback_attempts=3, source="a_guard")
+    report = run_checks(config=resolve(environ={}, cwd=tmp_path), cwd=tmp_path, guard_state=state)
+    row = next(check for check in report.checks if check.name == PROBE_NAME)
+    assert row.status is ProbeStatus.FAIL
+    assert row.detail == state.describe()
+    assert row.required is False
+    assert PROBE_NAME not in [check.name for check in report.failed]
+    assert report.ok is (report.failed == ())
 
 
 # --- A document a caller can serialise ---------------------------------
@@ -519,6 +630,10 @@ def test_the_report_document_holds_the_published_members(
     report = run_checks(config=resolve(environ={}, cwd=tmp_path), cwd=tmp_path)
     document: Mapping[str, object] = report.as_document()
     assert set(document) == {"interpreter", "checks", "ok"}
+    interpreter = document["interpreter"]
+    assert isinstance(interpreter, Mapping)
+    assert set(interpreter) == {"implementation", "version", "platform", "supported"}
+    assert interpreter["supported"] is True
     checks = document["checks"]
     assert isinstance(checks, list)
     assert [entry["name"] for entry in checks] == list(_PROBE_ORDER)
@@ -526,3 +641,15 @@ def test_the_report_document_holds_the_published_members(
         assert set(entry) == {"name", "status", "detail"}
         assert entry["status"] in _STATUS_WORDS
     assert document["ok"] is report.ok
+    # A document a caller serialises: it round-trips through JSON unchanged (AAP 0.7.3).
+    assert json.loads(json.dumps(document)) == document
+
+
+def test_the_report_document_renders_identically_twice(
+    tmp_path: Path, clean_foundry_env: None
+) -> None:
+    """Two invocations in one directory produce one document, so a diff between them is empty."""
+    config = resolve(environ={}, cwd=tmp_path)
+    first = run_checks(config=config, cwd=tmp_path).as_document()
+    second = run_checks(config=config, cwd=tmp_path).as_document()
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)

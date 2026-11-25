@@ -456,21 +456,13 @@ def _format_hits(hits: tuple[Hit, ...]) -> str:
 
 
 def test_the_scanned_tree_holds_no_unsafe_parsing(repo_root: Path) -> None:
-    """A hit anywhere under the scanned roots is a finding (AAP 0.3.2, AAP 0.14.3).
-
-    YAML may be parsed only through ``yaml.safe_load``, and no module may call ``eval``, ``exec`` or
-    import an object-graph serialiser. One failure names every offending statement, not the first.
-    """
+    """A hit anywhere under the scanned roots is a finding (AAP 0.3.2, AAP 0.14.3)."""
     hits = _scan_tree(repo_root)
     assert hits == (), _format_hits(hits)
 
 
 def test_the_scan_reaches_the_designated_yaml_readers(repo_root: Path) -> None:
-    """Both modules AAP 0.3.2 designates are inside the scanned inventory.
-
-    Without this, a rename that took a reader out of the walk would leave the scan above passing
-    on an empty list -- the vacuous pass this whole module exists to prevent.
-    """
+    """Both modules AAP 0.3.2 designates are inside the scanned inventory."""
     scanned = {path.relative_to(repo_root).as_posix() for path in _scanned_files(repo_root)}
     for relative in (_DATA_YAML_LOADER, _CASSETTE_STORE):
         assert relative in scanned, f"{relative} is not scanned: {sorted(scanned)}"
@@ -506,11 +498,7 @@ def test_the_cassette_store_guard_catches_an_unsafe_loader(tmp_path: Path) -> No
 
 
 def test_the_positive_control_reports_every_offender(tmp_path: Path) -> None:
-    """A synthetic tree yields exactly its three offenders, with path, line and name.
-
-    The control is what proves the scanner can fail at all: a resolver that had stopped resolving
-    would leave the real tree's clean scan passing for the wrong reason.
-    """
+    """A synthetic tree yields exactly its three offenders, with path, line and name."""
     _write(tmp_path, "src/foundry/offending_yaml.py", "import yaml", "yaml.load(text)")
     _write(tmp_path, "examples/offending_eval.py", "eval(expression)")
     _write(tmp_path, "scripts/offending_pickle.py", "import pickle")
@@ -530,11 +518,7 @@ def test_the_positive_control_reports_every_offender(tmp_path: Path) -> None:
 
 
 def test_docstring_and_string_mentions_are_not_findings(tmp_path: Path) -> None:
-    """A mention in a docstring, a comment or a string constant is not a call.
-
-    This is the property an AST scan has and a text grep does not, and the reason the guard stays
-    usable in a codebase that documents the rule it enforces.
-    """
+    """A mention in a docstring, a comment or a string constant is not a call."""
     _write(
         tmp_path,
         "src/foundry/talking_about_it.py",
@@ -592,22 +576,14 @@ def test_docstring_and_string_mentions_are_not_findings(tmp_path: Path) -> None:
 def test_every_route_to_an_unsafe_loader_is_detected(
     tmp_path: Path, relative: str, source: str, expected: str
 ) -> None:
-    """Each alias, each unsafe loader name, each file name and a shell ``eval`` reach the report.
-
-    No file name and no file type is exempt from the scan, and every indirect route a
-    reintroduction would reach for is listed beside the direct ones.
-    """
+    """Each alias, each unsafe loader name, each file name and a shell ``eval`` reach the report."""
     _write(tmp_path, relative, *source.splitlines())
     hits = _scan_tree(tmp_path)
     assert expected in {hit.name for hit in hits}, _format_hits(hits)
 
 
 def test_the_indirect_routes_report_nothing_on_safe_code(tmp_path: Path) -> None:
-    """The same routes reached for a permitted loader or an ordinary object are not findings.
-
-    ``safe_load`` behind an assignment, a ``getattr`` or a ``partial`` stays silent, as does a
-    dynamic import of ``json``, a computed attribute name and ``yaml.dump``.
-    """
+    """The same routes reached for a permitted loader or an ordinary object are not findings."""
     _write(
         tmp_path,
         "src/foundry/safe_indirection.py",
@@ -633,11 +609,7 @@ def test_the_indirect_routes_report_nothing_on_safe_code(tmp_path: Path) -> None
 
 
 def test_the_scanner_offers_no_exemption() -> None:
-    """No scanner entry point takes an exemption and no module-level name holds one.
-
-    AAP 0.3.2 permits no allowlist, so a future edit that added one would be invisible as a
-    behaviour change and visible only as this failure.
-    """
+    """No scanner entry point takes an exemption and no module-level name holds one."""
     markers = ("allow", "exempt", "permit", "whitelist", "ignore", "skip", "bypass")
     names = [name for name in globals() if not name.startswith(("test_", "__"))]
     flagged = [name for name in names if any(marker in name.casefold() for marker in markers)]

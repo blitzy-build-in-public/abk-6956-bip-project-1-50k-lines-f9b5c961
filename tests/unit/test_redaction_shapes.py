@@ -1,46 +1,25 @@
 """Unit tests for the redaction shapes a name-keyed rule cannot see on its own.
 
-A secret reaches Foundry in shapes that carry no ``name=value`` separator on one line: a decoded
-pair list (``[["token", "<secret>"]]``), which a JSON or Python printer renders as a two-element
-array, and an RFC 7578 multipart part, whose name is a ``Content-Disposition`` parameter and whose
-value is the body below the part's header terminator. The third shape is a value under a name no
-deny-list enumerates: the header a peer echoes a credential back in is usually one the peer invented
-(``x-echo: token=...``), so masking by name leaves it verbatim in ``response_dump()``, in the
-``response.json`` artifact and in the cassette document. AAP 0.3.2 makes ``foundry.obs.redaction``
-the one engine every sink calls, so the engine owns all three shapes rather than each dump, cassette
-and assertion message growing a rule of its own, and AAP 0.14.3's "no secret reaches a file, the
-terminal or a report" is only as strong as the weakest shape it can recognise.
+A secret reaches Foundry in shapes carrying no ``name=value`` separator on one line: a decoded pair
+list (``[["token", "<secret>"]]``), an RFC 7578 multipart part whose name is a
+``Content-Disposition`` parameter, and a value under a name no deny-list enumerates -- the header a
+peer echoes a credential back in is usually one the peer invented (``x-echo: token=...``). AAP 0.3.2
+makes ``foundry.obs.redaction`` the one engine every sink calls, so the engine owns all three shapes
+rather than each dump, cassette and assertion message growing a rule of its own.
 
-What is pinned here, all of it through the public engine:
+Pinned here, all through the public engine: the structural path masks a pair whose first element is
+a secret name, at any depth, and leaves other arrays alone; the free-text path masks the quoted pair
+entry and the multipart body while keeping the name and the punctuation readable; a kept part's own
+nested body is scrubbed in turn and the descent stops at :data:`MAX_DEPTH`; an unlisted header's
+value is scrubbed as free text while a media type, a date or an identifier is untouched; a second
+pass over masked text returns it unchanged; text dropped for its depth is marked with
+:data:`NESTING_TRUNCATION_MARKER` rather than reading as a scrubbed secret (AAP 0.4.6, 0.7.4); the
+cassette store names what it scrubbed in ``redacted_keys``; and the multipart scan costs time in the
+text's length, measured as a ratio so the pin holds on a host of any speed (AAP 0.14.2).
 
-* the structural path masks a two-element pair list whose first element is a secret name, at any
-  nesting depth, and leaves every other array alone;
-* the free-text path masks the quoted pair-list entry and the multipart part body while keeping the
-  name and the punctuation around it readable, and masks neither when the name is not secret;
-* a multipart body held inside a part the engine keeps is scrubbed in turn, so a part nested one
-  level down -- or several -- loses the value under its own secret name, and the descent stops at
-  the ``MAX_DEPTH`` cap rather than following a hostile body indefinitely;
-* a header value is scrubbed as free text under a name the engine does not redact, so a credential
-  echoed in an unlisted header is masked while a media type, a date or an identifier is untouched;
-* a second pass over masked text produces that text again, the property the engine's own comments
-  give for ``_redact_header_value``, so no sink that re-scans its own output can re-expose a value;
-* a failure message carrying many ``name: text`` prefixes is scrubbed whole, and one that carries
-  more than the engine descends stops at :data:`MAX_DEPTH` and is marked with
-  :data:`NESTING_TRUNCATION_MARKER`, so text dropped for its depth never reads as a scrubbed secret
-  (AAP 0.4.6, AAP 0.7.4);
-* the cassette store names a pair-list key or a header whose value it scrubbed in the document's
-  ``redacted_keys``, because AAP 0.4.6 has that field record what was scrubbed, and it still stores
-  an unchanged header verbatim;
-* the multipart scan costs time in the length of the text rather than in a line's length times its
-  number of ``name`` parameters, measured as a ratio between two sizes so the pin holds on a host of
-  any speed (AAP 0.14.2's suite wall clock).
-
-This module is separate from ``tests/unit/test_obs.py`` because that file already sits at the
-700-line ceiling AAP 0.14.2 sets and ``scripts/count_lines.sh`` enforces; the style, the sentinel
-convention and the standard-library-only imports are that module's.
-
-No socket is opened and nothing sleeps: every value is a literal, the store writes into
-``tmp_path``, and the cost test reads this process's own CPU time (AAP 0.14.3).
+Separate from ``tests/unit/test_obs.py``, which already sits at the 700-line ceiling AAP 0.14.2 sets
+and ``scripts/count_lines.sh`` enforces. No socket is opened and nothing sleeps: every value is a
+literal, the store writes into ``tmp_path``, and the cost test reads this process's CPU time.
 """
 
 from __future__ import annotations
@@ -344,17 +323,7 @@ def _dense_part_line(parts: int) -> str:
 
 
 def test_the_multipart_scan_costs_time_linear_in_the_length_of_the_text() -> None:
-    """One line dense with part parameters is walked once, not once per candidate on it.
-
-    The engine has to read a line holding many ``; name=`` parameters to tell whether it names a
-    multipart part, and the cost of that reading is what this pins: every candidate on a line is
-    followed by the same header lines, so a scan that answers the line once costs time in the
-    length of the line, while one that walks to the end of the line at every candidate costs time
-    in the product of that line's length and its number of candidates. The two sizes differ tenfold
-    in characters, which separates the two shapes by an order of magnitude, and the budget between
-    them is :data:`_COST_RATIO_BUDGET` rather than a millisecond floor, so the test holds on a host
-    of any speed. Neither line carries a header terminator, so nothing may be rewritten in either.
-    """
+    """One line dense with part parameters is walked once, not once per candidate on it."""
     small = _dense_part_line(_SMALL_LINE_PARTS)
     large = _dense_part_line(_LARGE_LINE_PARTS)
     redactor = default_redactor()
@@ -512,15 +481,7 @@ _UNBROKEN_CHAIN: Final[str] = "a=" * 4000
 
 
 def test_a_long_message_of_name_text_fragments_survives_the_scrub_whole() -> None:
-    """A recorded message reaches the document whole, however many ``name: text`` prefixes it holds.
-
-    The engine used to stop after eight prefixes, so the ninth replaced every character left on the
-    line with :data:`REDACTED`: a 2062-character failure message was stored in ``results.json`` and
-    shown in the report's panel as 885 characters ending in the marker a scrubbed secret leaves,
-    which reads as a masked credential rather than as the assertion that failed (AAP 0.4.6, 0.7.4).
-    Nineteen prefixes stay inside the depth the engine now descends, and the second scrub pins the
-    idempotence every sink relies on when it re-scans its own output.
-    """
+    """A recorded message reaches the document whole, whatever ``name: text`` prefixes it holds."""
     redactor = default_redactor()
 
     assert len(_LONG_MESSAGE) > 2000, "the message must be long enough to trip the old depth guard"
@@ -532,14 +493,7 @@ def test_a_long_message_of_name_text_fragments_survives_the_scrub_whole() -> Non
 
 
 def test_a_chain_past_the_nesting_depth_cap_is_masked_and_marked_as_dropped() -> None:
-    """Past the cap the text is masked and marked, so a dropped tail never reads as a secret.
-
-    A chain of pairs whose values run unbroken to the end of the text is the shape that costs one
-    descent of the whole remainder per pair, so the engine stops at :data:`MAX_DEPTH` pairs, masks
-    what is left and appends :data:`NESTING_TRUNCATION_MARKER`: a reader sees that text was dropped
-    instead of the bare :data:`REDACTED` a scrubbed credential leaves behind (AAP 0.4.6, 0.7.4).
-    The value behind the last pair stays out of the result, and a second scrub returns it unchanged.
-    """
+    """Past the cap the text is masked and marked, so a dropped tail never reads as a secret."""
     redactor = default_redactor()
     text = f"{_UNBROKEN_CHAIN}token={_SENTINEL}"
 

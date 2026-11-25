@@ -73,13 +73,7 @@ def _resolve(directory: Path) -> FoundryConfig:
 def test_an_unparseable_pyproject_faults_like_a_malformed_foundry_toml(
     tmp_path: Path, clean_foundry_env: None, write_project: Callable[..., Path]
 ) -> None:
-    """A ``pyproject.toml`` that does not parse is a fault, never a silent return to defaults.
-
-    Discovery step 4 reads the candidate to decide whether it carries ``[tool.foundry]``, so a
-    syntax fault there is reported exactly as the same fault in ``foundry.toml`` is: AAP 0.4.5
-    makes that file a configuration file on this run, and losing the operator's whole table
-    without a diagnostic is what the strict reading of it rules out.
-    """
+    """A ``pyproject.toml`` that does not parse is a fault, never a silent return to defaults."""
     write_project(tmp_path, files={_PYPROJECT_TOML: "[tool.foundry\n"})
     path = tmp_path / _PYPROJECT_TOML
 
@@ -106,12 +100,7 @@ def test_a_pyproject_without_the_foundry_table_resolves_the_defaults(
     write_project: Callable[..., Path],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A well-formed ``pyproject.toml`` with no ``[tool.foundry]`` is not a configuration file.
-
-    The fourth discovery step matches only a file that configures Foundry, so a project using that
-    name for its own packaging resolves from the field defaults and logs the AAP 0.4.7 DEBUG line
-    ``foundry: no config file found`` rather than faulting.
-    """
+    """A well-formed ``pyproject.toml`` with no ``[tool.foundry]`` is not a configuration file."""
     write_project(tmp_path, files={_PYPROJECT_TOML: '[project]\nname = "something-else"\n'})
     caplog.set_level(logging.DEBUG, logger="foundry")
 
@@ -129,13 +118,7 @@ def test_a_section_header_is_checked_as_a_key_of_its_own(
     clean_foundry_env: None,
     write_project: Callable[..., Path],
 ) -> None:
-    """A section header that holds nothing is refused at its dotted path (AAP 0.4.5).
-
-    Flattening keeps one entry per leaf, so ``[data.bogus]`` contributes no key at all and would
-    pass the flat unknown-key check as though the header were absent; the pre-flatten walk refuses
-    it instead, naming the closest registered spelling and the file to edit. A header the registry
-    does declare is the empty spelling of a real section and still resolves from the defaults.
-    """
+    """A section header that holds nothing is refused at its dotted path (AAP 0.4.5)."""
     write_project(tmp_path, foundry_toml=toml_text)
     path = tmp_path / _FOUNDRY_TOML
 

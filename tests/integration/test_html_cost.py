@@ -1,38 +1,22 @@
 """Timing instrument for ``report.html``: five hundred result records inside the AAP 0.14.2 budget.
 
-AAP 0.14.2 budgets HTML generation at "500 records: <= 2 s", and AAP 0.10.1 names this module as
-the instrument that fails when the budget is exceeded. What is timed is
-:func:`foundry.reporting.html.render` -- the public function ``src/foundry/plugin.py`` calls at
-session finish (AAP 0.7.1) -- reached through the checked-in template and the shipped asset bundle,
-with no stub, no monkeypatch and no private helper in the way. Reading
-``src/foundry/reporting/templates/report.html.j2`` from disk and building the Jinja2 environment
-with ``autoescape=True`` therefore sit *inside* the measurement, because they sit inside the
-production path: one environment is built per run, and a measurement that excluded compilation
-would time a code path the product never runs.
+AAP 0.14.2 budgets HTML generation at "500 records: <= 2 s". What is timed is
+:func:`foundry.reporting.html.render`, the public function session finish calls (AAP 0.7.1), reached
+through the checked-in template and the shipped asset bundle, so reading the template and compiling
+the Jinja2 environment with ``autoescape=True`` sit inside the measurement as they do in production.
+The record set is built through the frozen :class:`foundry.reporting.record.ResultRecord` model, so
+a record set that violates the model raises instead of rendering and cannot weaken the measurement.
 
-The record set is built through the frozen models of :mod:`foundry.reporting.record` rather than
-hand-written JSON, because the renderer's contract is the model: :class:`ResultRecord` validates
-``attempts >= 1``, a non-negative ``duration_ms``, sorted and de-duplicated markers, run-relative
-artifact paths free of ``..`` and a quarantine state that agrees with the outcome (AAP 0.7.2), so a
-record set that violates any of them raises instead of rendering and cannot silently weaken the
-measurement.
+Beyond the elapsed milliseconds the assertions prove the work happened -- every node id reaches the
+document and the table holds one row per record on the template's own per-row marker, so a stub
+could not pass; the timed render is the escaping one -- a node id carrying a ``<script>`` payload
+arrives escaped; the document is self-contained, so the page opens offline; and rendering is
+deterministic -- two renders of one record set are byte-identical in either input order, which
+proves every iterated collection is sorted rather than inherited (AAP 0.13.1, criterion 14).
 
-What the assertions prove, beyond the elapsed milliseconds:
-
-* the work actually happened -- all five hundred node ids appear in the document and the results
-  table holds exactly one row per record, counted on the template's own per-row marker, so a
-  renderer that returned a stub could not pass the budget;
-* the timed render is the escaped production renderer -- one node id carries a ``<script>`` payload
-  and reaches the page escaped, which ``tests/integration/test_report_render.py`` does not cover;
-* the document is self-contained -- no ``src`` or ``href`` attribute points at an absolute-scheme
-  location and no ``<link>`` element pulls anything in, so the page opens offline;
-* rendering is deterministic -- two renders of one record set are byte-identical, and a reversed
-  input order renders the same bytes as the sorted one, which proves every iterated collection is
-  sorted rather than inherited from the input (AAP 0.13.1, criterion 14).
-
-No subprocess, server, temporary file or wall-clock read is involved: the render is in-process and
-writes nothing to disk, ``time.perf_counter()`` is the only clock, and the record timestamps are
-fixed constants so the measurement can never depend on the date (AAP 0.14.3).
+No subprocess, server, temporary file or wall-clock read is involved: ``time.perf_counter()`` is the
+only clock and the record timestamps are fixed constants, so the measurement cannot depend on the
+date (AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -65,9 +49,7 @@ RECORD_COUNT: Final[int] = 500
 TEMPLATE_RELATIVE_PATH: Final[Path] = Path("src/foundry/reporting/templates/report.html.j2")
 """The report template as it sits in the checkout, relative to the repository root.
 
-Timing this file rather than a copy is what ties the measurement to the package data the wheel
-ships (AAP 0.4.1), and reading it through ``repo_root`` keeps the test independent of the directory
-the suite happens to be invoked from.
+Timing this file ties the measurement to the package data the wheel ships (AAP 0.4.1).
 """
 
 RUN_ID: Final[str] = "20240304T050607-0a1b2c"
@@ -85,9 +67,8 @@ PROFILE: Final[str] = "default"
 ARTIFACTS_ROOT: Final[Path] = Path("artifacts") / RUN_ID
 """The run directory the records' artifact paths are relative to (AAP 0.4.6).
 
-A relative path under the invocation directory, exactly as a run lays it out. Nothing reads under
-it -- the records list no ``log_tail`` artifact -- so the panels compute their links without
-touching the filesystem.
+Nothing reads under it -- the records list no ``log_tail`` artifact -- so the panels compute their
+links without touching the filesystem.
 """
 
 REPORT_DIR: Final[Path] = Path()
@@ -96,9 +77,8 @@ REPORT_DIR: Final[Path] = Path()
 ROW_CELL: Final[str] = '<th scope="row" class="nodeid">'
 """The template's per-row marker, one per result record inside ``table.results``.
 
-Read out of ``report.html.j2`` rather than guessed: the rows loop emits exactly this cell, so its
-count is the row count the budget is measured against, and the markup test fails if a template
-change removes it.
+Read out of ``report.html.j2`` rather than guessed, so its count is the row count the budget is
+measured against, and the markup test fails if a template change removes it.
 """
 
 MARKUP_PAYLOAD: Final[str] = "<script>alert(1)</script>"
@@ -113,15 +93,12 @@ MARKUP_INDEX: Final[int] = RECORD_COUNT - 1
 _ABSOLUTE_SCHEMES: Final[tuple[str, ...]] = ("http" + "://", "https" + "://")
 """The two spellings of an absolute reference a self-contained document may never carry.
 
-Assembled from fragments, following :mod:`foundry.reporting.assets`: the source tree is scanned for
-these literal spellings while the report's self-contained property is verified, and this module has
-to pass the scan it takes part in.
+Assembled from fragments, following :mod:`foundry.reporting.assets`, so this module passes the
+source scan that verifies the report's self-contained property.
 """
 
 # The mix AAP 0.10.1 asks for -- 450 passed, 30 failed, 10 quarantined_failed, 5 quarantine_passed
-# and 5 skipped -- laid out so that `attempts` never decreases across the sorted record order: the
-# passing records come first, then the skipped and quarantine_passed ones, then the two retried
-# outcomes. The multiset is unchanged; only its order differs.
+# and 5 skipped -- ordered so `attempts` never decreases across the sorted record order.
 _TAIL_SKIPPED: Final[int] = 5
 _TAIL_QUARANTINE_PASSED: Final[int] = 5
 _TAIL_QUARANTINED_FAILED: Final[int] = 10
@@ -147,29 +124,13 @@ _QUARANTINE_OUTCOMES_LOCAL: Final[frozenset[Outcome]] = frozenset(
 
 
 def _nodeid(index: int) -> str:
-    """Return record ``index``'s node id, zero-padded so its sorted position is unambiguous.
-
-    Args:
-        index: The record's position in the generated set.
-
-    Returns:
-        ``tests/test_module_<i>.py::test_case_<i>``, with ``<i>`` three digits wide, plus
-        :data:`MARKUP_PAYLOAD` on the last record so the autoescape proof rides the same render.
-    """
+    """Return record ``index``'s node id: three digits wide, markup-bearing on the last record."""
     nodeid = f"tests/test_module_{index:03d}.py::test_case_{index:03d}"
     return nodeid + MARKUP_PAYLOAD if index == MARKUP_INDEX else nodeid
 
 
 def _outcome_for(index: int, count: int) -> Outcome:
-    """Return record ``index``'s outcome, following the mix comment above.
-
-    Args:
-        index: The record's position in the generated set.
-        count: The size of the generated set, which positions the specialised tail at its end.
-
-    Returns:
-        The outcome, one of the five the mix uses.
-    """
+    """Return record ``index``'s outcome, following the mix comment above."""
     skipped_from = count - _SPECIALISED_COUNT
     quarantine_passed_from = skipped_from + _TAIL_SKIPPED
     quarantined_failed_from = quarantine_passed_from + _TAIL_QUARANTINE_PASSED
@@ -188,44 +149,20 @@ def _outcome_for(index: int, count: int) -> Outcome:
 def _artifact_dir(index: int) -> str:
     """Return the percent-encoded per-test artifact directory a record's paths sit under.
 
-    The shape is ``artifacts/<run_id>/<sanitized-nodeid>/`` (AAP 0.4.6) with the separators
-    encoded, which is what keeps the recorded paths single-component and free of ``..``. Encoding
-    the index rather than the node id keeps :data:`MARKUP_PAYLOAD` out of a filesystem path.
-
-    Args:
-        index: The record's position in the generated set.
-
-    Returns:
-        One relative directory name.
+    ``artifacts/<run_id>/<sanitized-nodeid>/`` (AAP 0.4.6) with the separators encoded, which keeps
+    the recorded paths single-component and free of ``..``; encoding the index rather than the node
+    id keeps :data:`MARKUP_PAYLOAD` out of a filesystem path.
     """
     return f"tests%2Ftest_module_{index:03d}.py%3A%3Atest_case_{index:03d}"
 
 
 def _phase_for(index: int) -> Literal["call", "setup"]:
-    """Return the failing phase of record ``index``, alternating so both sort positions are used.
-
-    Args:
-        index: The record's position in the generated set.
-
-    Returns:
-        ``call`` for an even index and ``setup`` for an odd one: two of the three phases a
-        :class:`FailureRecord` accepts, which exercises the panel order of
-        :func:`foundry.reporting.panels.build_panels`.
-    """
+    """Return the failing phase: ``call`` for an even index and ``setup`` for an odd one."""
     return "call" if index % 2 == 0 else "setup"
 
 
 def _markers_for(index: int, outcome: Outcome) -> tuple[str, ...]:
-    """Return record ``index``'s marker names; the record sorts and de-duplicates them itself.
-
-    Args:
-        index: The record's position in the generated set.
-        outcome: The record's outcome, which selects the marker family.
-
-    Returns:
-        The marker names, in the order they are written; a passed record carries one on even
-        indexes and none on odd ones, so both the populated and the empty column render.
-    """
+    """Return record ``index``'s marker names, which the record sorts and de-duplicates itself."""
     if outcome in _QUARANTINE_OUTCOMES_LOCAL:
         return ("foundry_quarantine", "slow")
     if outcome is Outcome.FAILED:
@@ -236,16 +173,7 @@ def _markers_for(index: int, outcome: Outcome) -> tuple[str, ...]:
 
 
 def _failure_records(index: int, outcome: Outcome) -> tuple[FailureRecord, ...]:
-    """Return the single failure entry a failing record carries, or nothing for a clean one.
-
-    Args:
-        index: The record's position in the generated set.
-        outcome: The record's outcome.
-
-    Returns:
-        One :class:`FailureRecord` naming the phase, a deterministic message and the traceback
-        path; an empty tuple for an outcome that did not fail.
-    """
+    """Return the one failure entry a failing record carries, or nothing for a clean one."""
     if outcome not in _FAILED_OUTCOMES:
         return ()
     return (
@@ -260,17 +188,9 @@ def _failure_records(index: int, outcome: Outcome) -> tuple[FailureRecord, ...]:
 def _artifact_records(index: int, outcome: Outcome) -> tuple[ArtifactRecord, ...]:
     """Return the three artifacts a failing record lists, or nothing for a clean one.
 
-    Request, response and traceback are exactly the three kinds a failure panel links to
-    (AAP 0.7.4), so the renderer builds the whole link section for every failing record. No
+    Request, response and traceback are the three kinds a failure panel links to (AAP 0.7.4). No
     ``log_tail`` entry is listed, which is what keeps the render in memory: the panels read a tail
     from the filesystem only when a record names one.
-
-    Args:
-        index: The record's position in the generated set.
-        outcome: The record's outcome.
-
-    Returns:
-        Three :class:`ArtifactRecord` entries, or an empty tuple.
     """
     if outcome not in _FAILED_OUTCOMES:
         return ()
@@ -285,12 +205,8 @@ def _artifact_records(index: int, outcome: Outcome) -> tuple[ArtifactRecord, ...
 def _quarantine_record(outcome: Outcome) -> QuarantineRecord:
     """Return the quarantine verdict that agrees with ``outcome`` (AAP 0.7.2).
 
-    Args:
-        outcome: The record's outcome.
-
-    Returns:
-        ``failed`` for ``quarantined_failed``, ``passed`` for ``quarantine_passed`` and ``none``
-        otherwise, which is the only combination the record's validator accepts.
+    ``failed`` for ``quarantined_failed``, ``passed`` for ``quarantine_passed``, ``none``
+    otherwise: the only combinations the record's validator accepts.
     """
     if outcome is Outcome.QUARANTINED_FAILED:
         return QuarantineRecord(state="failed")
@@ -300,16 +216,7 @@ def _quarantine_record(outcome: Outcome) -> QuarantineRecord:
 
 
 def _build_record(index: int, count: int) -> ResultRecord:
-    """Build one validated result record of the measured set.
-
-    Args:
-        index: The record's position in the generated set.
-        count: The size of the generated set.
-
-    Returns:
-        A record carrying every field AAP 0.4.6 fixes, with timestamps from the module constants
-        rather than from a clock.
-    """
+    """Build one validated result record of the measured set, stamped from the module constants."""
     outcome = _outcome_for(index, count)
     return ResultRecord(
         run_id=RUN_ID,
@@ -330,16 +237,8 @@ def _build_record(index: int, count: int) -> ResultRecord:
 def build_records(count: int = RECORD_COUNT) -> tuple[ResultRecord, ...]:
     """Build the measured record set: five hundred validated results, sorted by node id.
 
-    Args:
-        count: How many records to build. At least :data:`_SPECIALISED_COUNT`, so the specialised
-            tail fits; the default is the five hundred AAP 0.14.2 measures.
-
-    Returns:
-        The records, sorted by node id, which is the order
-        :func:`foundry.reporting.html.build_context` sorts them into anyway.
-
-    Raises:
-        ValueError: ``count`` is smaller than the specialised tail, which could not hold the mix.
+    ``count`` must be at least :data:`_SPECIALISED_COUNT` so the specialised tail fits, which is
+    also why the default is the five hundred AAP 0.14.2 measures.
     """
     if count < _SPECIALISED_COUNT:
         raise ValueError(
@@ -355,14 +254,8 @@ def build_records(count: int = RECORD_COUNT) -> tuple[ResultRecord, ...]:
 def _template_from_checkout(repo_root: Path) -> Path:
     """Return the checkout's report template, asserting it is present and non-empty first.
 
-    A template that is missing or empty must fail loudly *before* the timer starts: a render that
-    returned early would otherwise read as a fast one.
-
-    Args:
-        repo_root: The repository root, from the session fixture of the same name.
-
-    Returns:
-        The template's path.
+    A missing or empty template must fail loudly before the timer starts: a render that returned
+    early would otherwise read as a fast one.
     """
     template = repo_root / TEMPLATE_RELATIVE_PATH
     assert template.is_file(), f"the report template is missing: {template}"
@@ -375,11 +268,7 @@ def _template_from_checkout(repo_root: Path) -> Path:
 
 
 def _assets_from_package() -> AssetsBundle:
-    """Return the shipped asset bundle, asserting both payloads are non-empty first.
-
-    Returns:
-        :data:`foundry.reporting.assets.DEFAULT_ASSETS`, the bundle every run renders with.
-    """
+    """Return the shipped asset bundle, asserting both payloads are non-empty first."""
     assets = DEFAULT_ASSETS
     assert assets.css.strip(), "the shipped stylesheet is empty"
     assert assets.js.strip(), "the shipped script is empty"
@@ -390,17 +279,9 @@ def _assets_from_package() -> AssetsBundle:
 def _render_report(template: Path, records: tuple[ResultRecord, ...]) -> str:
     """Render ``records`` through the production renderer and return the document.
 
-    This is the call ``src/foundry/plugin.py`` makes at session finish (AAP 0.7.1), with the run
-    directory and the report directory supplied as a real run supplies them; the renderer's
-    documented fallback is unchanged -- a template fault yields ``None`` and one ``WARNING``, which
-    this helper turns into a failure rather than letting it pass as a fast render.
-
-    Args:
-        template: The template file to render through.
-        records: The result records to render.
-
-    Returns:
-        The complete text of ``report.html``.
+    This is the call session finish makes (AAP 0.7.1). The renderer's documented fallback -- a
+    template fault yields ``None`` and one ``WARNING`` -- becomes a failure here, never a fast
+    render.
     """
     document = render(
         records,
@@ -417,25 +298,12 @@ def _render_report(template: Path, records: tuple[ResultRecord, ...]) -> str:
 
 
 def _rendered_nodeid(nodeid: str) -> str:
-    """Return the text a node id is expected to reach the document as.
-
-    Args:
-        nodeid: A record's node id.
-
-    Returns:
-        The node id with :data:`MARKUP_PAYLOAD` replaced by its escaped form, which is what
-        ``autoescape=True`` renders; every other node id is returned unchanged.
-    """
+    """Return the text a node id reaches the document as: its markup payload escaped."""
     return nodeid.replace(MARKUP_PAYLOAD, ESCAPED_MARKUP_PAYLOAD)
 
 
 def _assert_every_nodeid_present(document: str, records: tuple[ResultRecord, ...]) -> None:
-    """Assert every record's node id reached the document, escaped where it carries markup.
-
-    Args:
-        document: The rendered report.
-        records: The records that were rendered.
-    """
+    """Assert every record's node id reached the document, escaped where it carries markup."""
     missing = [
         record.nodeid for record in records if _rendered_nodeid(record.nodeid) not in document
     ]
@@ -448,12 +316,7 @@ def _assert_every_nodeid_present(document: str, records: tuple[ResultRecord, ...
 def _assert_self_contained(document: str) -> None:
     """Assert the document pulls nothing in from outside itself (criterion 9).
 
-    Only asset-bearing attributes are inspected, because a failure message may legitimately quote
-    a URL. :func:`foundry.reporting.html.render` refuses a document whose attributes point outside
-    it before returning one, so this is the independent whole-document cross-check of that guard.
-
-    Args:
-        document: The rendered report.
+    Only asset-bearing attributes are inspected, because a failure message may quote a URL.
     """
     for scheme in _ABSOLUTE_SCHEMES:
         for attribute in ("src", "href"):
@@ -470,11 +333,7 @@ def _assert_self_contained(document: str) -> None:
 
 
 def test_the_template_carries_the_markup_this_module_counts(repo_root: Path) -> None:
-    """The row marker and the sections the cost assertions count are present in the template.
-
-    This pins the basis of the row count: if a template change renames the per-row cell, the cost
-    test would count zero rows and say the wrong thing, so the basis is asserted on its own.
-    """
+    """The row marker and the sections the cost assertions count are present in the template."""
     source = _template_from_checkout(repo_root).read_text(encoding="utf-8")
     assert ROW_CELL in source, f"the template no longer emits {ROW_CELL!r} per result row"
     assert 'class="quarantined"' in source, "the template lost its Quarantined section"
@@ -483,12 +342,7 @@ def test_the_template_carries_the_markup_this_module_counts(repo_root: Path) -> 
 
 
 def test_five_hundred_records_render_inside_the_two_second_budget(repo_root: Path) -> None:
-    """Five hundred result records render in at most the AAP 0.14.2 budget of two seconds.
-
-    The render is the production path, so the measurement includes reading the template and
-    building the Jinja2 environment with ``autoescape=True``. The content assertions follow the
-    budget so that a renderer returning a stub cannot pass on time alone.
-    """
+    """Five hundred result records render in at most the AAP 0.14.2 budget of two seconds."""
     template = _template_from_checkout(repo_root)
     records = build_records()
     assert len(records) == RECORD_COUNT, f"the record set holds {len(records)} records"
@@ -531,12 +385,7 @@ def test_five_hundred_records_render_inside_the_two_second_budget(repo_root: Pat
 
 
 def test_one_record_set_renders_identically_twice(repo_root: Path) -> None:
-    """Two renders of one record set are byte-identical, and input order changes nothing.
-
-    Reversing the input proves the determinism is the renderer's -- every collection it iterates is
-    sorted before it reaches the template -- rather than an accident of the order this module
-    happens to build in (AAP 0.13.1, criterion 14).
-    """
+    """Two renders of one record set are byte-identical, and input order changes nothing."""
     template = _template_from_checkout(repo_root)
     records = build_records()
 
@@ -551,11 +400,7 @@ def test_one_record_set_renders_identically_twice(repo_root: Path) -> None:
 
 
 def test_the_marked_nodeid_reaches_the_page_escaped(repo_root: Path) -> None:
-    """The node id carrying a script payload is escaped in the timed renderer's output.
-
-    This is the autoescape proof for the document the budget measures: the renderer's environment
-    is built with ``autoescape=True`` (AAP 0.7.4), so markup in a node id renders as text.
-    """
+    """The node id carrying a script payload is escaped in the timed renderer's output."""
     document = _render_report(_template_from_checkout(repo_root), build_records())
     marked = next(record.nodeid for record in build_records() if MARKUP_PAYLOAD in record.nodeid)
     assert ESCAPED_MARKUP_PAYLOAD in document, f"the escaped node id is absent: {marked!r}"

@@ -1,41 +1,32 @@
 """Unit tests for the ``foundry.contract`` capability package.
 
-One module pins the whole contract of loading a JSON Schema document, validating an instance
-against it and reporting the violation Foundry chooses (AAP 0.3.2, AAP 0.4.3, AAP 0.4.7, AAP 0.4.8,
-AAP 0.7.1):
+One module pins the whole contract of loading a JSON Schema document, validating an instance against
+it and reporting the violation Foundry chooses (AAP 0.3.2, 0.4.3, 0.4.7, 0.4.8, 0.7.1):
 
 * ``load_schema`` accepts a mapping in memory, a ``.json`` path and a ``.yaml``/``.yml`` path, and
   refuses a missing file, an unsupported extension, a non-object document and a reference that would
   make a validator retrieve another document -- each as a ``ContractError``, never as the builtin
   the standard library raised.
 * ``validate_instance`` raises, ``find_violation`` returns and ``iter_violations`` enumerates, all
-  through one walk, so the validators the two committed fixture schemas exercise -- required, type,
-  pattern, enum, minimum, an array element and ``additionalProperties`` -- are proven rather than
-  sampled.
+  through one walk, so every validator the two committed fixture schemas exercise is proven.
 * The reported violation is Foundry's own choice, never the library's: shallowest JSON path first,
-  then the path structurally, then the message. Every ordering test therefore hands
+  then the path structurally, then the message. Each ordering test therefore hands
   ``first_violation`` the library's errors in an order that contradicts that rule, which is what
   makes the assertions able to fail.
 * Rendering and excerpts redact on the way out, so a secret a validator message quotes, or one a
   non-JSON body carries, reaches no message, no detail and no JSON dump.
 
 Two expectations differ from the brief this file was written against, the modules on disk being
-authoritative (AAP 0.7.1, AAP 0.4.7):
+authoritative (AAP 0.7.1, AAP 0.4.7): ``load_schema`` is a loader, not a metaschema check, so
+``tests/fixtures/invalid_schema.json`` loads as the mapping it is and the ``ContractError`` comes
+from the first validation; and ``excerpt`` appends its ``...`` marker after cutting the body to
+``MAX_EXCERPT_BYTES``, so the budget is asserted with the marker, never against the bare constant.
 
-* ``load_schema`` is a loader, not a metaschema check: ``tests/fixtures/invalid_schema.json``
-  (``{"type": 42}``) loads as the mapping it is, and the ``ContractError`` the brief asks of that
-  fixture comes from the first validation, where the metaschema check refuses it. Both halves are
-  asserted, so the split is pinned rather than assumed.
-* ``excerpt`` appends its ``...`` marker after it has cut the body to ``MAX_EXCERPT_BYTES``, so a
-  truncated excerpt occupies at most ``MAX_EXCERPT_BYTES + len("...")`` bytes; the budget is
-  asserted with the marker, never against the bare constant.
-
-Determinism and isolation (AAP 0.14.3): every schema and body is built in ``tmp_path``, the three
-committed fixtures are only read, nothing sleeps, no wall-clock value is asserted and no socket is
-opened -- the remote-reference test closes the two name-resolution seams, so a retrieval attempt
-fails the test rather than leaving the process. The single subprocess is the sanctioned lazy-import
-probe (implicit requirement I5): importing ``foundry.contract`` pulls in neither ``jsonschema`` nor
-``yaml``, which is what keeps its work off the plugin's startup path.
+Determinism and isolation (AAP 0.14.3): every schema and body is built in ``tmp_path``, the
+committed fixtures are only read, nothing sleeps and no socket is opened -- the remote-reference
+test closes the two name-resolution seams. The single subprocess is the sanctioned lazy-import probe
+(implicit requirement I5): importing ``foundry.contract`` pulls in neither ``jsonschema`` nor
+``yaml``.
 """
 
 from __future__ import annotations
@@ -619,13 +610,7 @@ def test_excerpt_accepts_bytes_and_honours_an_explicit_budget() -> None:
 def test_importing_the_package_pulls_in_neither_jsonschema_nor_yaml(
     repo_root: Path, foundry_python: str, subprocess_env: Callable[..., dict[str, str]]
 ) -> None:
-    """A fresh interpreter imports the package and reports what came with it (AAP 0.4.8).
-
-    ``jsonschema`` and ``yaml`` are the two heavy third-party imports this package needs, and both
-    sit inside the functions that use them, which is what keeps them off the plugin's startup path
-    (implicit requirement I5). ``PYTHONPATH`` names ``src`` so the probe measures this checkout,
-    and it is the only subprocess this module starts.
-    """
+    """A fresh interpreter imports the package and reports what came with it (AAP 0.4.8)."""
     probe = (
         "import sys, foundry.contract; print('jsonschema' in sys.modules, 'yaml' in sys.modules)"
     )

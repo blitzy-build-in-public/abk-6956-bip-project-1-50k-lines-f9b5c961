@@ -1,27 +1,20 @@
 """The tree-wide proof that nothing waits on real time and nothing reads a raw clock.
 
 **The sleep cap.** AAP 0.14.2 permits at most 100 ms per sleep inside ``tests/`` and ``examples/``,
-and AAP 0.14.3 makes "no sleeps beyond 100 ms" a mechanism rather than a promise: a suite that waits
-on real time is slow, flaky under ``-n auto`` and unable to prove the wall-clock ratio the sharding
-criterion asserts. A computed delay is refused too, because nothing can bound it; the one exemption
-is the body of a fake-sleep helper, which is how a retry or poll test hands a recording callable to
-the code under test instead of spending the time.
+and AAP 0.14.3 makes that a mechanism rather than a promise. A computed delay is refused too, since
+nothing can bound it; the one exemption is the body of a fake-sleep helper, which is how a retry or
+poll test hands a recording callable to the code under test instead of spending the time.
 
-**The raw wall clock.** AAP 0.14.3 also rules out wall-clock, locale and filesystem-case
-dependence, and ``src/foundry`` keeps that promise by routing every timestamp through
-``foundry.core.ids.utc_now``. A second raw read would make a run's output depend on when it ran, so
-the producers that legitimately stamp a value are listed by hand with the AAP clause that requires
-each one: widening the exemption edits a constant a reviewer reads, never a pattern.
+**The raw wall clock.** ``src/foundry`` routes every timestamp through
+``foundry.core.ids.utc_now``, and the producers that legitimately stamp a value are listed by hand
+with the AAP clause that requires each one, so widening the exemption edits a constant a reviewer
+reads, never a pattern.
 
-Both scans are structural. Every module is parsed with :mod:`ast` and its imports, aliases and
+Both scans are structural: every module is parsed with :mod:`ast` and its imports, aliases and
 enclosing functions resolved, so a docstring naming the forbidden call is not a finding while the
-call itself is -- which matters, because this module lives inside the tree it scans. A ``sleep=``
-keyword handed to a poller is a value reference, never a call: ``eventually`` and ``foundry_poll``
-are built on that hand-off (AAP 0.4.3). Computed arguments, aliases rebound after their first
-binding and code inside a string stay out of reach, as in ``tests/unit/test_no_unsafe_parsing.py``.
-
-Every hit is reported with its path, line and offending argument, sorted, so two runs read
-identically. Synthetic trees are built in ``tmp_path`` and the repository is only read.
+call itself is -- which is why this module can live inside the tree it scans. A ``sleep=`` keyword
+handed to a poller is a value reference, never a call (AAP 0.4.3). Every hit is reported with its
+path, line and argument, sorted, so two runs read identically.
 """
 
 from __future__ import annotations
@@ -124,11 +117,7 @@ _SLEEP_IMPORT: Final[str] = f"from {_TIME_MODULE} import {_SLEEP_ATTRIBUTE}"
 
 @dataclass(frozen=True, order=True)
 class SleepHit:
-    """One sleep that breaks the cap: where it is and the argument that breaks it.
-
-    The field order is the sort order -- path, then line, then argument -- so a report of several
-    hits reads the same way on every run.
-    """
+    """One sleep that breaks the cap: where it is and the argument that breaks it."""
 
     path: str
     line: int
@@ -137,10 +126,10 @@ class SleepHit:
 
 @dataclass(frozen=True, order=True)
 class ClockHit:
-    """One raw wall-clock read: where it is, which callable, and whether it is called or passed.
+    """One raw wall-clock read: where, which callable, and whether it is called or passed.
 
-    ``form`` distinguishes a call from a bare reference such as ``clock = datetime.now``, which
-    reads the clock just as surely once someone invokes it.
+    A bare reference such as ``clock = datetime.now`` reads the clock once invoked, so ``form``
+    distinguishes it from a call.
     """
 
     path: str
@@ -171,9 +160,8 @@ def _in_cache_directory(path: Path, root: Path) -> bool:
 def _scanned_files(root: Path, relatives: Sequence[str]) -> tuple[Path, ...]:
     """Return every Python module under ``relatives``, sorted, with cache directories skipped.
 
-    A path is taken only when it is a real file inside ``root``. A walk that followed a link out of
-    the repository would report on -- and read -- a file the project does not own, so a path that
-    resolves elsewhere and a symlink are both dropped before anything is opened.
+    Only a real file inside ``root`` is taken: a walk that followed a link out of the repository
+    would report on a file the project does not own.
     """
     files: list[Path] = []
     for relative in relatives:
@@ -193,8 +181,7 @@ def _walk_scoped(
 ) -> Iterator[tuple[ast.AST, tuple[str, ...]]]:
     """Yield ``node`` and every descendant with the tuple of function names enclosing it.
 
-    The stack answers the sleep scanner's one contextual question: is this call inside a fake-sleep
-    helper? It is a tuple, so an iterator that outlives its frame cannot see a later sibling's name.
+    A tuple, so an iterator that outlives its frame cannot see a later sibling's name.
     """
     yield node, functions
     inner = functions
@@ -207,9 +194,8 @@ def _walk_scoped(
 def _module_bindings(tree: ast.AST) -> tuple[Mapping[str, str], Mapping[str, str]]:
     """Return the names ``tree`` binds to imported modules and to imported callables.
 
-    ``import time as t`` records ``t -> time`` and ``from time import sleep as pause`` records
-    ``pause -> time.sleep``. Only a name's first binding is recorded, so a rebound alias stays out
-    of reach, as the module docstring says.
+    ``import time as t`` records ``t -> time``; only a name's first binding is recorded, so a
+    rebound alias stays out of reach.
     """
     modules: dict[str, str] = {}
     callables: dict[str, str] = {}
@@ -231,8 +217,7 @@ def _resolve(
     """Return the dotted callable ``node`` denotes, or ``None`` for anything else.
 
     A name resolves through the binding maps and an attribute chain against its base, so
-    ``dt.datetime.now`` behind ``import datetime as dt`` reaches ``datetime.datetime.now``, while a
-    computed attribute name resolves to ``None`` and stays out of the report.
+    ``dt.datetime.now`` reaches ``datetime.datetime.now``.
     """
     if isinstance(node, ast.Name):
         return callables.get(node.id) or modules.get(node.id)
@@ -250,8 +235,8 @@ def _computed_argument(source: str, functions: Sequence[str]) -> str | None:
 def _delay_seconds(node: ast.expr) -> float | None:
     """Return the seconds a literal delay states, or ``None`` when it states no number.
 
-    A signed numeric literal counts as the literal it is -- ``-5`` waits for nothing -- while a
-    string constant, a boolean and a computed expression state no number at all.
+    A signed literal counts as the literal it is; a string, a boolean and a computed expression
+    state no number, so nothing can bound them.
     """
     if isinstance(node, ast.Constant):
         value = node.value
@@ -273,9 +258,9 @@ def _delay_seconds(node: ast.expr) -> float | None:
 def _sleep_argument(call: ast.Call, functions: Sequence[str]) -> str | None:
     """Return the source of the argument that breaks the cap, or ``None`` when the call complies.
 
-    Zero arguments comply, as does a literal delay at or below the cap. A literal above the cap and
-    a literal that states no number at all are findings, and so is a computed argument -- except
-    inside a fake-sleep helper, whose body is exactly where a computed delay belongs.
+    Zero arguments and a literal at or below the cap comply. A literal above the cap, a literal
+    stating no number and a computed argument are findings -- except inside a fake-sleep helper,
+    whose body is exactly where a computed delay belongs.
     """
     if any(keyword.arg is None for keyword in call.keywords):
         return _computed_argument("<** expansion>", functions)
@@ -335,8 +320,7 @@ def _scan_sleep_tree(root: Path) -> tuple[SleepHit, ...]:
 def _sleep_callable_handoffs(root: Path) -> tuple[str, ...]:
     """Return the files under :data:`_SLEEP_ROOTS` that pass a callable as a ``sleep=`` keyword.
 
-    This is what makes the negative control meaningful on the real tree: the scan's silence there is
-    only evidence if the shape it must not flag is actually present in it.
+    The scan's silence on the real tree is only evidence if the shape it must not flag is present.
     """
     files: list[str] = []
     for path in _scanned_files(root, _SLEEP_ROOTS):
@@ -353,9 +337,8 @@ def _sleep_callable_handoffs(root: Path) -> tuple[str, ...]:
 def _scan_clock_source(source: str, display: str) -> tuple[ClockHit, ...]:
     """Return every raw wall-clock read in ``source``, sorted and de-duplicated.
 
-    A call is found through the callee; a bare reference is an attribute that resolves to one of the
-    patrolled callables without being some call's callee, so ``clock = datetime.now`` is reported
-    alongside ``datetime.now()``.
+    A bare reference resolves to one of the patrolled callables without being some call's callee, so
+    ``clock = datetime.now`` is reported alongside ``datetime.now()``.
     """
     tree = ast.parse(source, filename=display)
     modules, callables = _module_bindings(tree)
@@ -401,10 +384,7 @@ def _format_clock_hits(hits: Sequence[ClockHit]) -> str:
 
 
 def test_the_test_and_example_trees_stay_under_the_sleep_cap(repo_root: Path) -> None:
-    """No test and no example sleeps longer than the cap (AAP 0.14.2, AAP 0.14.3).
-
-    One failure names every offending call, not the first: a review fixes the tree in one pass.
-    """
+    """No test and no example sleeps longer than the cap (AAP 0.14.2, AAP 0.14.3)."""
     hits = _scan_sleep_tree(repo_root)
     assert hits == (), _format_sleep_hits(hits)
 
@@ -419,11 +399,7 @@ def test_the_sleep_scan_reaches_the_known_anchors(repo_root: Path) -> None:
 
 
 def test_the_tree_hands_a_sleep_callable_over_without_calling_it(repo_root: Path) -> None:
-    """The shape the scan must stay silent about is present in the tree, not hypothetical.
-
-    ``eventually`` and ``foundry_poll`` take their sleeper as a ``sleep=`` keyword (AAP 0.4.3), and
-    a scan that flagged the hand-off would refuse the mechanism the cap is built on.
-    """
+    """The shape the scan must stay silent about is present in the tree, not hypothetical."""
     handoffs = _sleep_callable_handoffs(repo_root)
     assert handoffs, "no sleep= hand-off under tests/ or examples/; the negative control is vacuous"
 
@@ -501,12 +477,7 @@ def test_the_sleep_scan_reports_every_offender(tmp_path: Path) -> None:
 def test_every_sleep_shape_is_classified(
     tmp_path: Path, source: str, expected: tuple[str, ...]
 ) -> None:
-    """Each import form, each literal and an unrelated ``sleep`` method are classified as fixed.
-
-    A negative literal such as ``-5`` waits for nothing, so the sign is read as part of the literal;
-    a string constant states no delay the policy can compare, so it is refused; and an object's own
-    ``sleep`` method has nothing to do with the module the cap governs.
-    """
+    """Each import form, each literal and an unrelated ``sleep`` method are classified as fixed."""
     _write(tmp_path, "tests/unit/test_shapes.py", *source.splitlines())
     assert tuple(hit.argument for hit in _scan_sleep_tree(tmp_path)) == expected
 
@@ -536,11 +507,7 @@ def test_every_sleep_shape_is_classified(
 def test_a_computed_delay_is_refused_outside_a_fake_sleep_helper(
     tmp_path: Path, source: str, expected: tuple[str, ...]
 ) -> None:
-    """The exemption belongs to the helper's own body -- and to a computed delay alone.
-
-    A nested function inside the helper is a new scope and answers to nothing, and a literal above
-    the cap is a real wait however the helper is named.
-    """
+    """The exemption belongs to the helper's own body -- and to a computed delay alone."""
     _write(tmp_path, "tests/unit/test_delay.py", *source.splitlines())
     assert tuple(hit.argument for hit in _scan_sleep_tree(tmp_path)) == expected
 
@@ -562,11 +529,7 @@ def test_a_sleep_keyword_is_a_value_reference_not_a_call(tmp_path: Path) -> None
 
 
 def test_a_mention_in_prose_is_not_a_finding(tmp_path: Path) -> None:
-    """A docstring, a string constant or a comment naming either pattern is not a call.
-
-    This is the property a structural scan has and a text grep does not, and the reason this module
-    can live inside the tree it polices without exempting itself from it.
-    """
+    """A docstring, a string constant or a comment naming either pattern is not a call."""
     _write(
         tmp_path,
         "examples/checkout/test_prose.py",
@@ -607,11 +570,7 @@ def test_the_wall_clock_scan_reaches_the_core_modules(repo_root: Path) -> None:
 
 
 def test_the_wall_clock_allowlist_is_the_reviewed_producer_set(repo_root: Path) -> None:
-    """The exemption is the eight documented modules, each of which exists in the tree.
-
-    The count assertion is the point: adding a producer is a reviewable edit to this constant, and a
-    path that no longer exists is a stale entry that would silently excuse nothing.
-    """
+    """The exemption is the eight documented modules, each of which exists in the tree."""
     assert len(_WALL_CLOCK_PRODUCERS) == _REVIEWED_PRODUCER_COUNT
     for relative in sorted(_WALL_CLOCK_PRODUCERS):
         assert relative.startswith(f"{_SOURCE_ROOT}/"), relative

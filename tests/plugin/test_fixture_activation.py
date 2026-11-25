@@ -1,38 +1,24 @@
 """A real pytest session activates the delivered fixtures through a ``pytest_plugins`` declaration.
 
-AAP 0.4.3's fixture table is the compatibility promise, and AAP 0.14.1 asks for a test that reaches
-each public fixture name through the real entry point rather than by calling its function. This
-module is that entry point: it writes a throwaway project, declares the eight fixture modules in
-its ``conftest.py`` exactly as a consuming project does, and runs pytest over a test module that
-requests all ten fixtures. The child run asserts what a consuming suite depends on:
+AAP 0.4.3's fixture table is the compatibility promise, and AAP 0.14.1 asks for a test that
+reaches each public fixture name through the real entry point rather than by calling its function.
+This module is that entry point: it writes a throwaway project, declares the eight fixture modules
+in its ``conftest.py`` as a consuming project does, and runs pytest over a test module that
+requests all ten fixtures. The child run asserts that every one of the ten names resolves in a
+session that started from nothing but that list -- no configuration, and no plugin loaded from the
+``pytest11`` entry point of AAP 0.4.2 -- and that the four session-scoped fixtures hand two
+consecutive tests the same object while the six function-scoped ones hand each test a fresh one,
+which is the scope column observed rather than read.
 
-* every one of the ten names resolves in a session that started from nothing but that
-  ``pytest_plugins`` list -- no configuration, and no plugin loaded from the ``pytest11`` entry
-  point of AAP 0.4.2;
-* the four session-scoped fixtures (``foundry_config``, ``foundry_profile``, ``foundry_run_id`` and
-  ``foundry_artifacts``) hand two consecutive tests the same object, and the six function-scoped
-  ones hand each test a fresh object, which is the scope column observed rather than read.
+Both children run with ``PYTEST_DISABLE_PLUGIN_AUTOLOAD`` set, so what they prove is the
+``pytest_plugins`` declaration path alone; autoloading is what an installed consuming environment
+relies on, and AAP 0.14.1's zero-config test proves that. The child records two facts a green run
+would not show -- that no plugin named ``foundry`` is loaded, and the module it imported, compared
+with ``foundry.__file__`` -- so no substituted copy can stand in. A second child declares nothing
+and requests one fixture, which must then be unresolvable.
 
-Both children run with ``PYTEST_DISABLE_PLUGIN_AUTOLOAD`` set, so they deliberately autoload
-nothing and what they prove is the ``pytest_plugins`` declaration path alone -- the same result in a
-source checkout and in an environment that installed the distribution and therefore publishes
-``foundry = "foundry.plugin"``. Autoloading is what an installed consuming environment relies on,
-and it is AAP 0.14.1's zero-config test that proves it, not this module. The child records the one
-fact a green run alone would not show -- that no plugin named ``foundry`` is loaded -- so the
-declaration is demonstrably what registered the fixtures.
-
-The child also records the module it imported, and the parent compares that path with
-``foundry.__file__`` resolved: both are the package the run actually uses, so no substituted copy
-can stand in, in a source checkout and in an installed environment alike. Those values are held in
-the child and compared with ``is``, because a released object's address, and so its ``id()``, can be
-handed straight to the next one.
-
-A second child run declares nothing and requests one fixture, which must then be unresolvable: the
-green run above cannot be a run in which fixtures resolve by accident.
-
-``foundry_http`` and ``foundry_api`` are deliberately absent: ``src/foundry/fixtures/http.py``,
-``api.py`` and ``plugin.py`` are sibling deliverables still in flight, and those two fixtures land
-with their modules. Nothing here requests or names them.
+``foundry_http`` and ``foundry_api`` are deliberately absent: their modules are sibling deliverables
+still in flight. Nothing here requests or names them.
 """
 
 from __future__ import annotations

@@ -1,39 +1,30 @@
 """Unit tests for the ``foundry.data`` package: the four loaders, the case model, the matrix
 expander, the stable case ids, the schema gate and the extension registry.
 
-A data-driven test is only as trustworthy as the collection it was planned from, so this module
-pins the properties a regression would break rather than the implementation that provides them
-today: the four format readers over one shared data set produce the same cases, a case carries the
-location it was read from, a matrix expands to one deterministic cross-product, a case id derives
-from the file and a position alone so every shard agrees (implicit requirement I6), a rejected row
-is reported with its file, line and column (AAP 0.4.7), the registry serves exactly five suffixes
-and lists them when asked for another (AAP 0.3.2), and a file that parses to no data rows becomes
-the documented skip rather than a collection error (AAP 0.4.7).
+A data-driven test is only as trustworthy as the collection it was planned from, so this module pins
+the properties a regression would break rather than the implementation that provides them: the four
+format readers over one shared data set produce the same cases, a case carries the location it was
+read from, a matrix expands to one deterministic cross-product, a case id derives from the file and
+a position alone so every shard agrees (implicit requirement I6), a rejected row is reported with
+its file, line and column (AAP 0.4.7), the registry serves exactly five suffixes, and a file that
+parses to no data rows becomes the documented skip rather than a collection error.
 
-Everything here is driven through the package's public surface -- the ``foundry.data`` barrel and
-the two ``foundry.core`` modules the ids delegate to -- because that is what
-``foundry.plugin``'s ``pytest_generate_tests`` delegation and the ``foundry_data`` fixture call.
-``foundry.reporting`` and ``foundry.cli`` are never imported: ``foundry.data`` may not depend on
-them (AAP 0.4.8), and a test that reached them would hide the break.
+Everything is driven through the package's public surface -- the ``foundry.data`` barrel and the two
+``foundry.core`` modules the ids delegate to -- because that is what ``foundry.plugin``'s
+``pytest_generate_tests`` delegation and the ``foundry_data`` fixture call. ``foundry.reporting``
+and ``foundry.cli`` are never imported: ``foundry.data`` may not depend on them (AAP 0.4.8).
 
-Four expectations follow the modules on disk rather than the brief this file was first written
-against, because the module is authoritative (AAP 0.7.2, AAP 0.4.7):
-
-* A *ragged* row -- one carrying fewer values than the header declares -- is reported with its line
-  and the first header column it never filled, so a width fault names a column too (AAP 0.4.7); a
-  row longer than the header has no absent column and keeps ``column=None``. The schema-driven
-  ``required``-column case is proven separately against a ``tmp_path`` copy of the row schema, where
-  the *header* is the part that omits the required column.
-* The JSON and YAML readers document ``line=None`` on every row, since a parsed document has no
-  per-element line notion; the case id then comes from ``row_index``. Only CSV and JSON Lines
-  report a physical line, and both are asserted against the line that really holds the record.
-* The skip an empty data file produces is built by :func:`foundry.data.build_parameters` and bound
-  by :func:`foundry.data.parametrize`, so one test pins the parameter and another the binding.
-* A matrix axis value is rendered as canonical JSON, which is what keeps ``1`` and ``"1"`` distinct.
+Four expectations follow the modules on disk rather than the brief this file was written against
+(AAP 0.7.2, AAP 0.4.7): a ragged row is reported with its line and the first header column it never
+filled, while a row longer than the header keeps ``column=None``; a parsed JSON or YAML document
+reports ``line=None`` on every row, so only CSV and JSON Lines name a physical line, and the case id
+then comes from ``row_index``; the skip an empty file produces is built by
+``foundry.data.build_parameters`` and bound by ``foundry.data.parametrize``, so one test pins each
+half; and a matrix axis value is rendered as canonical JSON, which keeps ``1`` and ``"1"`` distinct.
 
 Determinism (AAP 0.14.3): the committed fixtures under ``tests/fixtures`` are only ever read, every
-file this module writes lives under ``tmp_path``, no wall-clock value is asserted, no sleep is
-introduced and no socket is opened.
+file this module writes lives under ``tmp_path``, no wall-clock value is asserted and no socket is
+opened.
 """
 
 from __future__ import annotations
@@ -171,12 +162,7 @@ def test_each_loader_yields_every_data_row(name: str, fixtures_dir: Path) -> Non
 def test_the_four_loaders_agree_on_ids_and_values(
     cases_by_format: Mapping[str, CaseSet],
 ) -> None:
-    """Every format yields the same sorted id tuple, and the same values case for case.
-
-    Values are compared as dicts rather than as ordered tuples because the readers differ in
-    column order by design -- CSV and YAML keep the header's order, JSON and JSON Lines keep the
-    document's key order -- and a dropped or reordered *cell* is what this is here to catch.
-    """
+    """Every format yields the same sorted id tuple, and the same values case for case."""
     id_tuples = {
         name: tuple(sorted(case.id for case in case_set))
         for name, case_set in cases_by_format.items()
@@ -248,11 +234,7 @@ def test_jsonl_rows_report_the_physical_line_they_start_on(fixtures_dir: Path) -
 
 @pytest.mark.parametrize("name", ["cases.json", "cases.yaml"])
 def test_parsed_documents_report_no_line_but_a_row_index(name: str, fixtures_dir: Path) -> None:
-    """JSON and YAML document ``line=None``, because a parsed document has no per-row line.
-
-    The readers record that honestly rather than inventing a line, and the case id then comes from
-    ``row_index``, which every reader populates (AAP 0.7.2).
-    """
+    """JSON and YAML document ``line=None``, because a parsed document has no per-row line."""
     case_set = load_cases(fixtures_dir / name)
     assert [case.row_index for case in case_set.cases] == list(range(ROWS_PER_TABLE))
     assert {case.line for case in case_set.cases} == {None}
@@ -475,13 +457,7 @@ def test_tolerant_mode_loads_the_same_file_and_drops_the_extra_column(
 
 
 def test_a_ragged_row_reports_its_line_and_its_missing_column(fixtures_dir: Path) -> None:
-    """AAP 0.4.7's missing-required-column state, demonstrated by a committed fixture.
-
-    ``missing_column.csv``'s third line stops after ``unit_price``, so the header's trailing
-    ``expected_total`` is the column the row never filled: the collection error names the file, the
-    line number and that column, which is AAP 0.4.7's "data row missing a required column" ->
-    "collection error naming file, line number and column".
-    """
+    """AAP 0.4.7's missing-required-column state, demonstrated by a committed fixture."""
     path = fixtures_dir / "missing_column.csv"
     with pytest.raises(DataError) as excinfo:
         load_cases(path)
@@ -579,12 +555,7 @@ def test_parametrize_binds_every_case_to_the_named_argument(fixtures_dir: Path) 
 
 
 def test_the_yaml_loader_names_safe_load_and_no_other_loader() -> None:
-    """The YAML reader reaches PyYAML only through ``yaml.safe_load`` (AAP 0.14.3).
-
-    This is the loader's own contract, checked on the module object so a reader that swapped the
-    loader is caught wherever it lives; the tree-wide scan for unchecked deserialisation belongs to
-    ``tests/unit/test_no_unsafe_parsing.py``.
-    """
+    """The YAML reader reaches PyYAML only through ``yaml.safe_load`` (AAP 0.14.3)."""
     source = inspect.getsource(yaml_loader)
     assert "yaml.safe_load(" in source
     assert "yaml.load(" not in source

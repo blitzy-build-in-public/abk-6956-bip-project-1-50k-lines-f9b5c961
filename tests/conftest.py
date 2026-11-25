@@ -1,28 +1,17 @@
 """Shared fixtures and process-wide guards for Foundry's own test suite.
 
-This is the only module the plan places directly under ``tests/`` (AAP 0.8.1 tree, AAP 0.8.2
-"Self-test suite", AAP 0.10.1), and it carries three jobs.
+The only module the plan places directly under ``tests/`` (AAP 0.8.1, 0.8.2 "Self-test suite",
+0.10.1). It carries three jobs: the ``pytest_plugins`` declaration, which only the top-level
+conftest of the test tree may make; session environment pinning at import -- ``TZ``, ``LC_ALL``,
+``LANG``, the ``PYTEST_ADDOPTS`` deletion and ``locale.setlocale`` -- so no assertion here depends
+on the host's clock, its locale or the outer invocation's options; and the shared fixtures plus the
+loopback-only socket guard, the suite-wide half of the offline control in AAP 0.14.3.
 
-**pytester activation.** ``pytest_plugins`` must be declared by the top-level conftest of the test
-tree, so the declaration lives here and nowhere below ``tests/``.
-
-**Session environment pinning.** ``TZ``, ``LC_ALL``, ``LANG`` and the ``PYTEST_ADDOPTS`` deletion
-run at import, before any test module is imported, and ``locale.setlocale`` puts this interpreter's
-own locale categories in ``C`` as well, the same pins ``subprocess_env`` gives every child: no
-assertion in this suite may depend on the host's clock, its locale, or the options the outer
-invocation happened to be given.
-
-**Shared fixtures and the loopback-only socket guard.** The guard installed at import is the
-suite-wide half of the offline control in AAP 0.14.3: ``connect``, ``connect_ex``,
-``getaddrinfo`` and the datagram sends ``sendto`` and ``sendmsg`` all pass through it, which allows
-``127.0.0.0/8`` and ``::1``, counts every other target and refuses it before the syscall runs. Its
-counters are published in the protocol ``foundry.diagnostics.socket_guard`` reads, and to the
-``socket_guard`` fixture, which ``tests/e2e/test_offline.py`` uses to prove a run of its own adds
-no refusal.
-
-The guard patches this interpreter only. A socket opened by a child process is invisible to it, so
-the end-to-end tests isolate their children with the flags those children are given (``--no-index``,
-``uv --offline``) rather than with this guard.
+The guard polices ``connect``, ``connect_ex``, ``getaddrinfo``, ``sendto`` and ``sendmsg``, allowing
+``127.0.0.0/8`` and ``::1`` and refusing every other target before the syscall; its counters are
+published in the protocol ``foundry.diagnostics.socket_guard`` reads and to the ``socket_guard``
+fixture. It patches this interpreter only, so the end-to-end tests isolate their children with the
+flags those children are given (``--no-index``, ``uv --offline``) rather than with this guard.
 """
 
 from __future__ import annotations
@@ -91,15 +80,9 @@ _OFFLINE_RULE: Final[str] = "AAP 0.14.3"
 class SocketGuardSnapshot:
     """An immutable reading of the guard's counters and violations.
 
-    A test that provokes a refusal on purpose takes one of these first and hands it back to
+    A test that provokes a refusal on purpose takes one first and hands it back to
     :meth:`SocketGuardState.restore` in its teardown, so the count the offline proof reads is the
-    one the session had before that test ran. The default instance is the zero reading
-    :meth:`SocketGuardState.reset` restores.
-
-    Attributes:
-        loopback_attempts: The allowed loopback count at the moment of the reading.
-        non_loopback_attempts: The refused-target count at the moment of the reading.
-        violations: The ``"host:port"`` entries recorded by that moment, oldest first.
+    one the session had before that test ran.
     """
 
     loopback_attempts: int = 0
@@ -111,20 +94,15 @@ class SocketGuardSnapshot:
 class SocketGuardState:
     """Live counters of this suite's loopback-only socket guard.
 
-    ``installed`` is true once the guard has patched :mod:`socket`; ``loopback_attempts`` counts the
-    loopback connections and datagram sends it allowed; ``non_loopback_attempts`` counts the
-    targets it refused and ``violations`` lists each one as ``"host:port"``. The counters are
-    process-global and, under ``-n auto``, belong to one worker, so the offline proof in
-    ``tests/e2e/test_offline.py`` asserts ``installed is True`` and measures a delta with
-    :meth:`refusals_since` around its own run instead of trusting the absolute count: a test that
-    provokes a refusal takes ``before = guard.snapshot()`` and calls ``guard.restore(before)`` in
-    its teardown, so neither collection order nor another worker's refusals can reach the proof.
+    ``installed`` is true once the guard has patched the :mod:`socket` module; the two attempt
+    counters and ``violations`` are process-global and, under ``-n auto``, belong to one worker, so
+    the offline proof in ``tests/e2e/test_offline.py`` measures a delta with
+    :meth:`refusals_since` around its own run instead of trusting the absolute count.
 
-    ``foundry.diagnostics.socket_guard`` recognises a guard by two names -- ``FOUNDRY_SOCKET_GUARD``
-    published by the announcing module and ``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` carrying the count --
-    and ``examples/checkout/conftest.py`` publishes the same pair, so ``foundry doctor`` reads
-    either. :meth:`__getattr__` serves them here so the count stays live instead of being a value
-    snapshotted at import.
+    ``foundry.diagnostics.socket_guard`` recognises a guard by the two names
+    ``FOUNDRY_SOCKET_GUARD`` and ``FOUNDRY_NON_LOOPBACK_ATTEMPTS``, which :meth:`__getattr__` serves
+    live rather than as a value snapshotted at import, and ``examples/checkout/conftest.py``
+    publishes the same pair.
     """
 
     installed: bool = True
@@ -148,11 +126,7 @@ class SocketGuardState:
         )
 
     def restore(self, snapshot: SocketGuardSnapshot) -> None:
-        """Put the counters and violations back to ``snapshot``.
-
-        What a test that provoked a refusal calls in its teardown, so the session's counters read
-        exactly as they did before it ran and no later assertion inherits its refusal.
-        """
+        """Put the counters and violations back to ``snapshot``."""
         self.loopback_attempts = snapshot.loopback_attempts
         self.non_loopback_attempts = snapshot.non_loopback_attempts
         self.violations = list(snapshot.violations)
@@ -162,11 +136,7 @@ class SocketGuardState:
         self.restore(SocketGuardSnapshot())
 
     def refusals_since(self, snapshot: SocketGuardSnapshot) -> int:
-        """Return the refusals recorded since ``snapshot`` was taken.
-
-        The delta ``tests/e2e/test_offline.py`` measures around its own run, which is independent of
-        collection order and of the refusals this worker counted before it.
-        """
+        """Return the refusals recorded since ``snapshot`` was taken."""
         return self.non_loopback_attempts - snapshot.non_loopback_attempts
 
 
@@ -193,7 +163,7 @@ def _is_loopback_literal(host: str) -> bool:
     """Return True when ``host`` is a loopback IP literal.
 
     :mod:`ipaddress` flags every address in ``127.0.0.0/8`` and ``::1``; an IPv4-mapped IPv6 address
-    is judged by its mapped form because ``::ffff:127.0.0.1`` is not itself flagged loopback.
+    is judged by its mapped form, because ``::ffff:127.0.0.1`` is not itself flagged loopback.
     """
     try:
         address = ipaddress.ip_address(host)
@@ -220,10 +190,10 @@ def _split_target(address: object) -> tuple[str | None, object]:
 def _refused_target(family: int, address: object) -> tuple[str, object] | None:
     """Return the ``(host, port)`` to refuse for ``address``, or ``None`` when it may proceed.
 
-    Only ``AF_INET`` and ``AF_INET6`` are policed: ``AF_UNIX``, any other family and any address
-    that is not an INET-style tuple are local by construction. A loopback literal and a well-known
-    local hostname are allowed; every other hostname is refused *before* the resolver runs, because
-    resolving it would itself open the non-loopback socket this guard exists to prevent.
+    Only ``AF_INET`` and ``AF_INET6`` are policed: any other family and any address that is not an
+    INET-style tuple are local by construction. A loopback literal and a well-known local hostname
+    are allowed; every other hostname is refused *before* the resolver runs, because resolving it
+    would itself open the non-loopback socket this guard exists to prevent.
     """
     if family not in _INET_FAMILIES:
         return None
@@ -283,8 +253,7 @@ def _guarded_connect_ex(self: socket.socket, address: object) -> int:
 def _guarded_sendto(self: socket.socket, *args: object) -> int:
     """Send a datagram to a loopback target only, refusing the rest before the syscall.
 
-    ``sendto`` carries its address in the last positional argument, whether it is called as
-    ``(data, address)`` or as ``(data, flags, address)``, so that argument is the one policed.
+    ``sendto`` carries its address in the last positional argument, so that one is policed.
     """
     address = args[-1] if args else None
     refused = _refused_target(self.family, address)
@@ -298,9 +267,8 @@ def _guarded_sendto(self: socket.socket, *args: object) -> int:
 def _guarded_sendmsg(self: socket.socket, *args: object) -> int:
     """Send one message to a loopback target only, refusing the rest before the syscall.
 
-    ``sendmsg`` takes its address as an optional last argument -- ``(buffers, ancdata, flags,
-    address)`` -- and leaves it out for a connected socket, where the missing target is local and
-    the send is allowed.
+    ``sendmsg`` takes its address as an optional last argument and leaves it out for a connected
+    socket, where the missing target is local and the send is allowed.
     """
     address = args[-1] if args else None
     refused = _refused_target(self.family, address)
@@ -327,9 +295,9 @@ FOUNDRY_SOCKET_GUARD: SocketGuardState = SOCKET_GUARD
 def _install_guard() -> None:
     """Patch :mod:`socket` once per process, so a second import wraps it exactly once.
 
-    Each wrapper carries the live state under :data:`_GUARD_MARK`, which is both the idempotence
-    marker and how a second import finds the counters it adopts. The state is bound to
-    :data:`SOCKET_GUARD` first, so a wrapper can never run against an unbound global.
+    Each wrapper carries the live state under :data:`_GUARD_MARK`, both the idempotence marker and
+    how a second import finds the counters it adopts. The state is bound to :data:`SOCKET_GUARD`
+    first, so a wrapper can never run against an unbound global.
     """
     if getattr(socket.socket.connect, _GUARD_MARK, None) is SOCKET_GUARD:
         return
@@ -360,11 +328,9 @@ def current_guard() -> SocketGuardState:
 def socket_guard() -> SocketGuardState:
     """Session scope: the live guard installed at import of this module.
 
-    Consumer: ``tests/e2e/test_offline.py``, which asserts ``installed is True`` and measures
+    Consumer: ``tests/e2e/test_offline.py``, which measures
     :meth:`SocketGuardState.refusals_since` around its own run rather than trusting the absolute
-    session counter. That counter is process-global and belongs to one ``-n auto`` worker, so a test
-    that provokes a refusal takes ``guard.snapshot()`` first and calls ``guard.restore(before)`` in
-    its teardown; :meth:`SocketGuardState.reset` restores the zero reading outright.
+    session counter, because that counter belongs to one ``-n auto`` worker.
     """
     return current_guard()
 
@@ -373,8 +339,7 @@ def socket_guard() -> SocketGuardState:
 def repo_root() -> pathlib.Path:
     """Session scope: the repository root, checked for the markers its consumers need.
 
-    Consumers: the static checks in ``tests/unit/`` (layering, sleep policy, ``-p`` flag, unsafe
-    parsing, exception boundary) and every end-to-end module.
+    Consumers: the static checks in ``tests/unit/`` and every end-to-end module.
     """
     root = pathlib.Path(__file__).resolve().parents[1]
     missing = [name for name in ("pyproject.toml", "src/foundry") if not (root / name).exists()]
@@ -387,8 +352,7 @@ def repo_root() -> pathlib.Path:
 def foundry_python() -> str:
     """Session scope: the interpreter under test, ``sys.executable``.
 
-    Consumer: any test that drives a subprocess against an explicit interpreter rather than through
-    ``run_pytest``.
+    Consumer: any test that drives a subprocess against an explicit interpreter.
     """
     return sys.executable
 
@@ -397,9 +361,8 @@ def foundry_python() -> str:
 def foundry_script() -> pathlib.Path:
     """Session scope: the installed ``foundry`` console script.
 
-    Consumers: ``tests/e2e/test_init_project.py``, ``tests/e2e/test_install.py`` and the
-    installed-entry-point cases of ``tests/plugin/test_cli_surface.py``. Fails with the install
-    command instead of a bare ``FileNotFoundError`` when the distribution is absent.
+    Fails with the install command instead of a bare ``FileNotFoundError`` when the distribution is
+    absent.
     """
     on_path = shutil.which("foundry")
     script = pathlib.Path(on_path) if on_path else pathlib.Path(sys.executable).parent / "foundry"
@@ -429,11 +392,9 @@ _STRIPPED_PREFIXES: Final[tuple[str, ...]] = ("FOUNDRY_", "COV_CORE_", "COVERAGE
 def subprocess_env() -> Callable[..., dict[str, str]]:
     """Session scope: a builder of child-process environments, merging an optional ``extra`` map.
 
-    Consumers: every end-to-end module and ``tests/integration/test_startup_cost.py``. Copying
-    ``os.environ`` is deliberate -- ``PATH``, ``PYTHONPATH`` and ``VIRTUAL_ENV`` must survive or
-    neither the plugin entry point nor the console script resolves -- while the outer run's pytest
-    options, xdist identity, Foundry configuration and coverage state are removed, so a child
-    asserts against its own configuration alone.
+    ``os.environ`` is copied because ``PATH``, ``PYTHONPATH`` and ``VIRTUAL_ENV`` must survive,
+    while the outer run's pytest options, xdist identity, Foundry configuration and coverage state
+    are removed, so a child asserts against its own configuration alone.
     """
 
     def build(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -464,10 +425,7 @@ def run_pytest(
 ) -> Callable[..., subprocess.CompletedProcess[str]]:
     """Session scope: run ``python -m pytest`` in a child process and capture its output.
 
-    Consumers: ``tests/integration/test_data_expansion.py`` (two ``--collect-only -q`` runs),
-    ``tests/integration/test_startup_cost.py``, ``tests/e2e/test_sharding.py``,
-    ``tests/e2e/test_example_project.py`` and ``tests/e2e/test_zero_config_subprocess.py``. The
-    environment comes from ``subprocess_env``, so the outer invocation's options never leak in.
+    The environment comes from ``subprocess_env``, so the outer invocation's options never leak in.
     """
 
     def run(
@@ -496,9 +454,8 @@ def run_foundry(
 ) -> Callable[..., subprocess.CompletedProcess[str]]:
     """Session scope: run the installed ``foundry`` console script and capture its output.
 
-    Consumers: ``tests/e2e/test_init_project.py`` and the installed-entry-point cases of
-    ``tests/plugin/test_cli_surface.py`` -- the two places where only the real script satisfies the
-    real-entry-point rule of AAP 0.14.5.
+    Consumers: the places where only the real script satisfies the real-entry-point rule of
+    AAP 0.14.5.
     """
 
     def run(
@@ -524,9 +481,8 @@ def run_foundry(
 def example_project(repo_root: pathlib.Path) -> pathlib.Path:
     """Session scope: ``examples/checkout``, the shipped 24-test project.
 
-    Consumers: ``tests/e2e/test_example_project.py``, ``tests/e2e/test_sharding.py`` and
-    ``tests/e2e/test_determinism.py``. Fails rather than skipping when the project is absent,
-    because a missing example is a missing deliverable.
+    Fails rather than skipping when the project is absent, because a missing example is a missing
+    deliverable.
     """
     project = repo_root / "examples" / "checkout"
     if not project.is_dir():
@@ -540,18 +496,12 @@ def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
 
     ``files`` maps relative paths to content, ``conftest`` writes ``conftest.py`` and
     ``foundry_toml`` writes ``foundry.toml``. Every file is UTF-8 with LF newlines and a trailing
-    newline, and parents are created, so the result is byte-identical on any host.
-    ``pyproject.toml`` is written only when a caller passes it, which is what makes a scaffold or a
-    zero-configuration directory genuinely configuration-free.
+    newline, and ``pyproject.toml`` is written only when a caller passes it, which is what makes a
+    scaffold or a zero-configuration directory genuinely configuration-free.
 
     Containment is enforced, not merely documented: ``directory`` must lie inside the session's
-    temporary base directory (``tmp_path``'s parent, which also holds the siblings
-    ``tmp_path_factory`` creates), and every key must be a relative path with no ``..`` segment, so
-    a mistaken target or a key such as ``"../foundry.toml"`` fails the test before a byte is
-    written and ``examples/checkout`` can never be mutated.
-
-    Consumers: the replay-miss and no-configuration scenarios of the end-to-end modules, which must
-    never mutate ``examples/checkout``.
+    temporary base directory and every key must be a relative path with no ``..`` segment, so
+    ``examples/checkout`` can never be mutated.
     """
 
     base = tmp_path.parent.resolve()
@@ -610,9 +560,8 @@ def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
 def clean_foundry_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Function scope: no ``FOUNDRY_*`` variable in the environment, ``TZ``/``LC_ALL`` pinned.
 
-    Consumers: ``tests/integration/test_config_precedence.py`` and
-    ``tests/plugin/test_config_errors.py``, which assert what configuration resolves to and must not
-    inherit a variable the developer's shell happens to export.
+    Consumer: the configuration tests, which must not inherit a variable the developer's shell
+    happens to export.
     """
     for name in [key for key in os.environ if key.startswith("FOUNDRY_")]:
         monkeypatch.delenv(name, raising=False)
@@ -624,10 +573,9 @@ def clean_foundry_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def installed_distribution() -> importlib.metadata.Distribution:
     """Session scope: the installed ``pytest-foundry`` distribution, with its entry point checked.
 
-    Consumers: ``tests/e2e/test_install.py``, ``tests/plugin/test_reachability.py`` and
-    ``tests/plugin/test_public_contract.py``. Fails with the install command when the distribution
-    is absent, and fails when the ``pytest11`` entry point named ``foundry`` does not target
-    ``foundry.plugin``, because zero-configuration activation is that entry point.
+    Fails with the install command when the distribution is absent, and when the ``pytest11`` entry
+    point named ``foundry`` does not target ``foundry.plugin``, because zero-configuration
+    activation is that entry point.
     """
     try:
         distribution = importlib.metadata.distribution("pytest-foundry")
