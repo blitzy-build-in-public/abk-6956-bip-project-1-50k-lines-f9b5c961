@@ -52,19 +52,16 @@ def build_pytest_argv(
     Every supplied Foundry option becomes the canonical ``--foundry-<dotted.key>`` spelling
     :mod:`foundry.plugin` registers, followed by its value unless it is one of the two switches, and
     the caller's own pytest arguments are appended afterwards, unchanged and in the order given. The
-    result therefore contains no plugin selector and no argument the caller did not supply.
-
-    The order is fixed rather than incidental, so two runs and two xdist workers build identical
+    result therefore contains no plugin selector and no argument the caller did not supply. The
+    order is fixed rather than incidental, so two runs and two xdist workers build identical
     argument lists: options are emitted in the registry order of
     :data:`foundry.config.keys.KEY_SPECS`, then the four
     :data:`foundry.config.cli_layer.SPECIAL_OPTIONS` in their documented order, then
     ``pytest_args``. The function is pure -- no environment, no filesystem, no clock, no mutation of
-    its arguments -- which is what lets a unit test assert the whole list.
-
-    An option is recognised by its dotted key, by a named alias word or by an option spelling, and
-    whichever form arrived is emitted in the one canonical spelling. A value of ``None`` means the
-    option was not supplied and is skipped -- the same reading
-    :func:`foundry.config.cli_layer.from_mapping` applies.
+    its arguments -- which is what lets a unit test assert the whole list. An option is recognised
+    by its dotted key, by a named alias word or by an option spelling, and whichever form arrived is
+    emitted in the one canonical spelling. A value of ``None`` means the option was not supplied and
+    is skipped -- the same reading :func:`foundry.config.cli_layer.from_mapping` applies.
 
     Raises:
         foundry.core.exceptions.ConfigError: When an entry names no documented option or key, in
@@ -139,13 +136,11 @@ def run(pytest_args: tuple[str, ...], **foundry_options: object) -> int:
     define is collected into ``pytest_args`` untouched and reaches pytest in the order it was typed.
     ``@override_options`` is the shared ``--foundry-*`` option group of
     :mod:`foundry.cli.config_cmd`, applied here exactly as on every other subcommand that resolves
-    project configuration.
-
-    The configuration is resolved before pytest starts, for the reason the module docstring gives,
-    and pytest itself is imported only at that point, so a command that never runs tests is not
-    charged for it. Nothing is caught: pytest handles its own exceptions and ``KeyboardInterrupt``,
-    and the exit code published is ``pytest.main``'s own, with ``None`` normalised to ``0`` by
-    :func:`foundry.cli.exit_codes.passthrough`.
+    project configuration. The configuration is resolved before pytest starts, for the reason the
+    module docstring gives, and pytest itself is imported only at that point, so a command that
+    never runs tests is not charged for it. Nothing is caught: pytest handles its own exceptions and
+    ``KeyboardInterrupt``, and the exit code published is ``pytest.main``'s own, with ``None``
+    normalised to ``0`` by :func:`foundry.cli.exit_codes.passthrough`.
 
     Raises:
         foundry.core.exceptions.ConfigError: When this command line, the configuration file or the

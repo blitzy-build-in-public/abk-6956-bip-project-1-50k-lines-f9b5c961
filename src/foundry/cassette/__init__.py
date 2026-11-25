@@ -10,7 +10,9 @@ The barrel of AAP 0.3.2 and AAP 0.8.2: replay opens no socket, redaction happens
 # A match is decided by this and nothing else: method, path, sorted query pairs, body hash (A7).
 from .matcher import RequestFingerprint as RequestFingerprint
 
-# Picks the recorded interaction a fingerprint matches, advancing the replay cursor as it goes.
+# Picks the recorded interaction a fingerprint matches, advancing the replay cursor as it goes; the
+# second name is the spelling earlier releases shipped, kept so an existing import keeps working.
+from .matcher import match as match
 from .matcher import match_interaction as match_interaction
 
 # The one document a cassette file is: ``recorded_at``, ``redacted_keys``, ordered interactions.
@@ -79,5 +81,6 @@ __all__ = (
     "SOURCE_LIVE",
     "behaviour_for",
     "cassette_path",
+    "match",
     "match_interaction",
 )

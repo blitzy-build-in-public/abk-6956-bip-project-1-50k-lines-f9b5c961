@@ -8,29 +8,35 @@ the cassettes under ``cassettes/`` are named by -- and the run writes ``artifact
 the plugin's work (AAP 0.4.2); this file supplies the guard, the server and the settings.
 
 The guard (AAP 0.14.3) is installed at import, before any test module loads, over
-``socket.getaddrinfo``, ``socket.socket.connect`` and ``socket.socket.connect_ex``. Resolution is
-wrapped because a hostname fails there before ``connect`` is reached, so a connect-only guard would
-measure nothing. A loopback target is counted and served; any other is counted and refused with an
-``AssertionError`` naming it, before the syscall runs. The guard publishes the two names
-``foundry.diagnostics.socket_guard`` reads -- ``FOUNDRY_SOCKET_GUARD`` and a live
-``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` -- and a second installation adopts the first one's counters.
+``socket.getaddrinfo``, ``socket.socket.connect`` and ``socket.socket.connect_ex``; resolution is
+wrapped because a hostname fails there before ``connect`` is reached. A loopback target -- a
+``127.``/``::1`` address, ``localhost`` or a blank host -- is counted and served, and any other is
+counted and refused with an ``AssertionError`` naming it, before the syscall runs. The guard
+publishes the two names ``foundry.diagnostics.socket_guard`` reads, and a second installation
+adopts the first one's counters.
 
 The server is a stdlib ``ThreadingHTTPServer`` on ``127.0.0.1:0`` serving five routes from a daemon
 thread, started in ``pytest_configure`` and stopped in ``pytest_unconfigure``. A replay run starts
 none, because replay has to prove it opens no socket (AAP 0.4.7). The example ships no configuration
 file (A9), so the same-name override of the public ``foundry_config`` fixture (AAP 0.4.3) supplies
-``http.base_url``, ``data.dir`` and ``cassette.dir``, while ``artifacts.dir`` keeps its default.
+``http.base_url``, the ``bearer`` auth strategy against an environment-variable name, ``data.dir``
+and ``cassette.dir``, while ``artifacts.dir`` keeps its default.
 
-The retry budget is the one setting that override cannot supply. The plugin resolves the run's
-configuration once, in ``pytest_configure``, and builds the retry driver's budget from it
-(AAP 0.14.2), whereas a fixture does not exist until an item is collected: so ``execution.retries``
-is stated in the environment layer at import time, before that hook runs, which is what makes the
-first attempt of ``test_retries_quarantine.py::test_retry_until_pass`` really be repeated in the
-documented flag-free run (AAP 0.14.1 criterion 3, assumption A2).
+Because ``cassette.dir`` is the committed directory, **a recording run has to be aimed at a copy**:
+``pytest examples/checkout --foundry-record --foundry-cassette.dir <dir>``. A bare
+``--foundry-record`` would rewrite the seven tracked fixtures under ``cassettes/`` in place --
+``recorded_at`` becomes the current time and the rewrite shows up in git -- so record into a scratch
+directory, review what was recorded there, and copy the documents in.
 
-The terminal summary carries exactly one line from this file,
-``checkout: socket-guard non-loopback=<n> loopback=<n>``, which is how the end-to-end test observes
-that no non-loopback connection was attempted.
+The retry budget is the one setting that override cannot supply: the plugin resolves the run's
+configuration once, in ``pytest_configure``, and the retry driver reads the budget from it
+(AAP 0.14.2), while a fixture does not exist until an item is collected -- so ``execution.retries``
+is stated in the environment layer at import, before that hook, which makes the retry test's first
+attempt really be repeated in the documented flag-free run (criterion 3, assumption A2).
+
+The terminal summary carries exactly one line from this file, ``checkout: socket-guard
+non-loopback=<n> loopback=<n>``, which is how the end-to-end test observes that no non-loopback
+connection was attempted.
 """
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import pytest
 
@@ -61,7 +67,11 @@ HERE: Final[Path] = Path(__file__).resolve().parent
 TESTDATA_DIR: Final[Path] = HERE / "testdata"
 """Absolute, so a bare data-file name resolves here and not against the invocation directory."""
 CASSETTE_DIR: Final[Path] = HERE / "cassettes"
-"""Absolute, so the committed cassettes are found and a normal run never writes into them."""
+"""Absolute, so discovery and replay find the committed cassettes; recording is aimed elsewhere.
+
+The module docstring gives the exact form -- ``--foundry-cassette.dir <dir>`` -- because recording
+into this directory in place would rewrite the tracked fixtures.
+"""
 REPLAY_BASE_URL: Final[str] = "http://127.0.0.1:8765"
 """What a replay run reports: no server runs there, and cassette matching ignores the host (A7)."""
 BASE_URL_KEY: Final[pytest.StashKey[str]] = pytest.StashKey()
@@ -92,6 +102,10 @@ _RETRIES: Final[int] = 1
 """Repeats the retry test earns after its first attempt: one repeat is two attempts (A2)."""
 _RETRIES_ENV: Final[str] = "FOUNDRY_EXECUTION__RETRIES"
 """The environment spelling of ``execution.retries``: ``FOUNDRY_`` prefix, ``__`` nesting."""
+_CREDENTIAL_ENV: Final[str] = "CHECKOUT_API_TOKEN"
+"""The variable ``http.auth.token_env`` names: the configuration carries the name, never a value."""
+_DEMO_CREDENTIAL: Final[str] = "checkout-demo-token-3f9a1c"
+"""The fake token the echo server accepts: it grants nothing, and exists to prove the auth stage."""
 _HEALTH: Final[dict[str, str]] = {"service": "checkout", "status": "ok", "version": "0.1.0"}
 
 # Stated here, at import, because this is the last moment a layer can reach the run's retry budget:
@@ -100,6 +114,11 @@ _HEALTH: Final[dict[str, str]] = {"service": "checkout", "status": "ok", "versio
 # late (AAP 0.14.2). Deliberately not ``setdefault``: the documented, flag-free run has to show the
 # repeat whatever the operator's shell carries, or the example's outcome would depend on it.
 os.environ[_RETRIES_ENV] = str(_RETRIES)
+
+# The strategy the ``foundry_config`` override below selects resolves this variable once, when the
+# ``foundry_api`` fixture builds its session: a demonstration token for a loopback test double that
+# grants nothing, and that the cassette store redacts like any other credential.
+os.environ[_CREDENTIAL_ENV] = _DEMO_CREDENTIAL
 
 # --- The loopback-only guard -------------------------------------------------
 
@@ -135,16 +154,21 @@ def __getattr__(name: str) -> Any:
 
 
 def _host_text(host: object) -> str | None:
-    """Return a host as text when it is a string or a byte string, else ``None``."""
+    """Return a host as text, or ``None`` when it names no host: another type, or no text."""
     if isinstance(host, str):
-        return host
+        return host or None
     if isinstance(host, bytes):
         return host.decode("ascii", "ignore") or None
     return None
 
 
 def _count(host: object) -> None:
-    """Count a loopback target, or count and refuse any other with the reason it is refused."""
+    """Count a loopback target, or count and refuse any other with the reason it is refused.
+
+    A host that names no host -- ``None``, ``""`` or ``b""`` -- counts as loopback: it cannot name a
+    remote machine, so the guard is counted out of the way and the resolver's own answer stands. The
+    two blank spellings have to agree, or only one of them is a false positive.
+    """
     text = _host_text(host)
     if text is None or text in _LOOPBACK_NAMES or text.startswith(_LOOPBACK_PREFIXES):
         _GUARD.loopback_attempts += 1
@@ -243,11 +267,11 @@ class CheckoutEchoHandler(BaseHTTPRequestHandler):
         raw = self._read_body()
         path = urlparse(self.path).path
         if path == "/health" and self.command == "GET":
-            self._send_json(200, dict(_HEALTH))
+            self._send_json(200, {**_HEALTH, "query": _query_pairs(self.path)})
         elif path == "/orders" and self.command == "POST":
             self._create_order(raw)
         elif path == "/private/profile" and self.command == "GET":
-            self._send_json(401, {"error": "unauthorized", "realm": "checkout"})
+            self._send_profile()
         elif path.startswith(_ORDERS_PATH) and self.command == "GET":
             self._send_json(200, _stored_order(path[len(_ORDERS_PATH) :]))
         else:
@@ -267,6 +291,24 @@ class CheckoutEchoHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_profile(self) -> None:
+        """Answer ``GET /private/profile`` from the credential the request presents.
+
+        No ``Authorization`` header, or a blank one, is ``401``: nothing was presented. Any other
+        value than the one the configured strategy applies is ``403``: a credential was presented
+        and it is wrong, which is what a per-request header overriding the strategy's produces. The
+        expected value is ``200``, and that reply is the proof the auth stage resolved a header and
+        sent it here.
+        """
+        presented = self.headers.get("Authorization", "")
+        if not presented:
+            self._send_json(401, {"error": "unauthorized", "realm": "checkout"})
+            return
+        if presented != f"Bearer {_DEMO_CREDENTIAL}":
+            self._send_json(403, {"error": "forbidden", "realm": "checkout"})
+            return
+        self._send_json(200, {"realm": "checkout", "user": "checkout-demo"})
 
     def _create_order(self, raw: bytes) -> None:
         """Answer ``POST /orders`` from the body alone: a hash-derived id and the summed total."""
@@ -289,6 +331,16 @@ class CheckoutEchoHandler(BaseHTTPRequestHandler):
                 "total_cents": total,
             },
         )
+
+
+def _query_pairs(target: str) -> list[list[str]]:
+    """Return the target's query parameters as ``[name, value]`` pairs sorted by name then value.
+
+    Order is deliberately dropped, so two requests carrying the same parameters in two different
+    orders answer the same document -- which a recorded cassette then shows, and still replays.
+    """
+    pairs = parse_qsl(urlparse(target).query, keep_blank_values=True)
+    return [[name, value] for name, value in sorted(pairs)]
 
 
 def _order_total(items: object) -> int | None:
@@ -398,8 +450,10 @@ def foundry_config(foundry_config: FoundryConfig, checkout_base_url: str) -> Fou
     ``artifacts.dir`` keeps its default so ``artifacts/<run_id>/`` lands in the invocation
     directory, and every other key -- ``execution.*`` (the retry budget this file states at
     import), ``cassette.mode``, ``reporting.*``, ``logging.*``, ``secrets.*`` and ``profile`` --
-    stays the parent's. The parent's nested models are copied, never mutated, because the parent is
-    shared.
+    stays the parent's. The auth strategy is configured from an environment-variable name as well:
+    ``http.auth.strategy`` becomes ``bearer`` and ``http.auth.token_env`` names the variable holding
+    the demo token, so the auth stage runs and no credential value enters a configuration model. The
+    parent's nested models are copied, never mutated, because the parent is shared.
 
     Foundry's five layers are the only supported provenance, and a fixture override is none of them,
     so the keys this file supplies are attributed to the ``file`` layer naming this conftest: the
@@ -420,7 +474,16 @@ def foundry_config(foundry_config: FoundryConfig, checkout_base_url: str) -> Fou
         sources["data.dir"] = origin
         update["data"] = foundry_config.data.model_copy(update={"dir": TESTDATA_DIR})
     sources["http.base_url"] = origin
-    update["http"] = foundry_config.http.model_copy(update={"base_url": checkout_base_url})
+    sources["http.auth.strategy"] = origin
+    sources["http.auth.token_env"] = origin
+    update["http"] = foundry_config.http.model_copy(
+        update={
+            "base_url": checkout_base_url,
+            "auth": foundry_config.http.auth.model_copy(
+                update={"strategy": "bearer", "token_env": _CREDENTIAL_ENV}
+            ),
+        }
+    )
     return foundry_config.model_copy(update=update).with_sources(sources)
 
 

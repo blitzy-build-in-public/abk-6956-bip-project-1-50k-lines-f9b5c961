@@ -398,7 +398,13 @@ class RunErrorPayload:
 
 @dataclass(frozen=True, slots=True)
 class TestPayload:
-    """One collected test's record, in the shape that crosses the worker boundary."""
+    """One collected test's record, in the shape that crosses the worker boundary.
+
+    The fields are AAP 0.4.6's thirteen result-record fields plus ``artifacts_disabled``, the
+    additive field AAP 0.4.7 requires on every record of a run whose artifact directory could not
+    be written (AAP 0.4.9 permits it). ``log_tail`` is the one transport-only field: it rides the
+    wire so the HTML panel can render it, and the persisted record does not carry it.
+    """
 
     run_id: str
     started_at: str
@@ -425,7 +431,11 @@ class TestPayload:
         object.__setattr__(self, "artifacts", tuple(artifacts))
 
     def as_result_fields(self) -> dict[str, object]:
-        """Return the fields ``ResultRecord`` is built from, transport-only fields excluded."""
+        """Return the fields ``ResultRecord`` is built from, the one transport-only field excluded.
+
+        Everything a persisted record carries is here, ``artifacts_disabled`` included, so the
+        AAP 0.4.7 flag reaches ``results.json`` instead of stopping at the wire.
+        """
         return {
             "record_type": self.record_type,
             "run_id": self.run_id,
@@ -440,13 +450,13 @@ class TestPayload:
             "failures": [failure.as_dict() for failure in self.failures],
             "artifacts": [artifact.as_dict() for artifact in self.artifacts],
             "quarantine": self.quarantine.as_dict(),
+            "artifacts_disabled": self.artifacts_disabled,
         }
 
     def as_dict(self) -> dict[str, object]:
-        """Return the payload as the mapping :meth:`from_dict` decodes, transport fields in."""
+        """Return the payload as the mapping :meth:`from_dict` decodes, ``log_tail`` added."""
         wire = self.as_result_fields()
         wire["log_tail"] = list(self.log_tail)
-        wire["artifacts_disabled"] = self.artifacts_disabled
         return wire
 
     def as_properties(self) -> list[tuple[str, object]]:
@@ -585,8 +595,12 @@ ITEM_QUARANTINE: Final[pytest.StashKey[QuarantineDecision]] = pytest.StashKey[
 ]()
 ITEM_LOG_RING: Final[pytest.StashKey[LogRing]] = pytest.StashKey[LogRing]()
 ITEM_ARTIFACTS: Final[pytest.StashKey[ArtifactWriter]] = pytest.StashKey["ArtifactWriter"]()
+# Two clocks per item: when the item began, and when the attempt in flight began. The second is
+# what makes every attempt record's span its own, so summing the ledger yields the item's wall clock
+# instead of a total that counts each earlier attempt again (AAP 0.4.6's ``duration_ms``).
 ITEM_STARTED_MONOTONIC: Final[pytest.StashKey[float]] = pytest.StashKey[float]()
 ITEM_STARTED_AT: Final[pytest.StashKey[datetime]] = pytest.StashKey[datetime]()
+ITEM_ATTEMPT_STARTED_MONOTONIC: Final[pytest.StashKey[float]] = pytest.StashKey[float]()
 ITEM_STASH_KEYS: Final = (
     ITEM_ATTEMPTS,
     ITEM_QUARANTINE,
@@ -594,6 +608,7 @@ ITEM_STASH_KEYS: Final = (
     ITEM_ARTIFACTS,
     ITEM_STARTED_MONOTONIC,
     ITEM_STARTED_AT,
+    ITEM_ATTEMPT_STARTED_MONOTONIC,
 )
 
 
@@ -622,6 +637,7 @@ __all__: Final[tuple[str, ...]] = (
     "FailurePayload",
     "ITEM_ARTIFACTS",
     "ITEM_ATTEMPTS",
+    "ITEM_ATTEMPT_STARTED_MONOTONIC",
     "ITEM_LOG_RING",
     "ITEM_QUARANTINE",
     "ITEM_STARTED_AT",
@@ -629,6 +645,7 @@ __all__: Final[tuple[str, ...]] = (
     "ITEM_STASH_KEYS",
     "OUTCOME_VALUES",
     "OutcomeValue",
+    "PHASES",
     "PROPERTY_ARTIFACTS",
     "PROPERTY_ARTIFACTS_DISABLED",
     "PROPERTY_ATTEMPTS",

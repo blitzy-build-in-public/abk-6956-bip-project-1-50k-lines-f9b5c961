@@ -3,15 +3,12 @@
 ``execution.retries`` -- ``0`` by default, accepted range ``0..10`` (AAP 0.4.5) -- counts the
 *repeats after the first attempt*, so a resolved value of ``2`` is ``attempts: 3`` in
 ``results.json`` (assumption A2); :attr:`ExecutionRetries.max_attempts` publishes that arithmetic.
-
 Retries are Foundry's own rather than a peer plugin's (AAP 0.5.1), because a repeat has to stay
 inside Foundry's own runtest protocol: it feeds the attempt ledger, decides the quarantine verdict
 and captures the failed attempt's artifacts. Only a ``"call"``-phase ``"failed"`` outcome is
-retried, since a fixture fault is deterministic and a repeat would only multiply it, and no delay is
-inserted between attempts, so this module imports neither ``time`` nor ``datetime``. The label a
-failure earns is diagnostic and never a gate: :func:`retry_label` delegates to
-:func:`foundry.http.retries.classify`, and what gates a retry is the phase, the outcome and the
-budget.
+retried, since a fixture fault is deterministic, and no delay is inserted between attempts, so this
+module imports neither ``time`` nor ``datetime``. The label a failure earns is diagnostic and never
+a gate: :func:`retry_label` delegates to :func:`foundry.http.retries.classify`.
 """
 
 from __future__ import annotations
@@ -19,7 +16,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from foundry.core.exceptions import ConfigError
 from foundry.core.limits import (
@@ -32,9 +29,6 @@ from foundry.core.limits import (
 from foundry.core.types import Phase
 from foundry.execution.state import AttemptPayload
 from foundry.execution.timeout import TIMEOUT_MARKER
-
-if TYPE_CHECKING:
-    import pytest
 
 # foundry.http is imported inside retry_label rather than here: importing the package pulls httpx
 # and its transport stack (~80 ms measured) into every pytest startup, and this module needs it
@@ -122,12 +116,10 @@ class ExecutionRetries:
     def __post_init__(self) -> None:
         """Validate ``repeats`` against AAP 0.4.5, so no instance holds a value outside ``0..10``.
 
-        Validation lives here rather than only in :meth:`from_config` because a policy can also be
-        built by name, and a budget the retry loop reads unvalidated must not vary with the
-        construction path. ``bool`` is refused even though it subclasses ``int``.
-
-        Raises:
-            ConfigError: When ``repeats`` is not an ``int`` inside ``MIN_RETRIES..MAX_RETRIES``.
+        Validation lives here, not only in :meth:`from_config`, because a policy can also be built
+        by name and the retry loop must not read a budget its path left unchecked. ``bool`` is
+        refused even though it subclasses ``int``. Raises ConfigError when ``repeats`` is not an
+        ``int`` inside ``MIN_RETRIES..MAX_RETRIES``.
         """
         if (
             isinstance(self.repeats, bool)
@@ -148,18 +140,15 @@ class ExecutionRetries:
         """Return the budget for a resolved ``execution.retries`` value.
 
         The named seam the coordinator calls with the setting it read from the resolved
-        configuration, so the key and its range are named in one place.
+        configuration.
 
         Args:
-            repeats: The resolved ``execution.retries`` value: repeats after the first attempt,
-                ``0..10`` (AAP 0.4.5). It is never coerced, so a float, a string or a ``bool`` is a
-                fault rather than a budget.
+            repeats: Repeats after the first attempt, ``0..10`` (AAP 0.4.5), never coerced, so a
+                float, a string or a ``bool`` is a fault rather than a budget.
 
         Returns:
-            The validated budget, whose :attr:`max_attempts` is ``repeats + 1``.
-
-        Raises:
-            ConfigError: When ``repeats`` is not an ``int`` inside ``0..10``.
+            The validated budget, whose :attr:`max_attempts` is ``repeats + 1``; a value that is
+            not an ``int`` inside ``0..10`` raises ConfigError.
         """
         return cls(repeats=repeats)
 
@@ -168,10 +157,7 @@ class ExecutionRetries:
         """Return the total number of attempts, the first one included: ``repeats + 1``.
 
         Assumption A2 states the arithmetic: ``--foundry-retries 2`` is three attempts and
-        ``--foundry-retries 0`` is one, so no value means "run nothing".
-
-        Returns:
-            ``repeats + 1``, in ``1..11`` for the accepted range.
+        ``--foundry-retries 0`` is one, so no value means "run nothing" (``1..11`` here).
         """
         return self.repeats + 1
 
@@ -185,10 +171,7 @@ class ExecutionRetries:
 
         Args:
             attempts_used: Attempts made so far, the first one included, so ``1`` right after the
-                first attempt.
-
-        Returns:
-            ``max_attempts - attempts_used`` when that is positive, and ``0`` once it is spent.
+                first attempt; the answer is ``max_attempts - attempts_used``, or ``0`` once spent.
         """
         return max(0, self.max_attempts - attempts_used)
 
@@ -213,16 +196,15 @@ def should_retry(
 ) -> bool:
     """Return whether a failed attempt at ``phase`` earns another one under ``policy``.
 
-    The single retry decision in Foundry (AAP 0.7.1). The three conditions are checked in the order
-    an operator would read them: the phase, because a fixture fault is not a candidate at all; the
-    outcome, because a passing, skipped, xfailed or errored attempt is not a failure to repeat; and
-    the budget last, because it is the only one that changes between attempts.
+    The single retry decision in Foundry (AAP 0.7.1), checked in the order an operator reads it:
+    the phase, a fixture fault not being a candidate; the outcome, a passing, skipped, xfailed or
+    errored attempt not being a failure to repeat; and the budget last, the only one that changes
+    between attempts.
 
     Args:
         phase: The pytest phase the attempt's failure was attributed to.
-        outcome: How the attempt ended, one of the plain strings of
-            :data:`foundry.execution.state.OutcomeValue`. Only ``"failed"`` is retryable;
-            ``"error"`` is a setup or teardown failure.
+        outcome: How the attempt ended, one of :data:`foundry.execution.state.OutcomeValue`; only
+            ``"failed"`` is retryable, ``"error"`` being a setup or teardown failure.
         attempts_used: Attempts made so far, the first one included, so ``1`` after the first.
         policy: The resolved retry budget.
 
@@ -240,21 +222,19 @@ def should_retry(
 def retry_label(excinfo: BaseException | None, *, status_code: int | None = None) -> str | None:
     """Return how an attempt ended, as the label ``AttemptRecord.retry_on`` carries.
 
-    The label names the ending in the vocabulary a reader already knows: the four retry predicates
-    of :data:`foundry.http.retries.RETRY_PREDICATES` where the HTTP engine's classification applies,
-    and Foundry's :data:`LABEL_ASSERTION` or :data:`LABEL_ERROR` for a test-level failure, which the
-    predicate vocabulary deliberately does not cover. Classification is delegated to
-    :func:`foundry.http.retries.classify` rather than repeated here, so a label can never disagree
-    with the HTTP engine about what happened. The label is diagnostic only: nothing in Foundry's
-    retry decision reads it, and a label this module does not recognise never changes an outcome.
-    Only an :class:`AssertionError` earns :data:`LABEL_ASSERTION`, so a ``pytest.fail`` call is
-    labelled :data:`LABEL_ERROR`.
+    The label uses the vocabulary a reader knows: the four retry predicates of
+    :data:`foundry.http.retries.RETRY_PREDICATES` where the HTTP engine's classification applies,
+    and :data:`LABEL_ASSERTION` or :data:`LABEL_ERROR` for a test-level failure the predicate
+    vocabulary does not cover. Classification is delegated to
+    :func:`foundry.http.retries.classify`, so a label can never disagree with the HTTP engine. It is
+    diagnostic only: nothing in the retry decision reads it, and a label this module does not
+    recognise never changes an outcome. Only an :class:`AssertionError` earns
+    :data:`LABEL_ASSERTION`, so a ``pytest.fail`` call is labelled :data:`LABEL_ERROR`.
 
     Args:
         excinfo: The exception the attempt raised, or ``None`` when it raised nothing.
-        status_code: A status the attempt returned, when the caller has one to attribute. Ignored
-            when ``excinfo`` is given, because the status of a response that also faulted says
-            nothing about the fault.
+        status_code: A status the attempt returned, ignored when ``excinfo`` is given: the status
+            of a response that also faulted says nothing about the fault.
 
     Returns:
         ``"timeout"``, ``"connect"``, ``"status_5xx"`` or ``"status_429"`` where the shared
@@ -293,18 +273,17 @@ def _outcome_token(outcome: str) -> str:
 def describe_attempts(payloads: Sequence[AttemptPayload]) -> str:
     """Return a one-line summary of how each attempt in ``payloads`` ended.
 
-    The summary names the attempt count and each attempt's outcome in the order the attempts
-    happened, and nothing else: no duration, no message, no request URL, header or body. That is
-    what makes it safe inside a failure message without passing it through the redaction engine
-    first (AAP 0.3.2). It is deliberately chronological rather than sorted, because sorting would
+    It names the attempt count and each outcome in the order they happened, and nothing else: no
+    duration, message, request URL, header or body, which is what makes it safe inside a failure
+    message without redaction first (AAP 0.3.2). Chronological, never sorted, because sorting would
     lose which attempt finally passed.
 
     Args:
         payloads: The attempts made, oldest first, as the coordinator recorded them.
 
     Returns:
-        ``"3 attempts: failed, failed, passed"`` for the criterion-6 shape,
-        ``"1 attempt: failed"`` for a single attempt, and ``"no attempts"`` for an empty sequence.
+        ``"3 attempts: failed, failed, passed"`` for the criterion-6 shape, ``"1 attempt: failed"``
+        for one attempt, and ``"no attempts"`` for an empty sequence.
     """
     if not payloads:
         return _NO_ATTEMPTS
@@ -316,13 +295,12 @@ def describe_attempts(payloads: Sequence[AttemptPayload]) -> str:
 def exhausted_message(nodeid: str, payloads: Sequence[AttemptPayload]) -> str:
     """Return the message reported when a test's retry budget is spent.
 
-    The text names the test and the attempt ledger and nothing else: no hint, no path, no duration
-    and no exception text, because the failing attempt's own traceback is already in the record and
-    a second copy would only bury it.
+    The text names the test and the attempt ledger and nothing else: no hint, path, duration or
+    exception text, the failing attempt's traceback being already in the record.
 
     Args:
-        nodeid: The test's pytest node id, unsanitised. It is the identity of the test, so only
-            whitespace is collapsed to keep one line.
+        nodeid: The test's pytest node id, unsanitised; only whitespace is collapsed, to keep one
+            line.
         payloads: The attempts made, oldest first.
 
     Returns:
@@ -360,13 +338,12 @@ is what keeps prose and paths out of the match.
 """
 
 
-def failure_text(report: pytest.TestReport) -> str:
-    """Return a report's rendered failure, preferring the crash line over the whole traceback.
+def failure_text(longrepr: object) -> str:
+    """Return a rendered failure's own message, preferring the crash line over the whole traceback.
 
     ``reprcrash.message`` is the one line pytest prints after the traceback. A ``longrepr`` that
     cannot be rendered is read as no message rather than raising (AAP 0.1.2).
     """
-    longrepr: object = report.longrepr
     crash: object = getattr(longrepr, "reprcrash", None)
     message: object = getattr(crash, "message", None)
     if isinstance(message, str) and message.strip():

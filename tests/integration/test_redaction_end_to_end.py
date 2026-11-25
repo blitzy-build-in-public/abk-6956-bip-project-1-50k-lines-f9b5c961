@@ -25,15 +25,16 @@ variable :data:`TOKEN_VARIABLE`, which ``foundry.toml`` names through ``http.aut
 which holds no value itself. That name sits outside the ``FOUNDRY_`` prefix on purpose -- the child
 environment strips every ``FOUNDRY_*`` name, so such a token would be gone before the child ran.
 
-**Why the artifact sink is driven directly.** The per-test capture AAP 0.4.6 plans is not yet wired
-into ``foundry.plugin``, so a run leaves ``artifacts/<run_id>/`` empty and walking it would prove
-nothing. The sink is driven the way the framework writes it -- a real loopback exchange, then
-:class:`foundry.obs.artifacts.ArtifactWriter`, the one module AAP 0.4.8 lets write under
-``artifacts/`` -- and the run's own tree is walked too, so a plugin that starts writing those files
-is held to the same assertions. Writing the tail through ``write_log_tail`` also proves the log tail
-is *written* rather than suppressed (AAP 0.14.2). Every planted value is fake, no test waits, no
-wall clock is read, the only socket is a loopback server shut down and joined, and every file lives
-under ``tmp_path``.
+**Why the artifact sink is proven twice.** The per-test capture AAP 0.4.6 publishes is wired: the
+coordinator binds a writer and a bounded log ring per item, writes the log tail at teardown and
+finalises ``manifest.json`` -- which a passing test keeps too -- so a real run does populate
+``artifacts/<run_id>/<sanitized-nodeid>/``. The sink is still driven directly, the way the framework
+writes it: a real loopback exchange, then :class:`foundry.obs.artifacts.ArtifactWriter`, the one
+module AAP 0.4.8 lets write under ``artifacts/``. The run's own tree is walked as well, so what the
+plugin really writes is held to the same absence assertions. Writing the tail through
+``write_log_tail`` also proves the log tail is *written* rather than suppressed (AAP 0.14.2). Every
+planted value is fake, no test waits, no wall clock is read, the only socket is a loopback server
+shut down and joined, and every file lives under ``tmp_path``.
 """
 
 from __future__ import annotations

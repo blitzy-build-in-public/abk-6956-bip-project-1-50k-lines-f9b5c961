@@ -54,6 +54,15 @@ _IMPORT_PROBE: Final[str] = (
 It prints a JSON list and nothing else, so a module name in an unrelated warning is not a hit.
 """
 
+_CHILD_TIMEOUT_SECONDS: Final[float] = 30.0
+"""A ceiling on the probe's child interpreter, so a hung import fails here instead of stalling.
+
+The probe is the one child in this module that does not go through the harness, so nothing else
+bounds it: an interpreter that stalls while importing ``foundry.plugin`` would hold the suite open
+until the outer gate killed it. Thirty seconds is five times the ~0.5 s a boot costs on an idle
+host, and the same ceiling ``tests/integration/test_startup_cost.py`` puts on its own children.
+"""
+
 _PUBLISHED: Final[tuple[tuple[str, str, str], ...]] = (
     # name, module stem inside foundry.fixtures, scope -- the fixture table of AAP 0.4.3.
     ("foundry_config", "config", "session"),
@@ -197,21 +206,30 @@ def _heavy_modules_after_import(
 
     This process has already imported pytest and its siblings, so its ``sys.modules`` says nothing
     about import cost; the child runs in the checkout with ``src`` first on ``PYTHONPATH``, so it
-    exercises the source tree. The child failing to import is an assertion failure, never a skip.
+    exercises the source tree. A child that fails to import, or that hangs past
+    :data:`_CHILD_TIMEOUT_SECONDS`, is an assertion failure, never a skip.
     """
     source_root = repo_root / "src"
     inherited = os.environ.get("PYTHONPATH", "")
     env = build_env(
         {"PYTHONPATH": os.pathsep.join(part for part in (str(source_root), inherited) if part)}
     )
-    completed = subprocess.run(
-        [sys.executable, "-c", _IMPORT_PROBE.format(module=module, forbidden=_HEAVY_MODULES)],
-        cwd=str(repo_root),
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", _IMPORT_PROBE.format(module=module, forbidden=_HEAVY_MODULES)],
+            cwd=str(repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_CHILD_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"importing {module} in a fresh interpreter hung for longer than "
+            f"{_CHILD_TIMEOUT_SECONDS:g} s, so the probe never reported which heavy modules "
+            "the import loaded"
+        )
     assert completed.returncode == 0, (
         f"importing {module} failed in a fresh interpreter:\n{completed.stderr}"
     )

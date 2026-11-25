@@ -6,17 +6,15 @@ dataclass records, none of which is a table -- so every schema this package crea
 back again, and it is the only place that decides which metadata objects are created and in which
 order (AAP 0.3.2, AAP 0.7.1, AAP 0.4.3). It assumes SQLAlchemy 2.0 declarative mapping -- a
 :class:`~sqlalchemy.orm.DeclarativeBase` subclass with ``Mapped[...]`` columns -- and accepts a
-plain :class:`~sqlalchemy.Table` too, calling either a "model-like" value.
-
-Two rules shape it. Models travel as a value, never as module state: there is no global ``Base``, no
-registry and no cache, since a shared registry would leak one test's schema into the next and the
-layering contract (AAP 0.4.8) permits import-time mutation only in the two registration tables of
+plain :class:`~sqlalchemy.Table` too, calling either a "model-like" value. Two rules shape it.
+Models travel as a value, never as module state: there is no global ``Base``, no registry and no
+cache, since a shared registry would leak one test's schema into the next and the layering contract
+(AAP 0.4.8) permits import-time mutation only in the two registration tables of
 :mod:`foundry.data.registry` and :mod:`foundry.reporting.renderers`. SQLAlchemy is imported lazily,
 because the plugin has a 150 ms startup budget (implicit requirement I5): every annotation name
-comes from ``TYPE_CHECKING`` and every runtime name from inside the function that needs it.
-
-It imports :mod:`foundry.core.exceptions` and nothing else of Foundry (AAP 0.4.8 places
-``foundry.db`` on the foundation rung), defines no exception type of its own and raises nothing but
+comes from ``TYPE_CHECKING`` and every runtime name from inside the function that needs it. It
+imports :mod:`foundry.core.exceptions` and nothing else of Foundry (AAP 0.4.8 places ``foundry.db``
+on the foundation rung), defines no exception type of its own and raises nothing but
 :class:`~foundry.core.exceptions.FoundryError` (AAP 0.14.3). Importing it does no work at all.
 """
 
@@ -84,13 +82,11 @@ def normalize_models(models: ModelSpec) -> tuple[ModelLike, ...]:
     The single entry point the rest of the module goes through, so the accepted vocabulary is stated
     once: a declarative model class, a :class:`~sqlalchemy.Table`, an iterable of either, or
     ``None`` for "no models at all"; one value is accepted because the most common argument is one
-    class from one ``Base``.
-
-    A ``set`` or ``frozenset`` is sorted before use, by ``(__module__, __qualname__)`` for a class
-    and by ``(metadata.schema or "", fullname)`` for a table: a set's iteration order follows string
-    hash randomisation, which ``PYTHONHASHSEED`` controls, so two xdist workers could otherwise
-    build two different databases from one declaration. Any other iterable keeps the caller's order,
-    because a list is already an order the caller chose.
+    class from one ``Base``. A ``set`` or ``frozenset`` is sorted before use, by ``(__module__,
+    __qualname__)`` for a class and by ``(metadata.schema or "", fullname)`` for a table: a set's
+    iteration order follows string hash randomisation, which ``PYTHONHASHSEED`` controls, so two
+    xdist workers could otherwise build two different databases from one declaration. Any other
+    iterable keeps the caller's order, because a list is already an order the caller chose.
 
     Raises:
         FoundryError: If a value is neither a declarative model class nor a ``Table``. The message
@@ -137,14 +133,13 @@ def create_all(engine: Engine, models: ModelSpec = None) -> None:
     One :meth:`~sqlalchemy.MetaData.create_all` call runs per distinct metadata, in the order
     :func:`metadata_for` returns them, which is the order the caller listed their models in;
     ``create_all`` already orders the tables inside one metadata by foreign-key dependency, so the
-    only ordering pinned here is the one *across* metadata objects.
-
-    ``checkfirst=False`` is deliberate: this helper exists for the ``foundry_db`` fixture, whose
-    engine is a fresh in-memory sqlite database (see :mod:`foundry.db.engine`), so its tables cannot
-    already exist and the flag would only add a reflection query per table to a suite with a 150 ms
-    startup budget and a six-minute wall-clock ceiling. It is safe *because* that database is fresh:
-    a caller who reuses this helper against a long-lived engine with pre-existing tables gets an
-    error from the dialect rather than a silent no-op, which is the failure mode to want.
+    only ordering pinned here is the one *across* metadata objects. ``checkfirst=False`` is
+    deliberate: this helper exists for the ``foundry_db`` fixture, whose engine is a fresh in-memory
+    sqlite database (see :mod:`foundry.db.engine`), so its tables cannot already exist and the flag
+    would only add a reflection query per table to a suite with a 150 ms startup budget and a
+    six-minute wall-clock ceiling. It is safe *because* that database is fresh: a caller who reuses
+    this helper against a long-lived engine with pre-existing tables gets an error from the dialect
+    rather than a silent no-op, which is the failure mode to want.
 
     Raises:
         FoundryError: If ``models`` holds a value that is not a declarative model class or a
@@ -161,7 +156,6 @@ def drop_all(engine: Engine, models: ModelSpec = None) -> None:
     so a schema created after another is removed before it and a foreign key that crosses two
     metadata objects cannot block the drop. ``checkfirst=False`` for the reason :func:`create_all`
     documents: the engines this helper is written for hold only the schema Foundry itself created.
-
     It is the explicit teardown helper for a caller that needs a clean schema inside a live engine
     -- a test class reusing one engine across its methods, for instance. The ``foundry_db`` fixture
     does not call it: disposing the engine destroys an in-memory sqlite database outright, which

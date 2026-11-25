@@ -44,8 +44,10 @@ def test_artifact_writer_records_a_manifest(
 ) -> None:
     """One sanitised directory under the run root, holding a manifest that agrees with it.
 
-    The session fixture hands out the run's writer; a test body writes through its documented
-    per-test binding, because a session-scoped writer addresses no test and refuses ``write``.
+    The session fixture hands out the run's writer; this module names its test explicitly through
+    the additive ``for_node(nodeid)`` and ``run_dir`` surface, so every assertion reads the
+    directory it wrote into rather than the binding the published ``write`` member takes from the
+    test in flight.
     """
     directory = foundry_artifacts.dir_for(request.node.nodeid)
     assert directory.is_dir(), f"dir_for did not create the artifact directory {directory}"

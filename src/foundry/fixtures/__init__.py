@@ -4,31 +4,29 @@
 requests a fixture by name and imports nothing from Foundry itself. ``foundry.fixtures.plugin``
 lists each fixture with the scope and return type published for it and registers the family with
 pytest; the names are additive only, so a later release may add a fixture or a facade type and none
-of these may be renamed or removed.
-
-The six facade types are re-exported beside the fixtures, so a test annotates its parameter without
-reaching into the capability package that defines it: ``FoundryArtifacts``,
-``FoundryDataLoader``, ``FoundryFactory``, ``FoundryClock``, ``FoundryLogCapture`` and
-``FoundryPoll``. Each is a protocol or a frozen dataclass in the module named beside its fixture,
-and the object its fixture returns satisfies it structurally.
+of these may be renamed or removed. The six facade types are re-exported beside the fixtures, so a
+test annotates its parameter without reaching into the capability package that defines it:
+``FoundryArtifacts``, ``FoundryDataLoader``, ``FoundryFactory``, ``FoundryClock``,
+``FoundryLogCapture`` and ``FoundryPoll``. Each is a protocol or a frozen dataclass in the module
+named beside its fixture, and the object its fixture returns satisfies it structurally.
 
 **Registration is not this module's job.** ``foundry.fixtures.plugin`` registers the twelve fixtures
-with pytest during ``pytest_configure``, and this barrel deliberately does not import it: a package
-is initialised before any of its submodules finishes importing, so that import would be the
-package's one cycle. Importing this module defines names only -- no ``pytest_plugins`` declaration,
-no ``pytest.fixture`` call, no I/O, no logger configuration and no module state.
+during ``pytest_configure``, and this barrel deliberately does not import it: a package is
+initialised before any of its submodules finishes importing, so that import would be the package's
+one cycle. Importing this module defines names only -- no ``pytest_plugins`` declaration, no
+``pytest.fixture`` call, no I/O, no logger configuration and no module state.
 
-**Import form.** Every name below is imported as ``X as X``: that spelling is the explicit
-re-export ``mypy --strict``'s no-implicit-reexport requires, and with this isort configuration a
-single block of aliased names is reported as unsorted (I001), so each name keeps its own statement.
+**Import form.** Every name below is imported as ``X as X``: that spelling is the explicit re-export
+``mypy --strict``'s no-implicit-reexport requires, and with this isort configuration a single block
+of aliased names is reported as unsorted (I001), so each name keeps its own statement.
 
 **Import cost and layering.** The re-exports are eager on purpose: the nine sibling modules defer
 every third-party import (``httpx``, ``SQLAlchemy``, ``Faker``, ``pydantic``, ``jsonschema``) into
-the fixture bodies that need them, so the barrel adds no distribution to the
-``pytest_configure`` path. Those nine modules are this file's only Foundry imports;
-``foundry.config``, the single upward edge this package is granted, is exercised inside
-``foundry.fixtures.config`` rather than here, and :mod:`foundry.execution`,
-:mod:`foundry.reporting`, :mod:`foundry.cli` and :mod:`foundry.plugin` stay unreachable.
+the fixture bodies that need them, so the barrel adds no distribution to the ``pytest_configure``
+path. Those nine modules are this file's only Foundry imports; the one upward edge,
+``foundry.config``, is exercised inside ``foundry.fixtures.config`` rather than here, and
+:mod:`foundry.execution`, :mod:`foundry.reporting`, :mod:`foundry.cli` and :mod:`foundry.plugin`
+stay unreachable.
 """
 
 from __future__ import annotations

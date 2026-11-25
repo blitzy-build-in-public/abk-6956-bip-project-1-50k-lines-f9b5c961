@@ -4,18 +4,16 @@ Foundry verifies a distributed run; it never distributes one. pytest-xdist owns 
 this module proves that the node ids the workers ran are exactly the set the controller collected --
 the observation AAP 0.14.1 makes for criterion 7 -- and turns a worker that never reported into the
 ``run_error`` record AAP 0.4.6 carries. No distribution algorithm, worker count or work queue lives
-here, because AAP 0.9.2 places reimplementing any of them out of scope.
-
-A distributed run shares state only through what xdist provides, and each channel has one owner:
-:data:`WORKER_INPUT_KEY` names the ``config.workerinput`` entry carrying the payload
+here, because AAP 0.9.2 places reimplementing any of them out of scope. A distributed run shares
+state only through what xdist provides, and each channel has one owner: :data:`WORKER_INPUT_KEY`
+names the ``config.workerinput`` entry carrying the payload
 :func:`foundry.execution.session.worker_payload` produces, :data:`WORKER_OUTPUT_KEY` names the
 ``config.workeroutput`` entry a worker fills with the node ids it ran, and per-test state rides
-``TestReport.user_properties`` as :mod:`foundry.execution.state` defines.
-
-This package may never import ``foundry.reporting`` (AAP 0.4.8), so the element this module produces
-is :class:`foundry.execution.state.RunErrorPayload`, and ``plugin.py`` appends those elements when
-it writes the result document. Nothing here raises: a ``run_error`` is a record, not an exception,
-and every collection the module returns is sorted, so two runs serialise one shape.
+``TestReport.user_properties`` as :mod:`foundry.execution.state` defines. This package may never
+import ``foundry.reporting`` (AAP 0.4.8), so the element this module produces is
+:class:`foundry.execution.state.RunErrorPayload`, and ``plugin.py`` appends those elements when it
+writes the result document. Nothing here raises: a ``run_error`` is a record, not an exception, and
+every collection the module returns is sorted, so two runs serialise one shape.
 """
 
 from __future__ import annotations
@@ -347,12 +345,11 @@ class ShardingService:
 
         The controller's collection is recorded in the ledger as a side effect, so a worker lost
         after this point still leaves its items nameable by :meth:`missing_after_run`. A run with no
-        recorded worker and no lost one is serial: the serial set is compared with itself.
-
-        An empty ``expected_nodeids`` beside one or more reporting workers is an absent input rather
-        than divergence, because xdist's distribution leaves the controller's ``session.items``
-        empty; the workers' union then becomes the verified universe. One ``DEBUG``
-        ``sharding_decision`` event per worker carries that worker's count, never a node id.
+        recorded worker and no lost one is serial: the serial set is compared with itself. An empty
+        ``expected_nodeids`` beside one or more reporting workers is an absent input rather than
+        divergence, because xdist's distribution leaves the controller's ``session.items`` empty;
+        the workers' union then becomes the verified universe. One ``DEBUG`` ``sharding_decision``
+        event per worker carries that worker's count, never a node id.
         """
         serial = tuple(sorted(_clean(expected_nodeids)))
         self.nodes.record_expected(serial)

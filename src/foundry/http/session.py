@@ -54,16 +54,16 @@ RequestParams: TypeAlias = Mapping[str, object] | Sequence[tuple[str, object]]
 """The shapes the ``params`` argument accepts: the ones :class:`httpx.Request` accepts.
 
 Declared once so :meth:`FoundrySession.request` and the five verbs publish the same annotation. The
-values reach ``httpx`` unchanged -- its own :class:`httpx.QueryParams` is what encodes them -- and
-this module neither sorts nor re-encodes a parameter, so a caller's order reaches the peer and the
+values reach ``httpx`` unchanged -- its own :class:`httpx.QueryParams` encodes them -- and this
+module neither sorts nor re-encodes a parameter, so a caller's order reaches the peer and the
 cassette matcher, which is where order-insensitive comparison belongs.
 """
 
 DEFAULT_TIMEOUT: Final[float] = HTTP_TIMEOUT_DEFAULT
 """Default per-request timeout in seconds: the default of ``http.timeout`` (AAP 0.4.5).
 
-Defined once in :mod:`foundry.core.limits` -- this package may not read the configuration model
-(AAP 0.4.8) -- and re-published as the value a hand-built :class:`SessionSettings` carries.
+Defined once in :mod:`foundry.core.limits` -- this package may not read the configuration model (AAP
+0.4.8) -- and re-published as the value a hand-built :class:`SessionSettings` carries.
 """
 
 MAX_TIMEOUT: Final[float] = HTTP_TIMEOUT_MAX
@@ -132,11 +132,8 @@ def _header_pairs(
 
     :attr:`SessionSettings.headers` is published as pairs because a header table's order decides
     which value wins, and a mapping's order is its insertion order. The configuration model holds a
-    ``dict``, so a mapping is accepted here as well and converted with its own order preserved: an
-    attribute that can only be built one way is a trap for the fixture that builds it.
-
-    Args:
-        headers: A mapping of names to values, or a sequence of pairs.
+    ``dict``, so a mapping is accepted here as well with its own order preserved: an attribute that
+    can only be built one way is a trap for the fixture that builds it.
 
     Returns:
         The pairs as a tuple, with every name and value coerced to ``str``.
@@ -171,10 +168,8 @@ def _validated_timeout(value: object) -> float:
     A ``bool`` is refused even though it is an ``int``, ``NaN`` and the infinities are refused, and
     a non-numeric value is refused rather than left to raise ``TypeError`` from a comparison: a
     caller's mistake becomes the typed configuration fault the command line maps to exit ``2``
-    instead of an uncaught builtin.
-
-    Args:
-        value: The per-request timeout, or ``http.timeout`` when the request named none.
+    instead of an uncaught builtin. ``value`` is the per-request timeout, or ``http.timeout`` when
+    the request named none.
 
     Returns:
         The value as a finite ``float`` inside ``0 < t <= 300``.
@@ -207,12 +202,8 @@ def _cassette_mode_name(cassette: CassetteSession, fallback: str) -> str:
     is the fallback for a session that does not report one, and the function is total so a
     diagnostic can never fail a session's construction.
 
-    Args:
-        cassette: The session whose mode is being reported.
-        fallback: The mode name to report when ``cassette`` does not carry one.
-
     Returns:
-        The mode name, or ``fallback``.
+        The mode name, or ``fallback`` when ``cassette`` does not carry one.
     """
     behaviour: object = getattr(cassette, "behaviour", None)
     name: object = getattr(behaviour, "name", None)
@@ -226,9 +217,6 @@ def _cassette_nodeid(cassette: CassetteSession) -> str:
     publishes it; the spelling is read here rather than passed in because the session is the only
     object that holds it. A session that carries none yields the empty string: the event is a
     diagnostic, and an empty field keeps the line well formed instead of raising.
-
-    Args:
-        cassette: The session whose test is being reported.
 
     Returns:
         The node id, or ``""`` when the session does not expose one.
@@ -248,16 +236,15 @@ class SessionSettings:
     configuration model's values are copied here by the fixture that builds the session. Frozen and
     slotted, so a session cannot have its settings changed under it.
 
-    Attributes:
-        base_url: The ``http.base_url`` a relative path is resolved against, or ``None``.
-        timeout: The default deadline in seconds for a request that names none.
-        headers: The static ``http.headers`` pairs, where a later pair of the same name wins.
-        retry: The ``http.retries.*`` policy every logical request runs under.
-        auth: The ``http.auth.*`` settings, whose fields name credential variables, or ``None``.
-        redact_keys: ``secrets.redact_keys``, the names the run masks at every sink.
-        cassette_mode: The resolved ``cassette.mode``; the cassette session governs behaviour.
-        require_base_url: Whether a base URL is mandatory, which ``foundry_api`` sets so the
-            constructor raises naming ``http.base_url`` before the first request (AAP 0.4.7).
+    Attributes: base_url: The ``http.base_url`` a relative path is resolved against, or ``None``.
+        timeout: The default deadline in seconds for a request that names none. headers: The static
+        ``http.headers`` pairs, where a later pair of the same name wins. retry: The
+        ``http.retries.*`` policy every logical request runs under. auth: The ``http.auth.*``
+        settings, whose fields name credential variables, or ``None``. redact_keys:
+        ``secrets.redact_keys``, the names the run masks at every sink. cassette_mode: The resolved
+        ``cassette.mode``; the cassette session governs behaviour. require_base_url: Whether a base
+        URL is mandatory, which ``foundry_api`` sets so the constructor raises naming
+        ``http.base_url`` before the first request (AAP 0.4.7).
     """
 
     base_url: str | None = None
@@ -456,8 +443,9 @@ class FoundrySession:
         AAP 0.4.6 puts one request dump and one response dump in each test's artifact directory, so
         the exchange a failure panel links to is the one the test made. The writer is looked up from
         :func:`foundry.obs.artifacts.active_writer` rather than held on the session, because the
-        session is built by a fixture that sees no item (AAP 0.4.8): outside a test, and for a run
-        whose artifact directory could not be created, no writer is bound and nothing is written.
+        session is built by a fixture that sees no item (AAP 0.4.8): outside a test no writer is
+        bound, and in a run whose artifact directory could not be created the bound writer is the
+        disabled one.
 
         A capture fault is isolated (AAP 0.1.2): one ``WARNING`` leaves the response, the outcome
         and the exit code untouched. Every dump is already redacted by the response's own engine
@@ -548,11 +536,10 @@ class FoundrySession:
 
         A transport that fails to close and a cassette that fails to save are both reported as one
         ``WARNING`` on the ``foundry`` logger, and neither changes a test's outcome or the run's
-        exit code (AAP 0.1.2, AAP 0.14.3). What it closes is the transport this session sent on --
-        a cassette's own in every cassette mode, and the live transport this session built only
-        when it had no cassette to send on -- so none is left behind for a caller to close.
-
-        Calling this a second time does nothing.
+        exit code (AAP 0.1.2, AAP 0.14.3). What it closes is the transport this session sent on -- a
+        cassette's own in every cassette mode, and the live transport this session built only when
+        it had no cassette to send on -- so none is left behind. Calling this a second time does
+        nothing.
         """
         if self._closed:
             return
@@ -593,14 +580,12 @@ class FoundrySession:
     def _merged_headers(self, headers: Mapping[str, str] | None) -> httpx.Headers:
         """Return the headers one request carries, the later source replacing an earlier one.
 
-        Args:
-            headers: The per-request headers, or ``None``.
+        ``headers`` is the per-request headers, or ``None``.
 
-        Returns:
-            The merged headers, in the order ``http.headers`` supplied them, then the auth
-            strategy's pair, then the caller's. A name that appears twice keeps its last value at
-            the position it was first set in, because ``httpx.Headers`` removes the duplicate and
-            overwrites in place, so two requests with the same inputs serialise identically.
+        Returns: The merged headers: ``http.headers``' order, then the auth strategy's pair, then
+            the caller's. A name that appears twice keeps its last value at the position it was
+            first set in, because ``httpx.Headers`` removes the duplicate and overwrites in place,
+            so two requests with the same inputs serialise identically.
         """
         merged = httpx.Headers()
         for name, value in self._settings.headers:

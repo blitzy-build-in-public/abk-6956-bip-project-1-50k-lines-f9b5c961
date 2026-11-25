@@ -98,11 +98,8 @@ class KeyValueSourceRow(Protocol):
 
     It is a protocol rather than a concrete type because this renderer owns layout and not data:
     :func:`foundry.config.render.rows` produces the rows and this module only prints them, so the
-    two can be tested apart without either importing the other (AAP 0.4.8).
-
-    The members are read-only properties so that a frozen, slotted row -- which is what
-    ``ConfigRow`` is, and what keeps a renderer from altering what a second reader sees -- satisfies
-    the protocol; a mutable attribute would reject every frozen row.
+    two can be tested apart without either importing the other (AAP 0.4.8). Its members are
+    read-only properties, which is what lets a frozen, slotted ``ConfigRow`` satisfy it.
     """
 
     @property
@@ -189,7 +186,7 @@ def _console(stderr: bool = False) -> Console:
     the stream, which is how an error reaches stderr while a result reaches stdout. No theme and no
     style is passed: rich's defaults are the whole of the presentation. ``rich`` is imported here
     rather than at module scope, so the pytest activation path never pays for it, and rich resolves
-    the stream when it prints, so a stream a caller replaced after this call is still honoured.
+    the stream when it prints.
     """
     from rich.console import Console
 
@@ -205,16 +202,21 @@ def _redactor(redactor: Redactor | None) -> Redactor:
     return default_redactor() if redactor is None else redactor
 
 
-def _scrubbed_text(text: str, redactor: Redactor, *, style: str | None = None) -> Text:
+def _scrubbed_text(
+    text: str, redactor: Redactor, *, style: str | None = None, diagnostic: bool = False
+) -> Text:
     """Return ``text`` redacted and wrapped as rich ``Text``, optionally in a built-in style.
 
-    Wrapping rather than passing a ``str`` is what keeps markup out of the console: rich parses
+    Wrapping rather than passing a ``str`` keeps markup out of the console: rich parses
     ``[``-delimited tags in a ``str`` but never in ``Text``, so a parametrised node id such as
-    ``test_login[case-1]`` prints exactly as written instead of losing a fragment or raising.
+    ``test_login[case-1]`` prints exactly as written. ``diagnostic`` scrubs through
+    :meth:`Redactor.diagnostic` rather than :meth:`Redactor.text`, which keeps the key, closest
+    match and accepted values AAP 0.4.5 makes part of a configuration diagnostic readable, while the
+    values such a message carries are still masked.
     """
     from rich.text import Text
 
-    scrubbed = redactor.text(text)
+    scrubbed = redactor.diagnostic(text) if diagnostic else redactor.text(text)
     if style is None:
         return Text(scrubbed)
     return Text(scrubbed, style=style)
@@ -284,7 +286,7 @@ def render_config_table(
     caller supplies the sorted key order and this module never re-sorts. Every cell passes through
     the redactor, because ``http.headers`` values and a ``http.base_url`` carrying URL userinfo are
     the configuration values that can hold a credential. A ``title`` is redacted like every other
-    value, and ``None`` for either keyword argument selects the default behaviour.
+    value.
     """
     scrubbing = _redactor(redactor)
     table = _table(title, _CONFIG_COLUMNS, scrubbing)
@@ -302,9 +304,9 @@ def render_not_applied(
 
     ``foundry config show`` without ``--resolved`` resolves the configuration from defaults, file,
     profile and environment only, so the override options it was given change nothing and are listed
-    apart from the resolution rather than folded into it. The section is titled with the literal
-    words ``not applied`` and has the same three columns as the resolved table. An empty sequence
-    prints nothing, so a command that applied everything it was given needs no branch of its own.
+    apart. The section is titled with the literal words ``not applied`` and has the same three
+    columns as the resolved table. An empty sequence prints nothing, so a command that applied
+    everything needs no branch of its own.
     """
     if not rows:
         return
@@ -323,13 +325,12 @@ def render_probe_table(
     """Print the ``foundry doctor`` table of ``Probe``, ``Status`` and ``Detail``.
 
     The headings are exactly ``Probe``, ``Status`` and ``Detail`` and the rows print in the order
-    the probe runner supplied them, which is the same order the ``--json`` document lists them in
-    (AAP 0.7.4). A status reads as the literal lowercase word ``pass``, ``warn`` or ``fail``, and
-    only rich's built-in ``green``, ``yellow`` and ``red`` distinguish them: no custom theme and no
-    custom style is registered (AAP 0.6). A status outside those three words prints as it was given
-    and counts towards none of them, so the closing line never invents a state. That line states how
-    many probes reported each word and repeats the verdict ``ok`` maps to, which is the ``0`` or
-    ``2`` exit code of AAP 0.4.4.
+    the probe runner supplied them, the same order the ``--json`` document lists them in (AAP
+    0.7.4). A status reads as the literal lowercase word ``pass``, ``warn`` or ``fail``, and only
+    rich's built-in ``green``, ``yellow`` and ``red`` distinguish them: no custom theme or style is
+    registered (AAP 0.6). A status outside those three words prints as given and counts towards none
+    of them, so the closing line never invents a state; it states how many probes reported each word
+    and repeats the verdict ``ok`` maps to, the ``0`` or ``2`` exit code of AAP 0.4.4.
 
     Args:
         rows: One row per probe, either the models with the attributes :class:`ProbeRow` describes
@@ -378,10 +379,10 @@ def render_comparison(groups: ComparisonGroups, *, redactor: Redactor | None = N
 
     The labels are exactly ``Newly failing``, ``Newly passing`` and ``Still failing`` (AAP 0.7.4),
     each printed with the group's size and followed by its node ids. An empty group prints the
-    ``(none)`` marker rather than disappearing, so the three groups are always all visible and a
-    reader can tell an empty set from a missing one. The node ids print in the order they arrive --
-    the comparator supplies ascending, de-duplicated tuples -- and each line is printed without
-    wrapping, so a long parametrised node id stays one copyable line.
+    ``(none)`` marker rather than disappearing, so all three are always visible and an empty set
+    reads differently from a missing one. The node ids print in the order they arrive -- the
+    comparator supplies ascending, de-duplicated tuples -- unwrapped, so a long parametrised node id
+    stays one copyable line.
 
     Args:
         groups: The three node-id sequences, as :class:`foundry.reporting.compare.ComparisonDiff`
@@ -415,8 +416,8 @@ def _render_group(console: Console, label: str, nodeids: Sequence[str], redactor
 def render_message(text: str, *, redactor: Redactor | None = None) -> None:
     """Print one plain information line on stdout.
 
-    This is the sink for a success message such as ``configuration valid (profile=<name>)``: one
-    line, no heading, no styling and no wrapping, so the text is exactly what the command reported.
+    The sink for a success message such as ``configuration valid (profile=<name>)``: one line, no
+    heading, styling or wrapping, so the text is exactly what the command reported.
 
     Args:
         text: The line to print.
@@ -435,10 +436,15 @@ def render_error(
 
     The shape is the one :meth:`foundry.core.exceptions.FoundryError.format_message` already
     produces -- the message, then ``hint`` after two spaces of indent -- because a command reports a
-    ``FoundryError`` and any other error through the same call site and the two must not diverge.
-    Nothing else is printed and nothing goes to stdout: a hint that is absent or blank adds no line,
-    and neither the message nor the hint is ever printed unredacted, since a configuration error
-    names the absent environment variable rather than its value (implicit requirement I9).
+    ``FoundryError`` and any other error through the same call site, so the two must not diverge.
+    Nothing else is printed and nothing goes to stdout: an absent or blank hint adds no line. Both
+    lines are scrubbed as a diagnostic, never as free text: AAP 0.4.5 makes an unknown key, its
+    closest match and a key's accepted range part of the message -- ``unknown configuration key:
+    http.timeot``, ``invalid value for option --foundry-http.auth.strategy: expected none, bearer,
+    basic, header`` -- and the free-text ``name: value`` inference would mask exactly that, leaving
+    an operator unable to name the key to fix. The values a message carries are still masked, and a
+    configuration error names the absent environment variable rather than its value (implicit
+    requirement I9).
 
     Args:
         message: The error's message, which is the text a person reads first.
@@ -450,9 +456,12 @@ def render_error(
     """
     scrubbing = _redactor(redactor)
     console = _console(stderr=True)
-    console.print(_scrubbed_text(message, scrubbing), soft_wrap=True)
+    console.print(_scrubbed_text(message, scrubbing, diagnostic=True), soft_wrap=True)
     if hint is not None and hint.strip():
-        console.print(_scrubbed_text(f"{_HINT_INDENT}{hint.strip()}", scrubbing), soft_wrap=True)
+        console.print(
+            _scrubbed_text(f"{_HINT_INDENT}{hint.strip()}", scrubbing, diagnostic=True),
+            soft_wrap=True,
+        )
 
 
 def render_lines(lines: Iterable[str], *, redactor: Redactor | None = None) -> None:
@@ -482,14 +491,12 @@ def render_document(text: str, *, redactor: Redactor | None = None) -> None:
     this function writes through :func:`click.echo` rather than the console: rich would wrap the
     text to the terminal width and could break a JSON or TOML line in half. A single trailing
     newline is added only when ``text`` does not already end with one, so the document reaches
-    stdout byte for byte as its producer rendered it.
-
-    The ``redactor`` keyword is accepted so every sink here has one signature, and it is
-    deliberately not applied. A document is emitted verbatim, and the two facts leave no room for a
-    scrubber: its producer has already redacted every value it wrote, and running the free-text
-    engine over a serialised document would rewrite a quoted value into something that is no longer
-    valid JSON -- ``"authorization": "Bearer abc"`` becomes two unterminated tokens -- which a
-    consumer could no longer parse.
+    stdout byte for byte as its producer rendered it. The ``redactor`` keyword is accepted so every
+    sink here has one signature, and it is deliberately not applied. A document is emitted verbatim,
+    and the two facts leave no room for a scrubber: its producer has already redacted every value it
+    wrote, and running the free-text engine over a serialised document would rewrite a quoted value
+    into something that is no longer valid JSON -- ``"authorization": "Bearer abc"`` becomes two
+    unterminated tokens -- which a consumer could no longer parse.
 
     Args:
         text: The complete document, exactly as it is to reach stdout.

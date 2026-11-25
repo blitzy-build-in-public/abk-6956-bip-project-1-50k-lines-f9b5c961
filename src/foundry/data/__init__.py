@@ -22,6 +22,7 @@ from foundry.data.matrix import Matrix as Matrix
 from foundry.data.matrix import expand_axes as expand_axes
 from foundry.data.matrix import expand_matrix as expand_matrix
 from foundry.data.registry import SUPPORTED_EXTENSIONS as SUPPORTED_EXTENSIONS
+from foundry.data.registry import generate_cases as generate_cases
 from foundry.data.registry import load_cases as load_cases
 from foundry.data.registry import load_document as load_document
 from foundry.data.registry import load_matrix as load_matrix
@@ -52,6 +53,7 @@ __all__: list[str] = [
     "enforce_table",
     "expand_axes",
     "expand_matrix",
+    "generate_cases",
     "load_cases",
     "load_document",
     "load_matrix",

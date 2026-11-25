@@ -38,10 +38,9 @@ __all__ = [
     "log_event",
 ]
 
-#: The band this module emits in. ``DEBUG``: configuration resolution (the layer and the key, never
-#: the value), cassette mode, sharding and per-attempt detail. ``INFO``: the one line a run emits,
-#: from :func:`emit_run_start`, with its run id, profile and artifacts root. ``WARNING``: a
-#: failure-isolation fault or the documented HTML-report fallback, which is the highest level here.
+#: The band this module emits in. ``DEBUG``: configuration resolution (layer and key, never the
+#: value), cassette mode, sharding and per-attempt detail. ``INFO``: the run's one line, from
+#: :func:`emit_run_start`. ``WARNING``: a failure-isolation fault or the HTML fallback, the cap.
 LEVEL_DEBUG: Final[int] = logging.DEBUG
 LEVEL_INFO: Final[int] = logging.INFO
 LEVEL_WARNING: Final[int] = logging.WARNING
@@ -223,11 +222,10 @@ def emit_run_start(run_id: str, profile: str, artifacts_root: str | Path) -> Non
 def emit_resolution(key: str, layer: str, detail: str) -> None:
     """Record which layer decided a configuration key, at ``DEBUG``, never the value itself.
 
-    The key is published as ``option=``, not as ``key=``:
-    :class:`foundry.obs.logging.RedactionFilter` masks the value of any ``name=value`` pair whose
-    name is secret-bearing, and ``key`` is a query-parameter deny-list name, so a field labelled
-    ``key`` would reach the log as ``key=***`` and lose the diagnostic AAP 0.1.2 requires the line
-    to carry. ``layer`` and ``detail`` name no secret, so they keep their own names.
+    The key is published as ``option=``, not ``key=``: :class:`foundry.obs.logging.RedactionFilter`
+    masks the value of any ``name=value`` pair whose name is secret-bearing, and ``key`` is a
+    query-parameter deny-list name, so a ``key`` field would reach the log as ``key=***`` and lose
+    the diagnostic AAP 0.1.2 requires. ``layer`` and ``detail`` name no secret.
     """
     _emit("config_resolution", LEVEL_DEBUG, _pairs(option=key, layer=layer, detail=detail))
 
@@ -235,11 +233,10 @@ def emit_resolution(key: str, layer: str, detail: str) -> None:
 def emit_no_config_file() -> None:
     """Record that no configuration file was found, at ``DEBUG``, and emit no field.
 
-    AAP 0.4.7 pins this state's whole line -- ``foundry: no config file found``, on the ``foundry``
-    logger -- so the event *name* carries the sentence: :func:`event_line` renders the prefix and
-    the name alone, whereas a snake_case label such as ``config_file`` would leave that text
-    unreachable. The level is ``DEBUG`` because a run with no configuration file is not a fault:
-    it proceeds from the field defaults with the profile ``default`` and exit code 0.
+    AAP 0.4.7 pins this state's whole line -- ``foundry: no config file found`` -- so the event
+    *name* carries the sentence: :func:`event_line` renders the prefix and the name alone, which a
+    snake_case label such as ``config_file`` would not. ``DEBUG`` because a run with no
+    configuration file is not a fault: the field defaults, profile ``default`` and exit code 0.
     """
     _emit(_NO_CONFIG_FILE_EVENT, LEVEL_DEBUG, ())
 

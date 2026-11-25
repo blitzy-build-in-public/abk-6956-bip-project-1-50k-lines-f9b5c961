@@ -57,7 +57,8 @@ passes `-p foundry`. `-p no:foundry` turns it off, and `pytest --trace-config` l
 What activates with nothing configured:
 
 - the `--foundry-*` option group;
-- the owned `foundry_*` marker namespace, whose documented member is `foundry_quarantine`;
+- the owned `foundry_*` marker namespace, whose documented members are `foundry_quarantine` and
+  `foundry_data`;
 - the twelve fixtures, registered before collection;
 - a run id, the `artifacts/<run_id>/` directory, and a terminal summary whose first line is the
   activation proof `foundry: profile=default`, followed by a line naming the run id and the
@@ -236,7 +237,9 @@ credential variable is a `ConfigError` naming the variable only — the value is
 
 `foundry_data` loads CSV, JSON, YAML and JSONL from `data.dir`, expands matrix and cross-product
 cases, and gives every case a stable id derived from the file content and the row index, so two runs
-and two workers produce the same ids. A row missing a required column is a collection error naming
+and two workers produce the same ids. A test marked `@pytest.mark.foundry_data("<file>")` is
+parametrised over that file's cases by the plugin, which binds the test's `case` argument unless the
+marker's `argname` names another. A row missing a required column is a collection error naming
 the file, the line and the column; an empty data file instead skips the generated item with the
 reason `no cases in <file>` and the session still succeeds.
 

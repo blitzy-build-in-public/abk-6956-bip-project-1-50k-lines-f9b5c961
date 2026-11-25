@@ -4,7 +4,7 @@ Every ``<testcase>`` carries ``classname``, ``name`` and ``time``, the four prop
 ``foundry.profile``, ``foundry.outcome``, ``foundry.attempts`` and ``foundry.quarantine``, then one
 ``foundry.artifact.<kind>`` reference per captured artifact -- the five kinds of AAP 0.4.6, never
 ``log_tail`` or ``manifest``; the single ``<testsuite>`` carries ``foundry.run_id`` and
-``foundry.profile``. The mapping tables below give the outcome-to-element rules, and the write is
+``foundry.profile``. The mapping tables below give the outcome-to-element rules; the write is
 :func:`foundry.reporting.store.write_text` (AAP 0.4.8).
 """
 
@@ -140,7 +140,7 @@ ARTIFACT_PROPERTY_NAMES: Final[Mapping[ArtifactKind, str]] = MappingProxyType(
 
 Each property's value is the artifact's path relative to the run directory. ``log_tail`` and
 ``manifest`` are absent on purpose: the manifest lists the artifacts, and the log tail is the HTML
-report's panel rather than a JUnit reference.
+report's panel.
 """
 
 ARTIFACT_PROPERTY_ORDER: Final[tuple[ArtifactKind, ...]] = (
@@ -199,12 +199,9 @@ _NOTE_MESSAGES: Final[Mapping[Outcome, str]] = MappingProxyType(
 def split_nodeid(nodeid: str) -> tuple[str, str]:
     """Split a pytest node id into the JUnit ``classname`` and ``name`` pair.
 
-    The module path loses its ``.py`` suffix and its separators become dots, the class segments
-    join that name, and the last segment is the test id with its ``[...]`` suffix kept. A bare path
-    with no ``::`` is both class and name.
-
-    Args:
-        nodeid: The record's node id, unsanitised as pytest reports it.
+    The module path loses its ``.py`` suffix and its separators become dots, the class segments join
+    that name, and the last segment is the test id with its ``[...]`` suffix kept. A bare path with
+    no ``::`` is both class and name.
 
     Returns:
         The ``(classname, name)`` pair; an empty module segment yields an empty classname.
@@ -229,11 +226,8 @@ def _seconds(duration_ms: float) -> str:
 
     Three decimals are always written, so two runs of one suite produce the same text.
 
-    Args:
-        duration_ms: The duration in milliseconds, never negative.
-
     Returns:
-        The duration in seconds, formatted with exactly three decimals.
+        ``duration_ms`` in seconds, formatted with exactly three decimals.
     """
     return f"{duration_ms / 1000.0:.3f}"
 
@@ -246,8 +240,8 @@ _XML_FORBIDDEN: Final[re.Pattern[str]] = re.compile(
 """Every code point XML 1.0's ``Char`` production excludes, as one compiled pattern.
 
 That production is ``#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]``;
-ElementTree escapes only ``& < > " '``, so ``#x7F`` and the C1 range ``#x80-#x9F`` are kept and a
-C0 control, a lone surrogate, ``#xFFFE`` or ``#xFFFF`` is not.
+ElementTree escapes only ``& < > " '``, so ``#x7F`` and the C1 range ``#x80-#x9F`` are kept and a C0
+control, a lone surrogate, ``#xFFFE`` or ``#xFFFF`` is not.
 """
 
 
@@ -264,12 +258,10 @@ def _sanitise_tree(root: ElementTree.Element) -> None:
     """Reduce every attribute value and text node of ``root`` to characters XML admits.
 
     One walk over the built tree covers every record-derived string once -- the testcase
-    ``classname`` and ``name``, every property value, the failure or error ``message`` attribute
-    and body, and a run error's ``<system-err>`` text. Only :func:`_sanitise` changes a value, so no
-    order changes and two renders of one record set stay byte-identical (AAP 0.13.1).
-
-    Args:
-        root: The suite element built from the run's records, before it is indented.
+    ``classname`` and ``name``, every property value, the failure or error ``message`` attribute and
+    body, and a run error's ``<system-err>`` text. Only :func:`_sanitise` changes a value, so no
+    order changes and two renders of one record set stay byte-identical (AAP 0.13.1). ``root`` is
+    the suite element, before it is indented.
     """
     for element in root.iter():
         if element.text is not None:
@@ -284,12 +276,9 @@ def _sanitise_tree(root: ElementTree.Element) -> None:
 def _add_properties(parent: ElementTree.Element, pairs: Sequence[tuple[str, str]]) -> None:
     """Attach a ``<properties>`` container to ``parent`` when there is a property to record.
 
-    An empty ``pairs`` attaches nothing, so a suite that knows no run id does not carry an empty
-    container.
-
-    Args:
-        parent: The element -- a testcase or the testsuite -- the container is attached to.
-        pairs: The ``(name, value)`` pairs, already redacted, in the order the document lists them.
+    An empty ``pairs`` attaches nothing, so a suite that knows no run id carries no empty container.
+    The pairs are the ``(name, value)`` pairs, already redacted, in the order the document lists
+    them.
     """
     if not pairs:
         return
@@ -304,10 +293,7 @@ def _artifact_pairs(record: ResultRecord, scrub: Redactor) -> list[tuple[str, st
     The five kinds are emitted in :data:`ARTIFACT_PROPERTY_ORDER`, so two runs that captured the
     same artifacts produce the same property order. A kind the record does not carry is omitted
     rather than emitted empty: a reference to a file that was never written would be a dead link.
-
-    Args:
-        record: The result record whose artifact list is read.
-        scrub: The redactor every path passes through before it reaches the document.
+    ``scrub`` is the redactor every path passes through.
 
     Returns:
         The ``(property name, relative path)`` pairs, each path scrubbed, in document order.
@@ -351,17 +337,13 @@ def _failure_payload(record: ResultRecord, scrub: Redactor) -> tuple[str, str]:
     """Return the ``message`` attribute and the element text of a failing record.
 
     The attribute is the first failure's message, redacted and then clipped to
-    :data:`FAILURE_MESSAGE_BYTES`, because a CI list shows it. The text carries every failing
-    phase, each prefixed with its phase name in brackets, so a test that failed in ``setup`` and
-    again in ``teardown`` reports both.
+    :data:`FAILURE_MESSAGE_BYTES`, because a CI list shows it. The text carries every failing phase,
+    each prefixed with its phase name in brackets, so a test that failed in ``setup`` and again in
+    ``teardown`` reports both. ``scrub`` is the redactor every message passes through.
 
-    Args:
-        record: The failing result record.
-        scrub: The redactor every message passes through.
-
-    Returns:
-        The ``(message attribute, element text)`` pair. A failing record that carries no failure
-        entry reports :data:`NO_FAILURE_DETAIL_MESSAGE` in both, so no element is ever blank.
+    Returns: The ``(message attribute, element text)`` pair. A failing record that carries no
+        failure entry reports :data:`NO_FAILURE_DETAIL_MESSAGE` in both, so no element is ever
+        blank.
     """
     if not record.failures:
         return NO_FAILURE_DETAIL_MESSAGE, NO_FAILURE_DETAIL_MESSAGE
@@ -421,11 +403,8 @@ def _suite_identity(
 
     Both are read from the node-id-sorted first result record, so two runs of one suite attribute
     the document identically whichever worker finished first. A run that recorded only run errors
-    still names its run id, and reports no profile.
-
-    Args:
-        results: The run's result records, already sorted by node id.
-        errors: The run's run-error elements, already sorted by worker id and message.
+    still names its run id, and reports no profile. ``results`` and ``errors`` arrive already
+    sorted.
 
     Returns:
         The ``(name, value)`` pairs, empty for a run that recorded nothing.
@@ -445,12 +424,8 @@ def _suite(
     The four counters are exact and never overlap: ``failures`` counts ``failed`` alone, ``errors``
     counts ``error`` alone and ``skipped`` counts the four outcomes that render a ``<skipped>``. A
     quarantined failure is therefore counted as skipped, which keeps the document agreeing with a
-    run that exits ``0`` under ``quarantine_mode = "report"``.
-
-    Args:
-        results: The run's result records, already sorted by node id.
-        errors: The run's run-error elements, already sorted by worker id and message.
-        scrub: The redactor every message passes through.
+    run that exits ``0`` under ``quarantine_mode = "report"``. ``results`` and ``errors`` arrive
+    already sorted, and ``scrub`` is the redactor every message passes through.
 
     Returns:
         The element, carrying the suite properties, then one testcase per result record, then one
@@ -499,16 +474,14 @@ def _partition(
 ) -> tuple[list[ResultRecord], list[RunError]]:
     """Split the run's elements into its result records and its run errors, each sorted.
 
-    Args:
-        records: The run's elements in any order.
+    ``records`` may arrive in any order.
 
     Returns:
         The result records sorted by node id, and the run errors sorted by worker id and message.
 
-    Raises:
-        ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
-            It subclasses ``TypeError`` and ``FoundryError``, so a caller defect surfaces instead of
-            being absorbed into a document that would silently omit a test.
+    Raises: ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
+        It subclasses ``TypeError`` and ``FoundryError``, so a caller defect surfaces instead of
+        being absorbed into a document that would silently omit a test.
     """
     results: list[ResultRecord] = []
     errors: list[RunError] = []
@@ -538,14 +511,12 @@ def render(records: Sequence[ResultElement], *, redactor: Redactor | None = None
     markup, and :func:`_sanitise_tree` removes the code points escaping cannot carry (AAP 0.3.2).
     The document is byte-identical for identical records (AAP 0.14.1).
 
-    Args:
-        records: The run's elements, in any order: result records, run errors, or both.
-        redactor: The run's redactor, built from ``secrets.redact_keys``. ``None`` uses the
-            built-in header and query deny-lists, so a caller cannot skip redaction by omitting it.
+    Args: records: The run's elements, in any order: result records, run errors, or both. redactor:
+        The run's redactor, built from ``secrets.redact_keys``. ``None`` uses the built-in header
+        and query deny-lists, so a caller cannot skip redaction by omitting it.
 
-    Returns:
-        The document as text: the XML declaration, the indented suite and a trailing newline. An
-        empty ``records`` yields a ``<testsuite>`` reporting zero tests.
+    Returns: The document as text: the XML declaration, the indented suite and a trailing newline.
+        An empty ``records`` yields a ``<testsuite>`` reporting zero tests.
 
     Raises:
         ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.
@@ -575,9 +546,8 @@ def write(
         path: The document to write, normally ``junit.xml`` in the invocation directory.
         redactor: The run's redactor, or ``None`` for the built-in deny-lists.
 
-    Returns:
-        The path written, or ``None`` when the filesystem refused the write. A refusal is reported
-        at ``WARNING`` and changes neither an outcome nor the exit code (AAP 0.14.3).
+    Returns: The path written, or ``None`` when the filesystem refused the write. A refusal is
+        reported at ``WARNING`` and changes neither an outcome nor the exit code (AAP 0.14.3).
 
     Raises:
         ElementTypeError: An element is neither a :class:`ResultRecord` nor a :class:`RunError`.

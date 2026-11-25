@@ -3,9 +3,10 @@
 ``plugin.py`` holds the pytest hooks; this is the plain Python it calls. :func:`bootstrap_session`
 resolves the configuration once (AAP 0.14.2) and builds the :class:`SessionState` that carries the
 artifact writer, redaction engine, retry budget, quarantine registry and timeout policy, so no
-consumer rebuilds one (AAP 0.4.8). :func:`assemble_payload` turns a final attempt into the
-``TestPayload`` the controller records, and :func:`resolve_exit_status` composes the exit code of
-AAP 0.4.4 and AAP 0.4.7.
+consumer rebuilds one from configuration (AAP 0.4.8). :func:`assemble_payload` turns a final attempt
+into the ``TestPayload`` the controller records, a boundary no reporting type crosses, and
+:func:`resolve_exit_status` with :func:`compose_exit_status` composes the exit code of AAP 0.4.4 and
+AAP 0.4.7. Importing defines names only (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from foundry.core.ids import is_valid_run_id, parse_iso8601, to_iso8601, utc_now
 from foundry.core.ids import run_id as new_run_id
 from foundry.core.types import PHASES, AttemptRecord, Phase
 from foundry.execution.quarantine import QuarantineDecision, QuarantineRegistry
-from foundry.execution.retry import ExecutionRetries
+from foundry.execution.retry import ExecutionRetries, failure_text
 from foundry.execution.sharding import NodeLedger, RunErrorLedger, ShardingService
 from foundry.execution.state import (
     SESSION_CONFIG,
@@ -56,6 +57,7 @@ __all__: Final[tuple[str, ...]] = (
     "SessionState",
     "assemble_payload",
     "bootstrap_session",
+    "compose_exit_status",
     "create_state",
     "node_ledger",
     "not_run_payload",
@@ -82,6 +84,9 @@ PYTEST_PASSTHROUGH_EXIT_CODES: Final[tuple[int, ...]] = (2, 3, 4, 5)
 Foundry never rewrites them (AAP 0.4.4): a configuration fault already ends the session with
 ``pytest.exit(returncode=2)``, so code 2 means the same thing on both surfaces.
 """
+
+FAILURE_MESSAGE_BYTES: Final[int] = 2_000
+"""Bytes allowed for one failure entry's ``message``; mirrors ``RUN_ERROR_MESSAGE_MAX_BYTES``."""
 
 _FAILED: Final[str] = "failed"
 _PASSED: Final[str] = "passed"
@@ -192,11 +197,10 @@ def create_state(
     worker too, with the controller's run id, start and invocation directory. Taking the
     configuration as an argument keeps resolution single, and
     :meth:`foundry.obs.artifacts.ArtifactWriter.ensure_run_dir` creates the artifact directory with
-    AAP 0.4.7's one-warning isolation.
-
-    ``run_id`` defaults to one minted from ``started_at`` and a worker passes the controller's, so
-    one run shares one artifact directory; ``invocation_dir`` defaults to the working directory. A
-    run id of the wrong shape raises ``FoundryError``, a budget outside its range ``ConfigError``.
+    AAP 0.4.7's one-warning isolation. ``run_id`` defaults to one minted from ``started_at`` and a
+    worker passes the controller's, so one run shares one artifact directory; ``invocation_dir``
+    defaults to the working directory. A run id of the wrong shape raises ``FoundryError``, a budget
+    outside its range ``ConfigError``.
     """
     moment = utc_now() if started_at is None else started_at
     identifier = new_run_id(now=moment) if run_id is None else _validated_run_id(run_id)
@@ -479,6 +483,26 @@ def resolve_exit_status(
     return pytest_exitstatus
 
 
+def compose_exit_status(
+    state: SessionState,
+    payloads: Mapping[str, TestPayload],
+    pytest_exitstatus: int,
+    run_error_count: int,
+) -> int:
+    """Compose the run's exit code from the payloads' quarantine verdicts and the run errors."""
+    return resolve_exit_status(
+        pytest_exitstatus,
+        quarantine=state.quarantine,
+        decisions=[
+            state.quarantine.decide(
+                quarantined=payload.quarantine.state != "none", outcome=payload.outcome
+            )
+            for payload in payloads.values()
+        ],
+        run_error_count=run_error_count,
+    )
+
+
 # --- Private helpers ------------------------------------------------------
 
 
@@ -591,27 +615,33 @@ def _outcome_from_reports(reports: Sequence[PhaseReport]) -> OutcomeValue:
 def _failure_entries(
     reports: Sequence[PhaseReport], redactor: Redactor, traceback_path: str | None
 ) -> tuple[FailurePayload, ...]:
-    """Return one redacted failure entry per failing phase, in setup-call-teardown order."""
+    """Return one redacted, bounded failure entry per failing phase, in setup-call-teardown order.
+
+    ``message`` is that phase's own failure message redacted and cut to ``FAILURE_MESSAGE_BYTES``;
+    the rendering it came from is the artifact ``traceback_path`` names (AAP 0.4.6).
+    """
     entries: list[FailurePayload] = []
     for report in sorted(reports, key=lambda item: _PHASE_RANK.get(item.when, _UNRANKED)):
         phase = _phase_of(report.when)
         if phase is None or report.outcome != _FAILED:
             continue
-        longrepr = report.longrepr
-        message = _scrubbed_message("" if longrepr is None else str(longrepr), redactor)
+        message = _scrubbed_message(
+            failure_text(report.longrepr), redactor, limit=FAILURE_MESSAGE_BYTES
+        )
         entries.append(FailurePayload(phase=phase, message=message, traceback_path=traceback_path))
     return tuple(entries)
 
 
-def _scrubbed_message(text: str, redactor: Redactor) -> str:
-    """Return ``text`` redacted, or the redaction marker when the scrubber itself raised.
+def _scrubbed_message(text: str, redactor: Redactor, *, limit: int | None = None) -> str:
+    """Return ``text`` redacted and cut to ``limit`` UTF-8 bytes, or the marker on a scrub fault.
 
-    A redaction fault costs one ``WARNING`` and the message, and nothing else: the entry keeps
-    its phase -- a fault that dropped the entry would publish a failure as a skip -- and no text
-    the scrubber could not clean is ever written (AAP 0.1.2, 0.14.3).
+    ``limit`` is a byte budget the scrubber applies after redacting, so a cut message never carries
+    an unscrubbed tail. A redaction fault costs one ``WARNING`` and the message, and nothing else:
+    the entry keeps its phase -- a fault that dropped the entry would publish a failure as a skip --
+    and no text the scrubber could not clean is ever written (AAP 0.1.2, 0.14.3).
     """
     try:
-        return redactor.text(text)
+        return redactor.text(text, limit=limit)
     except Exception as error:
         # Failure-isolation rule: an unscrubbable message is replaced, never written as it stands.
         emit_plumbing_failure(_COMPONENT, _REDACTION_FAULT, exc=error)

@@ -1,30 +1,21 @@
 """``foundry init``: scaffold a project that runs green with no network.
 
 The command exits ``0`` when the scaffold is written and ``2`` when the target or a destination is
-refused. The layout it writes is a ``foundry.toml`` holding the settings a starting project needs as
-commented defaults, a ``tests/test_smoke.py`` that requests ``foundry_config`` and passes,
-``testdata/`` with one CSV and the JSON Schema of a row of it, an ``artifacts/`` directory with its
-ignore entry, and a ``README.md`` naming the commands to run. ``--template api`` adds
-``tests/test_api.py`` and a ``cassettes/`` directory, with a ``foundry.toml`` that selects
-``replay`` so the first HTTP test opens no socket. Both scaffolds must run green offline, which is
-why the minimal smoke test touches nothing but the configuration fixture and the api template ships
-the recorded interaction its test looks up.
-
-Two rules hold for every refusal. The target is checked, and every destination is resolved through
+refused. The layout is a ``foundry.toml`` holding the settings a starting project needs as commented
+defaults, a ``tests/test_smoke.py`` that requests ``foundry_config`` and passes, ``testdata/`` with
+one CSV and its row's JSON Schema, an ``artifacts/`` directory with its ignore entry, and a
+``README.md``; ``--template api`` adds ``tests/test_api.py`` and a ``cassettes/`` directory, with a
+``foundry.toml`` selecting ``replay`` so the first HTTP test opens no socket. Every refusal leaves
+the filesystem as it was: the target is checked, and every destination resolved through
 :func:`foundry.core.paths.resolve_under`, before the first byte is written, so a path that is not a
 directory, a directory that is not empty without ``--force``, or a destination that would escape the
-target leaves the filesystem as it was. A fault raised inside the write loop is not a refusal: a
-scaffold source the installation cannot serve, or a destination it cannot write, ends the command
-with the same exit code ``2`` and leaves the files written before it in place (see
-:func:`_write_file`). And ``init`` resolves no project configuration, so it takes none of the
-``--foundry-*`` options the other commands do.
-
-The scaffold sources are package data read through :mod:`importlib.resources`, so they resolve
-identically from a source checkout and from an installed wheel, and copied as bytes so no template's
-text ever reaches a parser. The tables below are immutable constants rather than a registration
-table, nothing here reads the clock, sleeps, opens a socket or reads the environment, and the
-created paths print through :func:`foundry.cli.render.render_lines` in plan order, so two runs of
-one command write the same lines.
+target creates nothing. A fault inside the write loop is not a refusal: it ends the command with the
+same exit code ``2`` and leaves earlier files in place (:func:`_write_file`), and ``init`` resolves
+no project configuration, taking none of the ``--foundry-*`` options. The scaffold sources are
+package data read through :mod:`importlib.resources`, resolving identically from a source checkout
+and an installed wheel, and copied as bytes so no template's text reaches a parser. Nothing here
+reads the clock, sleeps, opens a socket or reads the environment, and the created paths print
+through :func:`foundry.cli.render.render_lines` in plan order, so two runs write the same lines.
 """
 
 from __future__ import annotations
@@ -100,11 +91,10 @@ _API_CASSETTE: Final[str] = f"{_CASSETTE_DIR}/{sanitize_nodeid(_CASSETTE_NODEID)
 class ScaffoldEntry:
     """One file a scaffold writes: the package-data source and the destination inside the project.
 
-    Attributes:
-        template: The template contributing the file, a key of :data:`SCAFFOLD_TEMPLATES`.
-        source: The file's name inside that template's package-data folder. A source that becomes a
-            Python module carries a ``.tmpl`` suffix, so package data is never collected or linted
-            as source; the destination below is the module's real name.
+    Attributes: template: The template contributing the file, a key of
+        :data:`SCAFFOLD_TEMPLATES`. source: The file's name inside that template's package-data
+        folder. A source that becomes a Python module carries a ``.tmpl`` suffix, so package data is
+        never collected or linted as source; the destination below is the module's real name.
         destination: The file's POSIX-relative path inside the scaffolded project.
     """
 
@@ -117,9 +107,9 @@ class ScaffoldEntry:
 class ScaffoldDir:
     """One directory a scaffold creates even when it holds no file.
 
-    Attributes:
-        template: The template the directory belongs to, a key of :data:`SCAFFOLD_TEMPLATES`.
-        directory: The directory's POSIX-relative path inside the scaffolded project.
+    Attributes: template: The template the directory belongs to, a key of
+        :data:`SCAFFOLD_TEMPLATES`. directory: The directory's POSIX-relative path inside the
+        scaffolded project.
     """
 
     template: str
@@ -178,23 +168,18 @@ def scaffold_plan(template: str) -> tuple[ScaffoldEntry, ...]:
 
     The plan is the minimal template's rows with the chosen template's rows layered over them: a
     destination the chosen template also names is taken from that template, in the position the
-    minimal row held, and a destination only the chosen template names is appended in
-    :data:`SCAFFOLD_FILES` order. The minimal template therefore plans exactly its own rows, while
-    the api template takes ``foundry.toml`` from its own folder, keeps the smoke test and the data
-    file, and gains the API test and its cassette.
-
-    Nothing here reads the filesystem: the order comes from the constants above, so two runs print
-    the same lines and two workers never disagree (AAP 0.13.1).
+    minimal row held, and one only the chosen template names is appended in :data:`SCAFFOLD_FILES`
+    order. The api template therefore takes ``foundry.toml`` from its own folder, keeps the smoke
+    test and the data file, and gains the API test and its cassette. Nothing here reads the
+    filesystem: the order comes from the constants above, so two runs print the same lines and two
+    workers never disagree (AAP 0.13.1).
 
     Args:
         template: The template to plan, one of the keys of :data:`SCAFFOLD_TEMPLATES`.
 
     Returns:
-        One entry per file to write, in write order.
-
-    Raises:
-        foundry.core.exceptions.ConfigError: ``template`` is not a key of
-            :data:`SCAFFOLD_TEMPLATES`.
+        One entry per file to write, in write order; a name that is not a key of
+        :data:`SCAFFOLD_TEMPLATES` raises ``foundry.core.exceptions.ConfigError``.
     """
     _require_template(template)
     overrides = {entry.destination: entry for entry in SCAFFOLD_FILES if entry.template == template}
@@ -217,11 +202,8 @@ def scaffold_dirs(template: str) -> tuple[ScaffoldDir, ...]:
         template: The template to list, one of the keys of :data:`SCAFFOLD_TEMPLATES`.
 
     Returns:
-        One entry per directory to create, in creation order.
-
-    Raises:
-        foundry.core.exceptions.ConfigError: ``template`` is not a key of
-            :data:`SCAFFOLD_TEMPLATES`.
+        One entry per directory to create, in creation order; a name that is not a key of
+        :data:`SCAFFOLD_TEMPLATES` raises ``foundry.core.exceptions.ConfigError``.
     """
     _require_template(template)
     inherited = {_MINIMAL, template}
@@ -232,15 +214,11 @@ def _require_template(template: str) -> None:
     """Reject a template name ``--template`` could not have produced.
 
     ``click.Choice`` filters the option before this module's command runs, so the guard exists for a
-    caller that reaches :func:`scaffold_plan` or :func:`scaffold_dirs` directly, and it names the
-    accepted templates rather than only the rejected one.
+    caller reaching :func:`scaffold_plan` or :func:`scaffold_dirs` directly, and names the accepted
+    templates rather than only the rejected one.
 
-    Args:
-        template: The template name to check.
-
-    Raises:
-        foundry.core.exceptions.ConfigError: ``template`` is not a key of
-            :data:`SCAFFOLD_TEMPLATES`.
+    Args: template: The template name to check; a name that is not a key of
+        :data:`SCAFFOLD_TEMPLATES` raises ``foundry.core.exceptions.ConfigError``.
     """
     if template in SCAFFOLD_TEMPLATES:
         return
@@ -256,10 +234,9 @@ def _refuse(message: str, hint: str) -> NoReturn:
 
     ``click.UsageError`` is the route that publishes exit code ``2`` for the installed script and
     for the command line :mod:`foundry.cli.main` builds alike (AAP 0.4.4), and it writes the message
-    to stderr itself, so the fault is reported once rather than once here and once again by the
-    error mapping. The hint is folded in as an indented second line, the shape a Foundry error's own
-    hint prints (AAP 0.7.4), and neither line can carry a secret because nothing here holds one
-    (I9).
+    to stderr itself, so the fault is reported once rather than again by the error mapping. The hint
+    is folded in as an indented second line, the shape a Foundry error's own hint prints (AAP
+    0.7.4), and neither line can carry a secret because nothing here holds one (I9).
 
     Args:
         message: Why the command refused, naming the path or destination at fault.
@@ -282,9 +259,8 @@ def _check_target(path: Path, *, force: bool) -> None:
         path: The target directory as the operator spelled it; it may not exist yet.
         force: Whether ``--force`` was given, which admits a non-empty directory.
 
-    Raises:
-        click.UsageError: The path is not a directory, is unreadable, or is non-empty without
-            ``force``.
+    Raises: click.UsageError: The path is not a directory, is unreadable, or is non-empty
+        without ``force``.
     """
     if path.exists() and not path.is_dir():
         _refuse(
@@ -307,19 +283,15 @@ def _check_target(path: Path, *, force: bool) -> None:
 def _contained(root: Path, relative: str) -> Path:
     """Return ``root / relative`` resolved, or refuse when it does not stay inside ``root``.
 
-    The containment rule itself belongs to :func:`foundry.core.paths.resolve_under` -- one
-    implementation, shared with the artifact and cassette writers -- so this function only turns
-    that typed refusal into the usage error this command publishes.
+    The containment rule belongs to :func:`foundry.core.paths.resolve_under` -- one implementation,
+    shared with the artifact and cassette writers -- so this function only turns that typed refusal
+    into the usage error this command publishes.
 
-    Args:
-        root: The target directory as the operator spelled it.
-        relative: A POSIX-relative path from :data:`SCAFFOLD_FILES` or :data:`SCAFFOLD_DIRS`.
+    Args: root: The target directory as the operator spelled it. relative: A POSIX-relative path
+        from :data:`SCAFFOLD_FILES` or :data:`SCAFFOLD_DIRS`.
 
-    Returns:
-        The resolved absolute path to write.
-
-    Raises:
-        click.UsageError: The resolved path is neither ``root`` nor a directory beneath it.
+    Returns: The resolved absolute path to write; a path neither ``root`` nor a directory
+        beneath it raises ``click.UsageError``.
     """
     try:
         return resolve_under(root, relative)
@@ -372,20 +344,15 @@ def _template_bytes(folder: str, source: str) -> bytes:
     """Return the bytes of one package-data scaffold source.
 
     The source is read through the :class:`importlib.resources.abc.Traversable` API rather than from
-    a path relative to this module, so an installed wheel that ships the templates as package data
+    a path relative to this module, so an installed wheel shipping the templates as package data
     serves them exactly as a source checkout does (AAP 0.4.1).
 
-    Args:
-        folder: The template's package-data sub-folder, a value of :data:`SCAFFOLD_TEMPLATES`.
+    Args: folder: The template's package-data sub-folder, a value of :data:`SCAFFOLD_TEMPLATES`.
         source: The file's name inside that folder.
 
-    Returns:
-        The file's bytes, copied to its destination unchanged.
-
-    Raises:
-        foundry.core.exceptions.ConfigError: The resource is missing or unreadable, which means the
-            installed distribution is incomplete. The message names the template folder and the file
-            and no path outside the package.
+    Returns: The file's bytes, copied to its destination unchanged; a missing or unreadable
+        resource means an incomplete distribution and raises ``foundry.core.exceptions.ConfigError``
+        naming the template folder and the file, and no path outside the package.
     """
     resource = resources.files(_PACKAGE).joinpath(_TEMPLATE_DIR, folder, source)
     try:
@@ -400,17 +367,16 @@ def _template_bytes(folder: str, source: str) -> bytes:
 def _write_file(destination: Path, payload: bytes) -> None:
     """Write ``payload`` to ``destination``, creating its parents, or refuse.
 
-    A target that cannot be written is the operator's to fix, so it ends the command with the same
-    clean usage error every other refusal produces rather than a traceback. Files written before the
-    fault stay written: removing what a refusal did not create is not this command's decision.
+    A target that cannot be written is the operator's to fix, so it ends the command with the clean
+    usage error every other refusal produces rather than a traceback. Files written before the fault
+    stay written: removing what a refusal did not create is not this command's decision.
 
     Args:
         destination: The resolved absolute path to write.
         payload: The bytes of the package-data source the destination was planned from.
 
-    Raises:
-        click.UsageError: The parent directory could not be created, or the file could not be
-            written.
+    Raises: click.UsageError: The parent directory could not be created, or the file could not
+        be written.
     """
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -452,34 +418,25 @@ def _create_directory(directory: Path) -> None:
 def init(path: Path, *, template: str = _MINIMAL, force: bool = False) -> int:
     """Scaffold a Foundry project into ``path`` and publish the exit status of AAP 0.4.4.
 
-    ``PATH`` is the directory to write into: it is created when it does not exist, and it must be
-    empty unless ``--force`` says otherwise. The files land at the destinations
-    :func:`scaffold_plan` fixes and are read from the template each entry names, so the api scaffold
-    inherits the minimal rows it does not override from the minimal folder rather than looking for
-    them in its own; the directories come from :func:`scaffold_dirs`. Every destination is resolved
-    under ``path`` before the first byte is written, so a refusal raised by the pre-checks leaves
-    the target exactly as it was; a fault raised while writing leaves the files written before it
-    in place, as :func:`_write_file` documents.
-
-    The created files print one per line, in plan order and spelled with the directory the operator
-    named, so the command's output is the list a reader can check the layout against (AAP 0.7.4).
-    Configuration is not resolved here and no ``--foundry-*`` option is declared, because
-    scaffolding reads no project setting (AAP 0.4.4, AAP 0.4.8).
+    ``PATH`` is the directory to write into: created when it does not exist, and it must be empty
+    unless ``--force`` says otherwise. The files land at the destinations :func:`scaffold_plan`
+    fixes, read from the template each entry names, and the directories come from
+    :func:`scaffold_dirs`. Every destination is resolved under ``path`` before the first byte is
+    written, so a pre-check refusal leaves the target exactly as it was; a fault while writing
+    leaves earlier files in place, as :func:`_write_file` documents. The created files print one per
+    line, in plan order and spelled with the directory the operator named (AAP 0.7.4). Configuration
+    is not resolved and no ``--foundry-*`` option is declared, because scaffolding reads no project
+    setting (AAP 0.4.4, AAP 0.4.8).
 
     Args:
         path: The directory to scaffold, as the operator spelled it.
         template: The template to write, one of the keys of :data:`SCAFFOLD_TEMPLATES`.
         force: Whether to write into a directory that already holds something.
 
-    Returns:
-        :data:`foundry.cli.exit_codes.SUCCESS`, meaning the scaffold was written. The command that
-        publishes it as this process's status is :func:`foundry.cli.main.main`.
-
-    Raises:
-        click.UsageError: The path is not a directory, the directory is not empty without
-            ``force``, a destination escapes the target, or a file cannot be written. Click
-            publishes exit code ``2`` for it, the only code other than success this command
-            produces.
+    Returns: :data:`foundry.cli.exit_codes.SUCCESS`, the status :func:`foundry.cli.main.main`
+        publishes; a path that is not a directory, a directory not empty without ``force``, a
+        destination escaping the target or an unwritable file raises ``click.UsageError``, whose
+        exit code ``2`` is the only code other than success this command produces.
     """
     _check_target(path, force=force)
     plan = scaffold_plan(template)

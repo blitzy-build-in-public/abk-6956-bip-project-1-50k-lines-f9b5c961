@@ -4,7 +4,8 @@ AAP 0.14.1's criterion 4 has two halves, and this module is its failure half: ``
 must end a run with exit code 2 and a message naming the key and its accepted range. The cases that
 share that code are the AAP 0.4.7 state-table rows for a configuration fault -- an explicitly named
 file that does not exist, an unknown key in any layer with ``difflib``'s closest valid spelling, an
-unparseable ``FOUNDRY_*`` value, an absent auth secret variable, and the ``--foundry-record`` /
+unparseable ``FOUNDRY_*`` value or ``--foundry-*`` value, an absent auth secret variable, and the
+``--foundry-record`` /
 ``--foundry-replay`` combination AAP 0.4.4 calls a usage error. Every one of them must also write no
 report, because a session that could not be configured collected nothing to report on.
 
@@ -27,10 +28,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 REACHES: tuple[str, ...] = ()
 """This module drives no fixture, subcommand, loader or report format through the real entry point.
@@ -59,6 +60,21 @@ def test_smoke() -> None:
 _VALID_TOML: Final[str] = "[http]\ntimeout = 2.0\n"
 """A valid configuration, for the positive control."""
 
+_VALID_TIMEOUT: Final[str] = "1.0"
+"""The value the numeric control passes to the generic float option, read back as a float."""
+
+_TIMEOUT_PROBE_TEST: Final[str] = '''"""Assert the resolved timeout is the supplied value."""
+
+from foundry.config import FoundryConfig
+
+
+def test_timeout_comes_from_the_command_line(foundry_config: FoundryConfig) -> None:
+    """The generic override still reaches the typed field, attributed to its own spelling."""
+    assert foundry_config.http.timeout == 1.0
+    assert foundry_config.source_of("http.timeout").detail == "--foundry-http.timeout"
+'''
+"""A test that fails unless the command line's numeric override is the resolved value."""
+
 _TIMEOUT_KEY: Final[str] = "http.timeout"
 """The key criterion 4 drives out of range, spelled as every message must name it."""
 
@@ -73,6 +89,23 @@ _TIMEOUT_VARIABLE: Final[str] = "FOUNDRY_HTTP__TIMEOUT"
 
 _NUMBER_EXPECTED: Final[str] = "expected a number"
 """What the environment layer calls a float: the expected type AAP 0.4.5 asks a message to name."""
+
+_INTEGER_EXPECTED: Final[str] = "expected an integer"
+"""What the configuration layer calls an int: the same message shape for the other numeric type."""
+
+_CAPTURE_LINES_OPTION: Final[str] = "--foundry-logging.capture_lines"
+"""The generic option of an ``int`` key, the second numeric kind the parser used to own."""
+
+_ALIAS_TIMEOUT_OPTION: Final[str] = "--foundry-timeout"
+"""The named alias onto ``execution.timeout``: a second spelling of a float key (AAP 0.4.4)."""
+
+_PYTEST_USAGE_TEXT: Final[tuple[str, ...]] = (
+    "usage: pytest",
+    "invalid float value",
+    "invalid int value",
+    "unrecognized arguments",
+)
+"""pytest's own argument-parser wording, which must never be what answers an unreadable value."""
 
 _MISSPELT_KEY: Final[str] = "http.timout"
 """A key a person misspells, one letter short of ``http.timeout``."""
@@ -227,6 +260,63 @@ def test_unparseable_environment_value_names_the_variable_and_its_type(
     output = _assert_exit_2_without_reports(result, directory, case="unparseable environment value")
     assert _TIMEOUT_VARIABLE in output, f"the message must name the variable:\n{output}"
     assert _NUMBER_EXPECTED in output, f"the message must name the expected type:\n{output}"
+
+
+@pytest.mark.parametrize(
+    ("spelling", "bad_value", "expected_type"),
+    [
+        pytest.param(_TIMEOUT_OPTION, "abc", _NUMBER_EXPECTED, id="float-key-generic-option"),
+        pytest.param(_CAPTURE_LINES_OPTION, "1.5", _INTEGER_EXPECTED, id="int-key-generic-option"),
+        pytest.param(_ALIAS_TIMEOUT_OPTION, "abc", _NUMBER_EXPECTED, id="float-key-named-alias"),
+    ],
+)
+def test_unparseable_command_line_value_exits_2_with_the_expected_type(
+    pytester: pytest.Pytester,
+    clean_foundry_env: None,
+    spelling: str,
+    bad_value: str,
+    expected_type: str,
+) -> None:
+    """AAP 0.4.7 and A4: an unreadable ``--foundry-*`` value is exit 2 on the bare pytest surface.
+
+    pytest's own argument parser would answer an unreadable number with its usage-error code 4 and
+    its own wording, which is the one outcome AAP 0.4.7's preamble and assumption A4 exclude: the
+    configuration fault must be the session's exit 2 on both surfaces. The three parameters are the
+    shapes that used to reach that parser -- the generic option of a float key, the generic option
+    of an int key, and the named alias onto a float key -- so a numeric option that again owns its
+    own ``argparse`` type fails here rather than silently changing the published exit code.
+    """
+    directory = _prepare(pytester)
+    result = pytester.runpytest_subprocess(f"{spelling}={bad_value}")
+    output = _assert_exit_2_without_reports(result, directory, case=f"unparseable {spelling}")
+    expected = f"invalid value for option {spelling}: {expected_type}"
+    assert expected in output, (
+        f"the message must read {expected!r}, naming the option and the type its key declares "
+        f"(AAP 0.4.5):\n{output}"
+    )
+    for usage_text in _PYTEST_USAGE_TEXT:
+        assert usage_text not in output, (
+            f"pytest's own argument-parser wording {usage_text!r} must not answer an unreadable "
+            f"Foundry value: that text comes with pytest's usage-error 4 (AAP 0.4.7, A4).\n{output}"
+        )
+
+
+def test_valid_numeric_override_still_runs(
+    pytester: pytest.Pytester, clean_foundry_env: None
+) -> None:
+    """The control for the three cases above: a readable numeric override runs green and resolves.
+
+    Reading every option as text may cost nothing an operator relies on. The value a shell types
+    still reaches the typed field as a float, and AAP 0.4.5's ``cli:<option>`` attribution still
+    names the spelling that supplied it, so nothing but the refusal of an unreadable value changed.
+    """
+    pytester.makepyfile(test_probe=_TIMEOUT_PROBE_TEST)
+    result = pytester.runpytest_subprocess(f"{_TIMEOUT_OPTION}={_VALID_TIMEOUT}")
+    output = _output(result)
+    assert result.ret == 0, (
+        f"a valid numeric override must run green, not exit {result.ret}:\n{output}"
+    )
+    result.assert_outcomes(passed=1)
 
 
 def test_missing_explicit_configuration_file_names_the_path(

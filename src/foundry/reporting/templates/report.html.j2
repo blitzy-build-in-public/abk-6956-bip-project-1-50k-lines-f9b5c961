@@ -27,7 +27,10 @@
         <span>run id {{ ctx.run_id }}</span>
         <span>profile={{ ctx.profile }}</span>
         <span>finished_at={{ ctx.finished_at }}</span>
-        <span>{{ ctx.total_tests }} tests</span>
+        <span>{{ ctx.total_tests }} test{{ '' if ctx.total_tests == 1 else 's' }}</span>
+        {% if ctx.run_error_count %}
+        <span>{{ ctx.run_error_count }} run error{{ '' if ctx.run_error_count == 1 else 's' }}</span>
+        {% endif %}
       </p>
     </header>
     <main>
@@ -94,13 +97,13 @@
       {% for panel in ctx.panels %}
       <details class="panel"{% if loop.first %} open{% endif %}>
         <summary>{{ panel.nodeid }}: {{ panel.outcome }} ({{ panel.phase }})</summary>
-        <p>{{ panel.message }}</p>
+        <pre class="message">{{ panel.message }}</pre>
         {% if panel.has_links %}
         {# Each *_path is a relative filesystem path whose node-id segment is percent-escaped by
            the artifact-name sanitiser; doubling the percent sign is the one encoding level that
            turns such a path into a relative URL a browser opens, keeping the path scheme-free.
-           The traceback stays plain text rather than a third link: a person opens the two dumps,
-           and the traceback path is enough to find the file. #}
+           The traceback row is a third link of the same shape: its href opens the file, its text
+           stays the path AAP 0.7.4 has the panel carry. #}
         <dl>
           {% if panel.request_path %}
           <dt>request</dt>
@@ -112,7 +115,8 @@
           {% endif %}
           {% if panel.traceback_path %}
           <dt>traceback</dt>
-          <dd><code>{{ panel.traceback_path }}</code></dd>
+          <dd><a href="{{ panel.traceback_path | replace('%', '%25') }}">{{
+            panel.traceback_path }}</a></dd>
           {% endif %}
         </dl>
         {% endif %}

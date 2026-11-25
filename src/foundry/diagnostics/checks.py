@@ -201,16 +201,16 @@ def check_plugin_registered(
     """Report whether the ``pytest11`` entry point of AAP 0.4.2 is installed and resolvable.
 
     That entry point -- group ``pytest11``, name ``foundry``, target ``foundry.plugin`` -- is what
-    makes zero-configuration activation work: pytest imports the module during ``_preparse``
-    without a ``-p`` flag and without a configuration file. A distribution that declares it but
-    ships no importable module would activate nothing, so both halves are checked and either
-    shortfall is a ``FAIL`` that states which one it is.
+    makes zero-configuration activation work: pytest imports the module during ``_preparse`` with no
+    ``-p`` flag and no configuration file. A distribution declaring it but shipping no importable
+    module would activate nothing, so both halves are checked and either shortfall is a ``FAIL``
+    stating which.
 
     Args:
-        discovered: the ``(name, value)`` pairs read from the ``pytest11`` group. It defaults to
-            ``None``, meaning the installed metadata is read inside this call.
-        module_available: whether ``foundry.plugin`` resolves. It defaults to ``None``, meaning
-            :func:`importlib.util.find_spec` is consulted inside this call.
+        discovered: the ``(name, value)`` pairs read from the ``pytest11`` group, or ``None`` to
+        read the installed metadata inside this call.
+        module_available: whether ``foundry.plugin`` resolves, or ``None`` to consult
+        :func:`importlib.util.find_spec` inside this call.
 
     Returns:
         The row named :data:`PROBE_PLUGIN`, with ``required=True``.
@@ -250,10 +250,9 @@ def check_plugin_registered(
 def _configuration_row(profile: str) -> ProbeResult:
     """Return the ``PASS`` row a resolved configuration earns.
 
-    The detail is :func:`foundry.config.errors.success_message`'s output: the
-    ``configuration valid (profile=<name>)`` message of AAP 0.4.4 and AAP 0.4.5, rendered from its
-    one definition site rather than re-stated here, so ``foundry doctor`` and
-    ``foundry config validate`` agree word for word and change together.
+    The detail is :func:`foundry.config.errors.success_message`'s output, the ``configuration valid
+    (profile=<name>)`` message of AAP 0.4.4 and AAP 0.4.5, rendered from its one definition site, so
+    ``foundry doctor`` and ``foundry config validate`` agree word for word.
 
     Args:
         profile: the active profile name as text, which :func:`success_message` interpolates.
@@ -276,12 +275,12 @@ def _resolve_configuration(
 
     The pair form lets :func:`run_checks` hand the artifact and cassette probes the model's
     configured directories, so the four layers of AAP 0.4.5 are resolved exactly once per
-    invocation. A supplied ``config`` is taken as given; its profile is rendered with ``str``
-    rather than read as an enum member, so a configuration whose ``model_copy`` installs the name
-    as a plain string is reported rather than faulting. An absent one is resolved through
-    :func:`foundry.config.resolve`, whose :class:`~foundry.core.exceptions.ConfigError` becomes the
-    row's detail -- naming the key, the variable or the file and never a secret value (implicit
-    requirement I9) -- and any other exception propagates to the caller's isolation boundary.
+    invocation. A supplied ``config`` is taken as given, its profile rendered with ``str`` rather
+    than read as an enum member, so a ``model_copy`` installing the name as plain text is reported
+    rather than faulting. An absent one is resolved through :func:`foundry.config.resolve`, whose
+    :class:`~foundry.core.exceptions.ConfigError` becomes the row's detail -- naming the key,
+    variable or file and never a secret value (implicit requirement I9) -- and any other exception
+    propagates to the caller's isolation boundary.
 
     Args:
         config: the configuration to report on, or ``None`` to resolve one now.
@@ -357,18 +356,17 @@ def check_artifacts_dir(
     """Report whether the artifact directory can be created and written (AAP 0.7.1).
 
     The directory is a run's output root -- ``artifacts`` by default, with one ``<run_id>/`` below
-    it per run -- so a run that cannot write there captures nothing. The probe therefore creates
-    it with ``parents=True`` and proves the write, reporting the absolute resolved path either
-    way.
+    it per run -- so a run that cannot write there captures nothing. The probe creates it with
+    ``parents=True``, proves the write and reports the absolute resolved path either way.
 
     Args:
-        config: the resolved configuration whose ``artifacts.dir`` is inspected. ``None`` reports
-            that the probe could not run, which is a ``WARN`` because a configuration fault has
-            already failed its own required row.
+        config: the resolved configuration whose ``artifacts.dir`` is inspected; ``None`` reports
+        that the probe could not run, a ``WARN`` because a configuration fault has already failed
+        its own required row.
         directory: an explicit directory that wins over ``config.artifacts.dir``, which is how a
-            test probes a ``tmp_path``.
-        cwd: the directory a relative path resolves against; it defaults to the process working
-            directory.
+        test probes a ``tmp_path``.
+        cwd: the directory a relative path resolves against, the process working directory by
+        default.
 
     Returns:
         The row named :data:`PROBE_ARTIFACTS`, with ``required=True``.
@@ -405,17 +403,17 @@ def check_cassette_dir(
     """Report the state of the cassette directory (AAP 0.7.1).
 
     ``cassette.mode`` defaults to ``off``, so a project that never records owns no cassette
-    directory and that absence is a ``WARN`` rather than a fault: ``foundry doctor`` has to pass
-    on a project that does not use the feature. An existing directory reports how many cassette
-    documents it holds, counted over a sorted glob so the number and the text are stable. A path
-    that exists but is not a directory is a ``FAIL``, because recording there could not work.
+    directory and that absence is a ``WARN``: ``foundry doctor`` has to pass on a project that does
+    not use the feature. An existing directory reports how many documents it holds, counted over a
+    sorted glob so the number and the text are stable, and a path that exists but is not a directory
+    is a ``FAIL``, recording there being impossible.
 
     Args:
         config: the resolved configuration whose ``cassette.dir`` is inspected; ``None`` reports
-            that the probe could not run.
+        that the probe could not run.
         directory: an explicit directory that wins over ``config.cassette.dir``.
-        cwd: the directory a relative path resolves against; it defaults to the process working
-            directory.
+        cwd: the directory a relative path resolves against, the process working directory by
+        default.
 
     Returns:
         The row named :data:`PROBE_CASSETTES`, with ``required=True``.
@@ -515,18 +513,18 @@ def run_checks(
 ) -> DoctorReport:
     """Run every probe once and return the report ``foundry doctor`` renders (AAP 0.7.3/0.7.4).
 
-    The six rows appear in the fixed order interpreter, plugin, configuration, artifacts,
-    cassettes, socket_guard, which is the order the table prints and the JSON array serialises.
-    Configuration is resolved once and the resolved model is what the artifact and cassette probes
-    inspect, so those three rows cannot disagree about which directories the command checked. Each
-    probe runs inside :func:`_guarded`, so one probe's fault is a ``FAIL`` row, not a traceback.
+    The six rows appear in the fixed order interpreter, plugin, configuration, artifacts, cassettes,
+    socket_guard -- the order the table prints and the JSON array serialises. Configuration is
+    resolved once, and the resolved model is what the artifact and cassette probes inspect, so those
+    three rows cannot disagree about which directories were checked. Each probe runs inside
+    :func:`_guarded`, so one probe's fault is a ``FAIL`` row, not a traceback.
 
     Args:
         config: a configuration to report on, or ``None`` to resolve one now.
         cwd: the directory relative configured paths resolve against; ``None`` means the process
-            working directory.
+        working directory.
         discovered: the ``pytest11`` entry-point pairs to judge, or ``None`` to read the installed
-            metadata.
+        metadata.
         interpreter: the interpreter to judge, or ``None`` to describe the running one.
         guard_state: the socket-guard state to report, or ``None`` to detect it now.
 

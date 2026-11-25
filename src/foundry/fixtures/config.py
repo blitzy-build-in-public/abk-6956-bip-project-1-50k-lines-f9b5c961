@@ -12,19 +12,16 @@ plugin's own bootstrap passes: the ``--foundry-*`` overrides, read back through
 :func:`foundry.config.cli_layer.collect_from_pytest`, and the invocation directory file discovery is
 anchored to. Resolution is the one place the four layers are applied, so the fixture and the plugin
 cannot disagree about a value. ``environ`` is deliberately not passed: the environment layer belongs
-to :mod:`foundry.config.env`, the only reader of the process environment.
+to :mod:`foundry.config.env`.
 
 **Overridable by name.** ``foundry_config`` is a plain session-scoped fixture returning the plain
 resolved model, so a project replaces it with pytest's documented same-name override and shadows the
 value through ``model_copy(update=...)``, which is how ``examples/checkout/conftest.py`` supplies an
-ephemeral ``http.base_url`` and points ``data.dir``/``cassette.dir`` at the example's directories.
-``foundry_profile`` follows a shadowed value because it reads the configuration.
-
-**Import discipline.** ``foundry.plugin`` imports this module during ``pytest_configure`` inside the
-150 ms budget, so module scope imports ``pytest``, :mod:`pathlib` and :mod:`typing` only:
-:mod:`foundry.config`, which pulls in ``pydantic``, is imported inside the fixture body. A
-configuration holds the *names* of the environment variables that carry credentials, never their
-values, and nothing here reads a clock.
+ephemeral ``http.base_url`` and points ``data.dir``/``cassette.dir`` at the example's directories;
+``foundry_profile`` follows a shadowed value because it reads the configuration. Module scope
+imports ``pytest``, :mod:`pathlib` and :mod:`typing` only, :mod:`foundry.config` being pulled in
+inside the fixture body. A configuration holds the *names* of the environment variables that carry
+credentials, never their values, and nothing here reads a clock.
 """
 
 from __future__ import annotations
@@ -46,11 +43,10 @@ def _invocation_dir(config: pytest.Config) -> Path:
 
     Two of the five discovery steps are anchored to the invocation directory, so the value handed to
     :func:`foundry.config.merge.resolve` as ``cwd`` is the directory the operator typed the command
-    in, not the root directory pytest computed from the arguments.
-
-    The record is read as text before it becomes a path because ``Path("")`` is ``Path(".")``: an
-    empty record would normalise itself into a usable "current directory" and hide the case this
-    fallback exists for, so a blank record falls back to ``rootpath``.
+    in, not the root directory pytest computed from the arguments. The record is read as text before
+    it becomes a path because ``Path("")`` is ``Path(".")``: an empty record would normalise itself
+    into a usable "current directory" and hide the case this fallback exists for, so a blank record
+    falls back to ``rootpath``.
 
     Returns:
         The invocation directory, or ``config.rootpath`` when the recorded directory is blank.
@@ -66,16 +62,14 @@ def foundry_config(request: pytest.FixtureRequest) -> FoundryConfig:
     """Return the configuration this session resolved, with the source of every value.
 
     Session scoped: one resolution serves the whole run, and every test, every fixture that depends
-    on it and the plugin's own report read the same immutable instance.
-
-    The four layers are applied in their fixed order -- the settings field defaults, then the
-    configuration file with the selected ``[profiles.<name>]`` table over it, then the ``FOUNDRY_*``
-    environment, then the ``--foundry-*`` command line -- so a value stated in more than one place
-    resolves to the highest layer that stated it. Per-key provenance is available through
+    on it and the plugin's own report read the same immutable instance. The four layers are applied
+    in their fixed order -- the settings field defaults, then the configuration file with the
+    selected ``[profiles.<name>]`` table over it, then the ``FOUNDRY_*`` environment, then the
+    ``--foundry-*`` command line -- so a value stated in more than one place resolves to the highest
+    layer that stated it. Per-key provenance is available through
     :meth:`foundry.config.models.FoundryConfig.source_of`, which names the layer (``default``,
-    ``file``, ``profile:<name>``, ``env`` or ``cli``) and what inside it supplied the value.
-
-    A configuration fault is not absorbed here: :class:`foundry.core.exceptions.ConfigError`
+    ``file``, ``profile:<name>``, ``env`` or ``cli``) and what inside it supplied the value. A
+    configuration fault is not absorbed here: :class:`foundry.core.exceptions.ConfigError`
     propagates unchanged, so the test that requested the fixture reports why the run cannot be
     configured, just as the plugin terminates a session it cannot configure before collection.
 
@@ -108,11 +102,10 @@ def foundry_profile(foundry_config: FoundryConfig) -> str:
     Session scoped, and always one of ``default``, ``local``, ``ci`` or ``staging``: the value is
     the ``profile`` key of the resolved configuration, which the file layer's ``[profiles.<name>]``
     selection, a ``FOUNDRY_PROFILE`` variable or ``--foundry-profile`` may have set, with the
-    environment and the command line outranking the file.
-
-    A string rather than the :class:`foundry.config.enums.ProfileName` member, because this is the
-    fixture a suite asserts and interpolates with: it is the name the terminal summary prints as
-    ``foundry: profile=<name>`` and the name recorded in every result record and manifest.
+    environment and the command line outranking the file. A string rather than the
+    :class:`foundry.config.enums.ProfileName` member, because this is the fixture a suite asserts
+    and interpolates with: it is the name the terminal summary prints as ``foundry: profile=<name>``
+    and the name recorded in every result record and manifest.
 
     Returns:
         The active profile name, for example ``"ci"``.

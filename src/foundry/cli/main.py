@@ -1,45 +1,28 @@
 """The ``foundry`` console script: the click application and the one exit-code mapping.
 
-This module is the exact target of the ``foundry`` console entry point --
-``[project.scripts] foundry = "foundry.cli.main:main"`` -- so it owns the three things the command
-line surface needs and nothing a subcommand implements (AAP 0.4.2, 0.4.4, 0.7.1): the click group
-with its ``--version`` banner and its five documented subcommands, the shared ``--foundry-*``
-override decorator every configuration-aware subcommand is decorated with, and the single place a
-Foundry error becomes a process exit status.
+This module is the exact target of ``[project.scripts] foundry = "foundry.cli.main:main"``, so it
+owns the click group with its ``--version`` banner and five subcommands (AAP 0.4.2, 0.4.4) and the
+one place a Foundry error becomes the exit status AAP 0.4.4 assigns it (AAP 0.4.4, 0.4.7).
 
-**The exit-code table** (AAP 0.4.4, 0.4.9, 0.7.3): ``0`` success, ``1`` failed tests or a newly
-failing comparison, ``2`` a usage or configuration error Foundry itself raised. pytest's own ``3``
-(``INTERNALERROR``), ``4`` (usage error) and ``5`` (no tests collected) are returned unchanged, and
-:func:`foundry.cli.exit_codes.passthrough` is what carries them: Foundry never rewrites a code
-pytest produced, and this module never invents one of its own. ``KeyboardInterrupt`` keeps pytest's
-interrupt code, so a ``^C`` is published as an interrupt rather than reclassified (AAP 0.4.7).
+**The layer boundary** (AAP 0.4.8): ``foundry.cli`` may import ``core``, ``obs``, ``config``,
+``execution``, ``diagnostics`` and ``reporting``, never ``foundry.plugin``; importing it is inert.
 
-**The layer boundary** (AAP 0.4.8): ``foundry.cli`` sits on the interface rung and may import
-``core``, ``obs``, ``config``, ``execution``, ``diagnostics`` and ``reporting``. This module must
-never import ``foundry.plugin``: the plugin activates through the ``pytest11`` entry point, and the
-command line reaching into it would make the two surfaces inseparable. Importing this module parses
-no argument, reads no environment, configures no logger and imports no ``pytest``; the group is
-built per call, so an import is inert.
-
-The subcommand modules are imported inside :func:`build_group` rather than at module scope, and the
-reason is the one cycle this package would otherwise close: every subcommand module imports the
-override decorator, so a module-scope import of them from here -- the module the decorator's home
-would have to import back -- leaves that home unimportable on its own. The decorator therefore lives
-in :mod:`foundry.cli.config_cmd`, which owns the single override set, and this module re-exports it
-as part of its public surface so the entry point still publishes the name the plan requires.
+The subcommand modules are imported inside :func:`build_group` rather than here, because each one
+imports the ``--foundry-*`` override decorator, whose home would otherwise import this module back.
+The PEP 562 :func:`__getattr__` below serves that decorator on first access, never at import time,
+so this module reaches no :mod:`foundry.config` or ``pydantic`` until a caller asks for the name.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Final
+from typing import TYPE_CHECKING, Final, cast
 
 import click
 
 import foundry
 from foundry.cli import exit_codes
 from foundry.cli import render as cli_render
-from foundry.cli.config_cmd import override_options
 from foundry.core.exceptions import FoundryError
 from foundry.obs import events
 
@@ -97,13 +80,12 @@ def build_group() -> click.Group:
     calls cannot share a mutable command registry. The group declares ``--version`` from
     :data:`foundry.__version__` and nothing else of its own: each subcommand declares the options
     AAP 0.4.4 documents for it, which is what keeps ``foundry init --help`` free of the
-    configuration overrides that only a configuration-aware command accepts.
-
-    The five subcommands come from their own modules, imported here rather than at module scope for
-    the circular-import reason the module docstring gives. ``config`` and ``report`` are themselves
-    groups -- ``show``/``validate`` and ``compare`` -- published under the ``<verb>_command`` name
-    their modules also expose so the import spelling cannot drift. ``--version`` and ``--help`` both
-    exit ``0``; an invocation that names no subcommand prints the help and is a usage error.
+    configuration overrides that only a configuration-aware command accepts. The five subcommands
+    come from their own modules, imported here rather than at module scope for the circular-import
+    reason the module docstring gives. ``config`` and ``report`` are themselves groups --
+    ``show``/``validate`` and ``compare`` -- published under the ``<verb>_command`` name their
+    modules also expose so the import spelling cannot drift. ``--version`` and ``--help`` both exit
+    ``0``; an invocation that names no subcommand prints the help and is a usage error.
 
     Returns:
         The application object, ready for :func:`main` or a ``CliRunner`` test.
@@ -143,10 +125,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     value to :func:`sys.exit`: this function therefore returns an ``int`` and never exits the
     process itself. The group is invoked with ``standalone_mode=False`` so click surfaces its
     exceptions here instead of ending the interpreter, which is what makes one documented mapping
-    possible.
-
-    The mapping, and the only exception types this function catches -- an unexpected exception is
-    deliberately left to propagate, so a real defect stays visible instead of becoming exit ``2``:
+    possible. The mapping, and the only exception types this function catches -- an unexpected
+    exception is deliberately left to propagate, so a real defect stays visible instead of becoming
+    exit ``2``:
 
     * a command's own ``int`` result is returned unchanged, and a command that returned nothing
       publishes :data:`foundry.cli.exit_codes.SUCCESS`;
@@ -210,3 +191,21 @@ def _render_failure(message: str, hint: str | None) -> None:
         # Deliberately broad: it covers only this write, and the one thing that must not happen is a
         # console or redaction fault replacing the exit status the command already produced.
         events.emit_plumbing_failure(_COMPONENT, "could not render an error message", exc=error)
+
+
+def __getattr__(name: str) -> object:
+    """Resolve the re-exported ``override_options`` on first access, importing its home then.
+
+    Any other name raises the ``AttributeError`` PEP 562 expects, naming the published surface; the
+    memoised value is a cache of an imported name, never module-level state (AAP 0.4.8).
+    """
+    if name != "override_options":
+        surface = ", ".join(sorted(__all__))
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}; surface: {surface}")
+    from foundry.cli.config_cmd import override_options
+
+    return cast("object", globals().setdefault(name, override_options))
+
+
+if TYPE_CHECKING:
+    from foundry.cli.config_cmd import override_options as override_options

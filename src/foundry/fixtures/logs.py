@@ -2,7 +2,7 @@
 
 ``foundry_log_capture`` is function scoped and yields a :class:`FoundryLogCapture` over a
 :class:`foundry.obs.capture.LogRing` attached to the ``foundry`` logger for the length of one test,
-so a test can assert on the lines its own code logged and on nothing another test logged::
+so a test asserts on the lines its own code logged and on nothing another test logged::
 
     logging.getLogger("foundry.http").warning("retrying")
     assert foundry_log_capture.tail(1) == ("WARNING foundry.http: retrying",)
@@ -24,12 +24,10 @@ that handler list -- and teardown detaches it; ``propagate`` is never touched, w
 
 **Failure isolation.** A fault while attaching or detaching changes neither the test's outcome nor
 the run's exit code: setup yields a usable, empty capture, teardown never raises, and the fault is
-reported as exactly one ``WARNING`` line through
-:func:`foundry.obs.events.emit_plumbing_failure`, only after the ring is detached.
-
-Module scope imports :mod:`pytest`, the standard library and :mod:`foundry.core`; the ring and the
-emitter are imported inside the fixture body, because ``foundry.plugin`` imports this package during
-``pytest_configure`` at every start inside a 150 ms budget.
+reported as exactly one ``WARNING`` through :func:`foundry.obs.events.emit_plumbing_failure`, only
+after the ring is detached. Module scope imports :mod:`pytest`, the standard library and
+:mod:`foundry.core`; the ring and the emitter are imported inside the fixture body, because
+``foundry.plugin`` imports this package during ``pytest_configure`` inside a 150 ms budget.
 """
 
 from __future__ import annotations
@@ -77,10 +75,9 @@ class FoundryLogCapture:
     ordinary test keeps using beside it. The ring holds :class:`logging.LogRecord` objects exactly
     as they were emitted; formatting happens when :meth:`tail` reads, through the one formatter the
     ``log_tail.log`` artifact and the report's failure panel also use, so an assertion here and a
-    persisted tail cannot disagree.
-
-    Frozen and slotted: the capture is a handle onto the ring, so nothing about it is assignable,
-    and a test that wants to forget what it has seen calls :meth:`clear`.
+    persisted tail cannot disagree. Frozen and slotted: the capture is a handle onto the ring, so
+    nothing about it is assignable, and a test that wants to forget what it has seen calls
+    :meth:`clear`.
     """
 
     ring: LogRing
@@ -215,7 +212,6 @@ def foundry_log_capture(foundry_config: FoundryConfig) -> Iterator[FoundryLogCap
     nothing one test logged reaches the next one or another xdist worker. The capture window is the
     test's own body together with its fixtures' setup and teardown, which is what makes
     ``capture.tail(n)`` a complete answer to "what did the code under test log".
-
     ``logging.capture_lines = 0`` disables capture: the ring retains nothing and is not attached at
     all, so the yielded capture reports no records and the ``foundry`` logger's handler list is left
     exactly as Foundry's own wiring made it.

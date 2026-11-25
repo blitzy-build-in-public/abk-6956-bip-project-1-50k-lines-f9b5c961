@@ -75,11 +75,9 @@ def expand_axes(
     are ordered by ``sorted()`` on their names, so the order the caller wrote them in cannot change
     the result, and ``itertools.product`` then varies the alphabetically first axis slowest. Each
     axis keeps the order of its own values, so an author controls the sequence inside an axis and
-    nothing else.
-
-    ``line`` is ``None`` on every case. A combination is not a line of the file, and a reader
-    records axis positions rather than per-combination ones, so the field reports honestly that
-    there is no line to give instead of inventing one (AAP 0.7.2).
+    nothing else. ``line`` is ``None`` on every case. A combination is not a line of the file, and a
+    reader records axis positions rather than per-combination ones, so the field reports honestly
+    that there is no line to give instead of inventing one (AAP 0.7.2).
 
     Args:
         source_file: The data file the axes were read from; carried on the matrix and on every case

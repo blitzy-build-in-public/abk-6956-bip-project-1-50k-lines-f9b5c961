@@ -1,23 +1,14 @@
 """Unit tests for the redaction shapes a name-keyed rule cannot see on its own.
 
 A secret reaches Foundry in shapes carrying no ``name=value`` separator on one line: a decoded pair
-list (``[["token", "<secret>"]]``), an RFC 7578 multipart part whose name is a
-``Content-Disposition`` parameter, and a value under a name no deny-list enumerates -- the header a
-peer echoes a credential back in is usually one the peer invented. AAP 0.3.2 makes
-``foundry.obs.redaction`` the one engine every sink calls, so it owns all three shapes here rather
-than each dump, cassette and assertion message growing a rule of its own.
+list, an RFC 7578 multipart part, and a value under a name no deny-list enumerates. AAP 0.3.2 makes
+``foundry.obs.redaction`` the one engine every sink calls, so it owns all three here.
 
-Pinned through the public engine: the structural path masks a pair whose first element is a secret
-name at any depth and leaves other arrays alone; the free-text path masks the quoted pair entry and
-the multipart body while keeping the name readable; a kept part's nested body is scrubbed in turn
-and the descent stops at :data:`MAX_DEPTH`; an unlisted header's value is scrubbed while a media
-type, a date or an identifier is untouched; a second pass over masked text returns it unchanged;
-text dropped for depth carries :data:`NESTING_TRUNCATION_MARKER` rather than reading as a scrubbed
-secret; the cassette store names what it scrubbed in ``redacted_keys``; and the multipart scan
-costs time in the text's length, as a ratio, so the pin holds on a host of any speed (AAP 0.14.2).
-
-Separate from ``tests/unit/test_obs.py``, which already sits at the 700-line ceiling. No socket is
-opened and nothing sleeps: every value is a literal and the store writes into ``tmp_path``.
+Pinned through the public engine: the structural path, the free-text pair list, the multipart part
+and its nested descent, the header under an unlisted name, idempotence, the cassette's keys, what
+free text must not read as a credential, and the multipart scan's cost as a ratio (AAP 0.14.2).
+Separate from ``tests/unit/test_obs.py``, which sits at the 700-line ceiling. No socket is opened
+and nothing sleeps: every value is a literal and the store writes into ``tmp_path``.
 """
 
 from __future__ import annotations
@@ -32,6 +23,8 @@ import pytest
 
 from foundry.cassette import CassetteStore, Interaction, RecordedRequest, RecordedResponse
 from foundry.cassette.models import normalise_query
+from foundry.config.models import SecretsConfig
+from foundry.obs.artifacts import ArtifactWriter
 from foundry.obs.redaction import (
     DEFAULT_HEADER_DENY_LIST,
     MAX_DEPTH,
@@ -217,9 +210,7 @@ def test_a_multipart_part_named_by_a_plain_field_is_left_intact(text: str) -> No
     assert default_redactor().text(text) == text
 
 
-#: A multipart body whose outer part is named by a field no deny-list carries and whose own body is
-#: a second multipart body: the shape a client sends when one part is itself a form. ``$s`` is the
-#: sentinel, spliced in by the test so the constant reads as the shape rather than the value.
+#: An outer part a deny-list does not carry, whose body is a second body holding ``$s``.
 _NESTED_PART_BODY: Final[str] = (
     "--X\r\n"
     'Content-Disposition: form-data; name="files"\r\n\r\n'
@@ -267,8 +258,7 @@ def test_a_kept_part_whose_body_holds_no_nested_part_is_left_intact(body: str) -
     assert default_redactor().text(body) == body
 
 
-#: One level past the deepest descent :data:`MAX_DEPTH` allows, so the cap is what ends the walk
-#: rather than the shape of the body: each kept part costs one level, and :data:`MAX_DEPTH` is it.
+#: One level past the deepest descent :data:`MAX_DEPTH` allows, so the cap ends the walk.
 _OVERNESTED_LEVELS: Final[int] = MAX_DEPTH + 2
 
 
@@ -295,23 +285,17 @@ def test_a_lone_line_break_is_not_a_part_header_terminator() -> None:
 
 # --- The multipart scan's cost (AAP 0.14.2 suite wall clock) ---------------
 
-#: Parts in the smaller measured line, and in the larger one: ten times the text, so a scan whose
-#: cost follows the length of what it reads answers in about ten times the time, and one that
-#: re-reads the rest of a line at every candidate -- the shape of the pass this scan replaced -- in
-#: about a hundred times the time.
+#: Parts per measured line, ten times as many in the larger: a linear scan answers in about ten
+#: times the time, while one that re-reads the rest of a line at every candidate needs a hundred.
 _SMALL_LINE_PARTS: Final[int] = 320
 _LARGE_LINE_PARTS: Final[int] = 3200
 
-#: Timed rounds per size. Both sizes are timed inside one round, and the pair judged is the fastest
-#: round's: the reading excludes time the host gave to other work, and the fastest round of the five
-#: is the one least disturbed by this process's own allocations and collections.
+#: Timed rounds per size; the fastest is judged, being least disturbed by allocations.
 _COST_ROUNDS: Final[int] = 5
 
-#: The largest time ratio the larger text may cost against the smaller. Ten times the text in twenty
-#: times the time leaves a linear scan a factor of two of slack, while a quadratic one needs about a
-#: hundred times and cannot fit. The reading is CPU time rather than elapsed time for that slack's
-#: sake: a host busy with other work takes slices away from this process, which inflates an elapsed
-#: reading by however long the wait was and by a share that grows with the length of the call.
+#: The largest time ratio the larger text may cost: ten times the text in twenty times the time
+#: leaves a linear scan a factor of two of slack, while a quadratic one needs about a hundred. CPU
+#: time is read, not elapsed, because a busy host inflates an elapsed reading by its own waits.
 _COST_RATIO_BUDGET: Final[float] = 20.0
 
 
@@ -460,21 +444,16 @@ def test_a_second_pass_over_masked_text_changes_nothing(text: str) -> None:
 
 # --- A name: text chain in a failure message (AAP 0.4.6, AAP 0.7.4) --------
 
-#: One sentence of the long failure message, in the shape an assertion writes it: the ``name:``
-#: prefix the header-line pass recognises, then a readable tail that pass keeps.
+#: One sentence of the long failure message, in the shape an assertion writes it.
 _MESSAGE_SENTENCE: Final[str] = (
     "assertion failed: the checkout total was recomputed from the item rows and "
     "matched the expected amount"
 )
 
-#: The message the finding measured: nineteen ``name: text`` prefixes on one line, 2062 characters,
-#: which an engine descending one level per prefix stored and rendered as its first 885 characters
-#: ending in the marker a scrubbed secret leaves.
+#: The message the finding measured: nineteen ``name: text`` prefixes on one line, 2062 characters.
 _LONG_MESSAGE: Final[str] = "".join(f"{_MESSAGE_SENTENCE} ({number}). " for number in range(1, 20))
 
-#: A ``name=value`` chain whose values run unbroken to the end of the text, so every pair it keeps
-#: costs one descent of the whole remainder: four thousand pairs, then the one secret-bearing pair
-#: the engine has to reach and the value behind it.
+#: A ``name=value`` chain running unbroken to the end: 4000 pairs, then the pair to reach.
 _UNBROKEN_CHAIN: Final[str] = "a=" * 4000
 
 
@@ -578,3 +557,144 @@ def test_an_echoed_response_header_never_reaches_the_cassette(tmp_path: Path) ->
     }
     assert document["redacted_keys"] == ["x-echo", "x-request-echo"]
     assert store.load(_NODEID).redacted_keys == ("x-echo", "x-request-echo")
+
+
+# --- What free text must not read as a credential (AAP 0.4.5, 0.4.6, 0.7.4) ---------------
+
+#: A userinfo password spliced into the URL cases, so no credential literal sits in this file.
+_URL_PASSWORD: Final[str] = "urlpw-shapes-71c3"
+
+#: The repr a configuration echo carries: the deny-list it publishes, a value, not a key.
+_SECRETS_REPR: Final[str] = repr(SecretsConfig())
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "foundry_config = FoundryConfig(http=HttpConfig(base_url='http://qa:$pw@127.0.0.1:38227'), "
+        "secrets=SecretsConfig(redact_keys=['authorization', 'cookie']))",
+        "http://qa:$pw@127.0.0.1:38227/a[b] failed",
+        "x://qa:$pw@host.example",
+    ],
+)
+def test_url_userinfo_never_survives_free_text(text: str) -> None:
+    """A URL loses its credential in a repr'd dump, beside a quoted run and a stray bracket."""
+    scrubbed = default_redactor().text(text.replace("$pw", _URL_PASSWORD))
+
+    assert _URL_PASSWORD not in scrubbed
+    assert "qa:" not in scrubbed
+
+
+def test_url_userinfo_is_stripped_where_the_splitter_rejects_the_url() -> None:
+    """The parse-failure path keeps the guarantee: an unterminated IPv6 literal still loses it."""
+    redactor = default_redactor()
+    credential = f"http://qa:{_URL_PASSWORD}@[::1/x"
+
+    assert redactor.url(credential) == "http://[::1/x"
+    assert redactor.text(credential) == "http://[::1/x"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "'set-cookie', 'cookie', 'x-api-key'",
+        "['authorization', 'set-cookie', 'cookie', 'x-api-key']",
+        "redact_keys=['authorization', 'set-cookie', 'cookie', 'x-api-key']",
+        "redact_keys=['authorization', 'cookie']",
+    ],
+)
+def test_a_published_deny_list_reads_as_stated(text: str) -> None:
+    """A run of quoted names is a list, not a ``[name, value]`` pair: nothing is replaced."""
+    assert default_redactor().text(text) == text
+
+
+def test_the_configured_secrets_echo_renders_its_values() -> None:
+    """The deny-list a configuration echo states is a value, so the repr comes back whole."""
+    assert default_redactor().text(_SECRETS_REPR) == _SECRETS_REPR
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "x-echo token=$s",
+        "caller sent x-trace-id=abc authorization=$s",
+        "token: $s",
+        "\ttoken: $s",
+        'redact_keys=["token", "$s"]',
+        "token=$s&page=2",
+        "connecting with password: $s",
+        "request failed: password: $s",
+        "- password: $s",
+        "E   AssertionError: token: $s",
+        "[('token','$s')]",
+        "('x-api-key','$s')",
+        "dict_items([('password','$s')])",
+        'http://h/x?token="$s"',
+        'tokens=["$s"]',
+        "password=['$s']",
+    ],
+)
+def test_every_shape_a_credential_assignment_takes_loses_its_value(text: str) -> None:
+    """A colon or ``=`` pair anywhere in prose, a quoted pair in a square or round bracket, and a
+    collection under a secret name: each loses its value, and a second pass changes nothing.
+    """
+    scrubbed = default_redactor().text(text.replace("$s", _SENTINEL))
+
+    assert _SENTINEL not in scrubbed
+    assert REDACTED in scrubbed
+    assert default_redactor().text(scrubbed) == scrubbed, "a second pass must change nothing"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "test_auth_login.py:42: AssertionError: bad",
+        "tests/test_token_refresh.py::test_x failed",
+        "test_secret.py:16: AssertionError",
+        "test_keys.py:3: AssertionError",
+        '{"nodeid": "tests/test_token_refresh.py::test_x"}',
+    ],
+)
+def test_a_path_that_names_a_secret_word_keeps_its_location(text: str) -> None:
+    """A file name is a file, not a key: the line, the exception and the node id stay readable."""
+    assert default_redactor().text(text) == text
+
+
+def test_a_node_id_that_names_a_secret_word_keeps_its_artifact_directory(tmp_path: Path) -> None:
+    """AAP 0.4.6: a record owns ``artifacts/<run_id>/<nodeid>/``, so the name has to survive."""
+    writer = ArtifactWriter(
+        tmp_path, run_id="20250102T030405-0abc12", profile="ci", redactor=default_redactor()
+    )
+
+    auth = writer.dir_for("tests/test_auth_login.py::test_alpha")
+    token = writer.dir_for("tests/test_token_refresh.py::test_x")
+
+    assert auth != token
+    assert "test_auth_login.py" in auth.name
+    assert REDACTED not in auth.name
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "unknown configuration key: zzzz_misspelled",
+        "unknown configuration key: http.timeot",
+        "invalid value for option --foundry-http.auth.strategy: "
+        "expected none, bearer, basic, header",
+    ],
+)
+def test_a_configuration_diagnostic_names_its_key_and_range(text: str) -> None:
+    """AAP 0.4.5 and AAP 0.7.4: the message names its key and its values, never a marker."""
+    assert default_redactor().diagnostic(text) == text
+
+
+@pytest.mark.parametrize(
+    "text", ["token=$s", "authorization: Bearer $s", "http://u:$s@h/x", "http://h/x?token=$s"]
+)
+def test_a_diagnostic_still_scrubs_the_values_it_carries(text: str) -> None:
+    """A diagnostic reads its prose as prose and every value it carries as a value."""
+    original = text.replace("$s", _SENTINEL)
+    scrubbed = default_redactor().diagnostic(original)
+
+    assert _SENTINEL not in scrubbed
+    assert scrubbed != original

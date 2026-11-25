@@ -187,6 +187,14 @@ table.results .nodeid { font-family: var(--font-mono); font-size: 13px; word-bre
 .panel dd { font-family: var(--font-mono); font-size: 13px; margin: 0; word-break: break-word; }
 .panel p { margin: 8px 0 0; overflow-wrap: anywhere; }
 
+/* The failure message keeps its line structure and, as the panel's primary diagnostic text, is
+   never boxed in a second scroll area: it takes no maximum height or overflow, unlike the tail. */
+.panel pre.message {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.45; margin: 8px 0 0;
+  padding: 10px 12px; white-space: pre-wrap; word-break: break-word;
+}
+
 /* Section lists: a run error can embed a long node id, so an entry wraps inside the column. */
 main > section li { overflow-wrap: anywhere; }
 

@@ -42,8 +42,10 @@ DOCUMENTED_KEYS: Final[tuple[str, ...]] = (
     "failures",
     "artifacts",
     "quarantine",
+    "artifacts_disabled",
 )
-"""Every field AAP 0.4.6 fixes for a result record, each part of the compatibility promise."""
+"""Every field AAP 0.4.6 fixes for a result record, each part of the compatibility promise, plus
+the additive ``artifacts_disabled`` flag of AAP 0.4.7 (§0.4.9 permits added record keys)."""
 
 CONFIG_FREE_PATHS: Final[tuple[str, ...]] = (
     "foundry.toml",

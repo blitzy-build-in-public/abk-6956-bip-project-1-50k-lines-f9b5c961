@@ -12,20 +12,16 @@ produces and the text of a collection error -- rather than at the level of a loa
 Per-loader unit detail lives in ``tests/unit/test_data.py`` and the same error states driven through
 ``pytester`` in ``tests/plugin/test_data_collection_errors.py``, so neither is repeated here.
 
-**The collection seam the AAP leaves open (reported, not invented).** AAP 0.4.2 registers a
-``foundry_*`` marker namespace and names exactly one marker, ``foundry_quarantine``; AAP 0.3.3 and
-AAP 0.7.1 describe collection-time data expansion as ``pytest_generate_tests`` delegating to
-``foundry.data``; AAP 0.4.3 lists ``foundry_data`` as a *runtime* fixture with ``.cases()`` and
-``.matrix()``. No AAP section names the marker or documented convention that binds a collected test
-to a data file, and no such marker exists in this tree: ``foundry.plugin.pytest_generate_tests``
-carries a docstring and no body, and ``foundry.plugin.pytest_configure`` registers
-``foundry_quarantine`` alone. The surface a project actually has is the public expansion API, used
-at module import exactly as ``examples/checkout/test_contracts.py`` uses it: a loader
-(``foundry.data.registry.load_cases`` / ``load_matrix``) -> a ``CaseSet`` -> the ``pytest.param``
-adapter (``foundry.data.cases.build_parameters``) -> ``pytest.mark.parametrize``. That is the path
-the collection tests below drive through a real ``pytest --collect-only`` run, so criterion 5's
-expansion and I6's stability are proven through a real entry point, and the missing marker surface
-is reported here rather than guessed at and never registered from a test project.
+**The collection seam.** ``foundry.plugin.pytest_generate_tests`` owns it: a test marked
+``@pytest.mark.foundry_data("<file>"[, argname="<name>"])`` is parametrised over that file's cases
+by the plugin alone, the name resolved against ``data.dir``, one parameter per case and each
+carrying the case's own id. A file with no data rows is one skipped item reading
+``no cases in <file>``; a ``DataError`` from the loader is a collection error naming the file, the
+line and the column (AAP 0.3.3, AAP 0.4.7, AAP 0.7.1). A project that builds its parameters at
+import keeps the public expansion API (``load_cases`` -> ``CaseSet`` -> ``build_parameters`` ->
+``pytest.mark.parametrize``), as ``examples/checkout/test_contracts.py`` does. Both routes are
+driven below through a real ``pytest --collect-only`` run, which is what makes criterion 5's
+expansion and I6's stability evidence from a real entry point.
 
 Determinism (AAP 0.14.3): the committed fixtures under ``tests/fixtures`` are only ever read, every
 file this module writes lives under ``tmp_path``, no wall-clock value is asserted and every
@@ -254,6 +250,45 @@ def _project_files(fixtures_dir: Path, data_name: str, module: str) -> dict[str,
     return {**_fixture_texts(fixtures_dir, data_name), module: _parametrised_module(data_name)}
 
 
+def _marked_module(data_name: str, *, argument: str = "case") -> str:
+    """Return the text of a project module the plugin parametrises from one data file.
+
+    The module reads no file and builds no parameters: the ``foundry_data`` marker is the whole
+    project-side surface, and ``argument`` is the name its ``argname`` keyword binds.
+    """
+    marker = f'@pytest.mark.foundry_data("{data_name}")'
+    if argument != "case":
+        marker = f'@pytest.mark.foundry_data("{data_name}", argname="{argument}")'
+    return "\n".join(
+        [
+            '"""A generated project module: the marker alone parametrises this test."""',
+            "",
+            "import pytest",
+            "",
+            "",
+            marker,
+            f"def test_case({argument}: object) -> None:",
+            '    """Consume the case the plugin bound to this item."""',
+            f"    assert {argument} is not None",
+            "",
+        ]
+    )
+
+
+def _marked_files(
+    fixtures_dir: Path,
+    *,
+    module: str,
+    data_name: str = "cases.csv",
+    argument: str = "case",
+) -> dict[str, str]:
+    """Return the files of a project whose one test the plugin parametrises over ``data_name``."""
+    return {
+        **_fixture_texts(fixtures_dir, data_name),
+        module: _marked_module(data_name, argument=argument),
+    }
+
+
 # --- Tabular expansion and the four formats' shared contract ----------------
 
 
@@ -428,6 +463,146 @@ def test_collection_order_is_identical_across_two_runs(
     assert first_ids == sorted(
         f"{module}::test_case[cases-{index}]" for index in range(CASES_PER_FILE)
     )
+
+
+# --- The plugin's own collection seam (AAP 0.3.3, AAP 0.7.1) ---------------
+
+_MALFORMED_DATA_MARKERS: Final[tuple[str, ...]] = (
+    "@pytest.mark.foundry_data()",
+    '@pytest.mark.foundry_data("cases.csv", "cases.json")',
+    "@pytest.mark.foundry_data(3)",
+    '@pytest.mark.foundry_data("cases.csv", strict=True)',
+    '@pytest.mark.foundry_data("cases.csv", argname=3)',
+)
+"""The marker shapes the delegation refuses: no positional, two, a non-string, a foreign keyword."""
+
+_ACCEPTED_FORM: Final[str] = 'foundry_data("<file>"[, argname="<name>"])'
+"""The marker form ``--markers`` and every usage error publish for the data marker."""
+
+_UNMARKED_MODULE: Final[str] = '''"""An unmarked item, collected without the data engine."""
+
+import sys
+
+
+def test_one() -> None:
+    """The hook returned before importing anything from ``foundry.data`` (AAP 0.4.8)."""
+    assert "foundry.data" not in sys.modules
+'''
+"""The project module the import-discipline test runs: it asserts the engine stayed unloaded."""
+
+
+def test_the_marker_collects_one_item_per_case_through_the_plugin(
+    write_project: Callable[..., Path], run_pytest: RunPytest, fixtures_dir: Path, tmp_path: Path
+) -> None:
+    """``foundry_data("cases.csv")`` alone collects and runs one item per case (AAP 0.3.3).
+
+    The module reads no file and builds no parameters, so the twelve node ids are the plugin's own
+    delegation, and they are the cases' ids rather than anything a run decides.
+    """
+    module = "test_cases.py"
+    project = write_project(tmp_path / "project", files=_marked_files(fixtures_dir, module=module))
+    expected = [f"{module}::test_case[cases-{index}]" for index in range(CASES_PER_FILE)]
+
+    collected = _collect(project, run_pytest)
+    assert collected.returncode == 0, f"{collected.stdout}\n{collected.stderr}"
+    assert _nodeids(collected.stdout, module) == expected
+
+    result = _run(project, run_pytest, "-q")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert f"{CASES_PER_FILE} passed" in result.stdout
+    document = json.loads((project / "results.json").read_text(encoding="utf-8"))
+    outcomes = sorted(record["outcome"] for record in document if record["record_type"] == "result")
+    assert outcomes == ["passed"] * CASES_PER_FILE
+
+
+def test_the_data_marker_passes_strict_markers(
+    write_project: Callable[..., Path], run_pytest: RunPytest, fixtures_dir: Path, tmp_path: Path
+) -> None:
+    """``--strict-markers`` accepts it, and ``--markers`` documents its accepted form."""
+    project = write_project(
+        tmp_path / "project", files=_marked_files(fixtures_dir, module="test_cases.py")
+    )
+    result = _run(project, run_pytest, "-q", "--strict-markers")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert f"{CASES_PER_FILE} passed" in result.stdout
+
+    listed = _run(project, run_pytest, "--markers")
+    assert listed.returncode == 0, f"{listed.stdout}\n{listed.stderr}"
+    assert f"@pytest.mark.{_ACCEPTED_FORM}" in listed.stdout
+
+
+def test_the_argname_keyword_binds_a_differently_named_argument(
+    write_project: Callable[..., Path], run_pytest: RunPytest, fixtures_dir: Path, tmp_path: Path
+) -> None:
+    """``argname`` binds the cases to the test's own argument name instead of ``case``.
+
+    The module's only argument is ``row``, so without the keyword every item would error as an
+    unknown fixture: a green run carrying the case ids is the evidence the keyword reached the
+    adapter.
+    """
+    module = "test_rows.py"
+    project = write_project(
+        tmp_path / "project", files=_marked_files(fixtures_dir, module=module, argument="row")
+    )
+
+    result = _run(project, run_pytest, "-q")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert f"{CASES_PER_FILE} passed" in result.stdout
+    ids = _nodeids(_collect(project, run_pytest).stdout, module)
+    assert ids == [f"{module}::test_case[cases-{index}]" for index in range(CASES_PER_FILE)]
+
+
+def test_a_marked_header_only_file_skips_with_the_no_cases_reason(
+    write_project: Callable[..., Path], run_pytest: RunPytest, fixtures_dir: Path, tmp_path: Path
+) -> None:
+    """A marked file with a header and no rows is one skip reading ``no cases in <file>``, at 0."""
+    project = write_project(
+        tmp_path / "project",
+        files=_marked_files(fixtures_dir, module="test_empty.py", data_name="header_only.csv"),
+    )
+
+    result = _run(project, run_pytest, "-q", "-rs")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    resolved = (project / "testdata" / "header_only.csv").resolve()
+    assert f"no cases in {resolved}" in result.stdout
+    assert "1 skipped" in result.stdout
+
+
+def test_a_malformed_marker_is_a_usage_error_naming_the_accepted_form(
+    write_project: Callable[..., Path], run_pytest: RunPytest, fixtures_dir: Path, tmp_path: Path
+) -> None:
+    """Every malformed data marker is one collection error naming the accepted form, at exit 2.
+
+    A marker in the owned ``foundry_`` namespace is never silently ignored: a typo that would
+    otherwise collect an unparametrised item and fail as an unknown fixture is reported instead.
+    """
+    files = _fixture_texts(fixtures_dir, "cases.csv")
+    for index, marker in enumerate(_MALFORMED_DATA_MARKERS):
+        files[f"test_bad_{index}.py"] = (
+            f"import pytest\n\n\n{marker}\ndef test_case(case: object) -> None:\n"
+            "    assert case is not None\n"
+        )
+    project = write_project(tmp_path / "project", files=files)
+
+    result = _run(project, run_pytest, "-q")
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode == 2, combined
+    assert combined.count("UsageError: the data marker takes") == len(_MALFORMED_DATA_MARKERS)
+    assert combined.count(_ACCEPTED_FORM) >= len(_MALFORMED_DATA_MARKERS)
+
+
+def test_an_unmarked_run_never_imports_the_data_engine(
+    write_project: Callable[..., Path], run_pytest: RunPytest, tmp_path: Path
+) -> None:
+    """A run whose tests carry no data marker imports nothing from ``foundry.data`` (AAP 0.4.8).
+
+    Every test of every project passes through ``pytest_generate_tests``, so the hook has to return
+    before the engine behind it is loaded: the inner item asserts the engine is absent when it runs.
+    """
+    project = write_project(tmp_path / "project", files={"test_plain.py": _UNMARKED_MODULE})
+    result = _run(project, run_pytest, "-q")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "1 passed" in result.stdout
 
 
 # --- Collection errors and the empty-file state ----------------------------

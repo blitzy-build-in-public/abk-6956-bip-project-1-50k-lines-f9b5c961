@@ -46,9 +46,8 @@ _RELATIVE_ANCHOR: Final[Path] = Path()
 def _require_relative(file: str) -> None:
     """Reject a manifest path that could name a location outside the run directory.
 
-    Raises:
-        ArtifactError: If ``file`` is blank, names the run directory, is absolute or has ``..``; a
-            published manifest (AAP 0.4.6) must not name a path a reviewer would take as sanctioned.
+    Raises ArtifactError if ``file`` is blank, names the run directory, is absolute or has ``..``: a
+    published manifest (AAP 0.4.6) must not name a path a reviewer would take as sanctioned.
     """
     relative = PurePosixPath(file)
     escaped = (
@@ -108,10 +107,9 @@ class ManifestEntry:
 class ManifestDocument:
     """The whole ``manifest.json`` document for one test (AAP 0.4.6).
 
-    One document describes one collected item: the run it names (AAP 0.4.3), the node id, the
-    profile, its creation time, whether capture was disabled (AAP 0.4.7) and the entries written;
-    it is frozen because ``results.json``, the JUnit writer and the HTML renderer share it (AAP
-    0.4.8).
+    One document describes one collected item: the run it names (AAP 0.4.3), the node id, profile,
+    creation time, whether capture was disabled (AAP 0.4.7) and the entries written. It is frozen
+    because ``results.json``, the JUnit writer and the HTML renderer share it (AAP 0.4.8).
     """
 
     schema_version: int
@@ -147,10 +145,8 @@ class ManifestDocument:
         """Return a copy of this document carrying a different artifact set.
 
         Returns:
-            A new document whose ``schema_version`` is :data:`MANIFEST_SCHEMA_VERSION`.
-
-        Raises:
-            ArtifactError: If an entry's ``file`` fails :func:`_require_relative`.
+            A new document whose ``schema_version`` is :data:`MANIFEST_SCHEMA_VERSION`; an entry's
+            ``file`` failing :func:`_require_relative` raises ArtifactError.
         """
         disabled = self.artifacts_disabled if artifacts_disabled is None else artifacts_disabled
         return build_document(
@@ -176,8 +172,7 @@ def entry_for(kind: ArtifactKind, file: str, data: bytes, *, redacted: bool) -> 
     """Describe one artifact file as a manifest entry.
 
     Returns:
-        The entry carrying the length of ``data`` and its digest; ``file`` is checked by
-        :func:`build_document`.
+        The entry carrying ``data``'s length and digest; :func:`build_document` checks the path.
     """
     return ManifestEntry(
         kind=kind,
@@ -213,11 +208,11 @@ def build_document(
     ``artifacts`` is sorted by ``(kind, file)``.
 
     Returns:
-        The document, with ``schema_version`` set to :data:`MANIFEST_SCHEMA_VERSION`.
+        The document, ``schema_version`` set to :data:`MANIFEST_SCHEMA_VERSION`.
 
     Raises:
-        ArtifactError: If an entry's ``file`` is blank, names the run directory itself, is
-            absolute or contains a ``..`` segment.
+        ArtifactError: If an entry's ``file`` is blank, names the run directory, is absolute or
+            holds a ``..`` segment.
     """
     return ManifestDocument(
         schema_version=MANIFEST_SCHEMA_VERSION,
@@ -233,12 +228,9 @@ def build_document(
 def render(document: ManifestDocument) -> str:
     """Render a document as the exact text of ``manifest.json``.
 
-    :func:`json.dumps` of :meth:`ManifestDocument.as_dict` with a two-space indent,
-    ``ensure_ascii=False`` and one trailing newline. ``sort_keys`` is deliberately *not* used, since
-    key order is the field order of AAP 0.4.6; rendering is pure, so two runs write identical bytes
-    (AAP 0.14.3), and the write belongs to the artifact writer (AAP 0.4.8).
-
-    Returns:
-        The JSON text, ending in exactly one newline.
+    :func:`json.dumps` of :meth:`ManifestDocument.as_dict`, two-space indent and
+    ``ensure_ascii=False``, ending in exactly one newline. ``sort_keys`` is deliberately *not*
+    used, since key order is AAP 0.4.6's field order; rendering is pure, so two runs write identical
+    bytes (AAP 0.14.3), and the write belongs to the artifact writer (AAP 0.4.8).
     """
     return json.dumps(document.as_dict(), indent=2, ensure_ascii=False) + "\n"

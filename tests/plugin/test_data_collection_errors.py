@@ -14,12 +14,13 @@ The module also carries implicit requirement I6: case ids and collection order d
 content alone, so two collections of one project print the same node ids in the same order, which is
 the property a sharded run's collection parity rests on.
 
-**The opt-in seam, as implemented.** ``foundry.plugin.pytest_generate_tests`` deliberately generates
-nothing, because a metafunc carries no data-file name; the seam is the published adapter instead. A
-consuming project's own ``pytest_generate_tests`` calls
+**The two project-side seams.** The plugin owns the ``foundry_data`` marker seam, which
+``tests/integration/test_data_expansion.py`` drives through a real collection; this module keeps the
+project-side hook and the ``foundry_data`` fixture path, because the three collection-time error
+states AAP 0.4.7 makes observable are asserted here through both. A consuming project's own
+``pytest_generate_tests`` calls
 ``foundry.data.parametrize(metafunc, foundry.data.load_cases(path))``, and ``foundry_data`` is the
-fixture-driven path beside it. Both are exercised below, so no marker is invented and no plugin hook
-is simulated.
+fixture-driven path beside it, so neither route is simulated.
 
 **Nothing here touches the repository.** Every inner project is a throwaway directory in the
 pytester temporary tree, into which the records under ``tests/fixtures`` are copied, so a run can

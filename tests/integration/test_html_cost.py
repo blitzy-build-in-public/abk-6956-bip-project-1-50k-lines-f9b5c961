@@ -438,7 +438,9 @@ def test_the_template_carries_the_markup_this_module_counts(repo_root: Path) -> 
     assert ROW_CELL in source, f"the template no longer emits {ROW_CELL!r} per result row"
     assert 'class="quarantined"' in source, "the template lost its Quarantined section"
     assert '<details class="panel"' in source, "the template lost its failure panels"
-    assert "{{ ctx.total_tests }} tests" in source, "the template lost its test total"
+    assert "{{ ctx.total_tests }} test{{ '' if ctx.total_tests == 1 else 's' }}" in source, (
+        "the template lost its test total"
+    )
 
 
 def test_five_hundred_records_render_inside_the_two_second_budget(repo_root: Path) -> None:

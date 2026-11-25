@@ -4,11 +4,11 @@ AAP 0.1.2 is the rule this module executes: a failure in Foundry's own capture, 
 reporting is one ``WARNING`` on the ``foundry`` logger and changes neither a test's outcome nor
 the run's exit code -- ``report.html``'s documented fallback apart, and even that leaves the
 exit code alone. The two AAP 0.4.7 rows exercised here are "artifacts directory not writable",
-which warns once, lets the run continue and puts no artifact path on the record, and "HTML
-template render failure", which skips ``report.html``, keeps ``results.json``, produces no
-``junit.xml``, logs one warning and leaves the exit code alone. AAP 0.14.3 names this module as
-that constraint's instrument, and it is the one place AAP 0.14.5's ban on mocking the plugin,
-the CLI and the renderer admits a fault.
+which warns once, lets the run continue and stamps every record with ``artifacts_disabled: true``
+and no artifact path, and "HTML template render failure", which skips ``report.html``, keeps
+``results.json``, produces no ``junit.xml``, logs one warning and leaves the exit code alone.
+AAP 0.14.3 names this module as that constraint's instrument, and it is the one place AAP 0.14.5's
+ban on mocking the plugin, the CLI and the renderer admits a fault.
 
 **The faults and where they are planted.** Each goes into a project ``pytester`` writes, through
 an attribute looked up when the call is made and never a reference captured earlier:
@@ -18,9 +18,14 @@ an attribute looked up when the call is made and never a reference captured earl
   takes its documented ``_disable`` path;
 * redaction -- ``Redactor.text`` replaced at class level, the entry point every sink scrubs
   through;
+* the per-test artifact write path -- ``ArtifactWriter.finalize`` replaced at class level, so the
+  raise lands on the call that writes ``manifest.json`` once the traceback is on disk, in a
+  project whose test fails, which is the case that makes that path run at all;
 * the report -- a syntactically invalid Jinja2 template that ``foundry.reporting.html``'s
   ``template_path`` is pointed at, so the real ``_render_document`` raises
   ``TemplateSyntaxError`` inside its guarded region;
+* the terminal summary -- ``terminalreporter.write_sep`` replaced from a ``tryfirst`` child hook,
+  so the ``foundry: profile=<name>`` banner raises the ``OSError`` a closed stdout would;
 * and nothing at all for the ``foundry_log_capture`` case, which observes the public fixture.
 
 Each patch goes into the *child's* ``conftest.py`` through ``pytester.makeconftest`` and every
@@ -34,14 +39,20 @@ injected run reported a plumbing ``WARNING`` and no ``ERROR``, and that the faul
 observable holds. The counts come from pytest's terminal summary rather than ``results.json``,
 so a report Foundry could not write cannot hide a changed outcome.
 
-**Deviations this tree forces.** Patching ``ArtifactWriter.write`` cannot fire, because no
-run-path call site writes per-test artifacts yet -- a control run records ``artifacts: []`` --
-so it would leave this module verifying nothing; patching ``ensure_run_dir`` to raise is the
-mirror-image mistake, because the real method catches ``OSError`` itself, while a directory it
-cannot create is exactly the fault AAP 0.4.7 describes. The redaction case runs a failing test
-beside the passing one, because a passing test redacts nothing: Foundry scrubs failure messages,
-artifact paths and run-error text, which is where a secret could reach disk. Nothing here
-sleeps, reads a clock or needs order.
+**Deviations this tree forces.** A real run does write per-test artifacts: ``_start_capture`` in
+``foundry.execution.coordinator`` binds ``state.writer.for_node(item.nodeid)`` for every item, and
+``_write_captured`` writes the traceback and the log tail at teardown before calling
+``ArtifactWriter.finalize``, which writes ``manifest.json`` even for a passing test. A passing test
+keeps nothing else -- ``artifacts.keep_passed`` is false, so ``finalize`` prunes the rest (AAP
+0.4.5) -- and that is why a fault aimed at the write path needs a failing test to reach it: the
+write-path case below runs one, so the traceback write and the finalize call really happen. The
+unwritable ``artifacts`` directory stays the right injection for AAP 0.4.7's "artifacts directory
+not writable" row, because a directory the real ``ensure_run_dir`` cannot create is that row's own
+fault and its ``except OSError`` takes the documented ``_disable`` path; patching
+``ensure_run_dir`` to raise instead would test a branch the real method already guards. The
+redaction case runs a failing test beside the passing one, because a passing test redacts nothing:
+Foundry scrubs failure messages, artifact paths and run-error text, which is where a secret could
+reach disk. Nothing here sleeps, reads a clock or needs order.
 """
 
 from __future__ import annotations
@@ -77,6 +88,8 @@ _RESULTS_FILENAME: Final[str] = "results.json"
 _REPORT_FILENAME: Final[str] = "report.html"
 _JUNIT_FILENAME: Final[str] = "junit.xml"
 _ARTIFACTS_DIRNAME: Final[str] = "artifacts"
+_MANIFEST_FILENAME: Final[str] = "manifest.json"
+_TRACEBACK_FILENAME: Final[str] = "traceback.txt"
 _FACTS_FILENAME: Final[str] = "capture.json"
 
 _OUTCOME_KEYS: Final[frozenset[str]] = frozenset(
@@ -111,6 +124,33 @@ def test_fails() -> None:
 _SECRET_CONFIG: Final[str] = f"""[http]
 headers = {{ x-api-key = "{_SENTINEL}" }}
 """
+
+_DOCUMENTING_TEST: Final[
+    str
+] = '''"""Document this test's own evidence through the published artifacts members."""
+
+import json
+import pathlib
+
+FACTS = pathlib.Path(__file__).with_name("documented.json")
+
+
+def test_the_published_members_answer_for_this_test(foundry_artifacts: object) -> None:
+    """The per-test half of the fixture writes one artifact and lists it in the manifest."""
+    reference = foundry_artifacts.write("stdout", None, "published write\\n")
+    facts = {"manifest": len(foundry_artifacts.manifest), "written": reference is not None}
+    FACTS.write_text(json.dumps(facts, sort_keys=True), encoding="utf-8")
+    assert reference is None or reference.kind == "stdout"
+'''
+"""The child test that drives the published ``write``/``manifest`` members of AAP 0.4.3.
+
+What it must never do is turn a capture fault into a failure: whether artifacts are captured is the
+run's plumbing, not the test's assertion, so the same body passes in both runs.
+"""
+
+_DOCUMENTED_FILENAME: Final[str] = "documented.json"
+"""The file the documenting child test writes what the two published members answered into."""
+
 
 _CAPTURE_TEST: Final[
     str
@@ -186,9 +226,34 @@ _INJECT_HTML: Final[str] = """    import foundry.reporting.html as html_module
     html_module.template_path = lambda: broken
 """
 
+_INJECT_TERMINAL_WRITE: Final[str] = '''@pytest.hookimpl(tryfirst=True)
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
+    """Break the section writer Foundry's banner goes through, before foundry.plugin writes it."""
+    original = terminalreporter.write_sep
+
+    def _raising_write_sep(sep: str, title: str, **markup: bool) -> object:
+        """Raise where a closed stdout would, and leave every other section to the reporter."""
+        if title.startswith("foundry: profile="):
+            raise OSError(5, "I/O error", "stdout closed")
+        return original(sep, title, **markup)
+
+    terminalreporter.write_sep = _raising_write_sep
+'''
+
+_INJECT_ARTIFACT_WRITE: Final[str] = '''    from foundry.obs.artifacts import ArtifactWriter
+
+    def _raising_finalize(self: ArtifactWriter, *, passed: bool) -> None:
+        """Stand in for ArtifactWriter.finalize and raise the fault this case injects."""
+        raise RuntimeError("injected artifact write failure")
+
+    ArtifactWriter.finalize = _raising_finalize
+'''
+
 _INJECTIONS: Final[Mapping[str, str]] = {
     "redactor": _INJECT_REDACTOR,
     "html": _INJECT_HTML,
+    "artifact_write": _INJECT_ARTIFACT_WRITE,
+    "terminal": _INJECT_TERMINAL_WRITE,
 }
 """The faults this module plants, by the name each case asks for."""
 
@@ -234,6 +299,11 @@ def _observe(project: Path, result: pytest.RunResult) -> _Observation:
     )
 
 
+def _terminal_text(result: pytest.RunResult) -> str:
+    """Return everything the child run ``result`` wrote to its two terminal streams."""
+    return result.stdout.str() + result.stderr.str()
+
+
 def _log_lines(project: Path) -> tuple[str, ...]:
     """Return the Foundry records the child logged, or ``()`` when it logged nothing."""
     path = project / _LOG_FILENAME
@@ -257,6 +327,14 @@ def _record_for(project: Path, nodeid: str) -> Mapping[str, object] | None:
         if record.get("nodeid") == nodeid:
             return record
     return None
+
+
+def _documented(project: Path) -> Mapping[str, object]:
+    """Return what the documenting child test reported about the published artifacts members."""
+    path = project / _DOCUMENTED_FILENAME
+    assert path.is_file(), f"the documenting child test did not run: {path}"
+    reported: Mapping[str, object] = json.loads(path.read_text(encoding="utf-8"))
+    return reported
 
 
 def _forget_outputs(project: Path) -> None:
@@ -299,6 +377,9 @@ def test_failing_artifact_writer_does_not_change_a_passing_test(pytester: pytest
     assert control.returncode == 0
     assert control.plumbing() == ()
     assert (project / _ARTIFACTS_DIRNAME).is_dir(), "the control run creates its artifact directory"
+    assert [record["artifacts_disabled"] for record in _records(project)] == [False], (
+        "the flag tracks the run's capture state, so a writable run reports it false"
+    )
 
     _forget_outputs(project)
     (project / _ARTIFACTS_DIRNAME).write_text("not a directory\n", encoding="utf-8")
@@ -312,9 +393,77 @@ def test_failing_artifact_writer_does_not_change_a_passing_test(pytester: pytest
     assert "artifact capture disabled" in fired[0]
     records = _records(project)
     assert [record["outcome"] for record in records] == ["passed"]
-    # AAP 0.4.7 keeps the disabled flag in manifest.json, which a capture that never ran does not
-    # write; the result record's own promise is only that no artifact path reaches it.
+    assert [record["artifacts_disabled"] for record in records] == [True], (
+        "AAP 0.4.7: every record of a run whose artifact directory could not be written carries "
+        "artifacts_disabled: true, so the state is on the record and not only in the HTML banner"
+    )
     assert records[0]["artifacts"] == []
+
+
+def test_artifacts_disabled_is_stamped_on_every_record(pytester: pytest.Pytester) -> None:
+    """AAP 0.4.7: a blocked artifact root marks every record, passing and failing alike.
+
+    Two records in one run, so "every record carries it" is the assertion rather than "a record
+    does", and the same run's control pass pins the flag to the run's capture state: a readable
+    artifact directory reports ``false``, which a constant would not.
+    """
+    project = pytester.path
+    pytester.makeconftest(_conftest_source(None))
+    pytester.makepyfile(test_passing=_PASSING_TEST, test_failing=_FAILING_TEST)
+    control = _observe(project, pytester.runpytest_subprocess("-q"))
+    assert control.returncode == 1
+    assert [record["artifacts_disabled"] for record in _records(project)] == [False, False], (
+        "a run whose artifact directory was created must not claim capture was disabled"
+    )
+
+    _forget_outputs(project)
+    (project / _ARTIFACTS_DIRNAME).write_text("not a directory\n", encoding="utf-8")
+    injected = _observe(project, pytester.runpytest_subprocess("-q"))
+
+    assert injected.returncode == control.returncode
+    assert injected.outcomes == control.outcomes
+    records = _records(project)
+    assert len(records) == 2, f"the blocked run lost a record: {records}"
+    for record in records:
+        assert record["artifacts_disabled"] is True, record
+        assert record["artifacts"] == [], record
+        assert all(failure["traceback_path"] is None for failure in record["failures"]), record
+
+
+def test_the_published_artifacts_members_never_fail_a_test(pytester: pytest.Pytester) -> None:
+    """AAP 0.4.3's ``write``/``manifest`` answer a test body, and a capture fault records nothing.
+
+    The control run proves the two members really write the artifact and report it, so the blocked
+    run's ``None``/``()`` is the disabled state rather than members that do nothing. In the blocked
+    run the outcome, the exit code and the warning count are the control's: AAP 0.4.7's "one
+    warning, the run continues ... unchanged by this fault" has to hold for the published surface
+    too, or a test that documents its own evidence would fail whenever the artifact directory is
+    unwritable.
+    """
+    project = pytester.path
+    pytester.makeconftest(_conftest_source(None))
+    pytester.makepyfile(test_documents=_DOCUMENTING_TEST)
+    control = _observe(project, pytester.runpytest_subprocess("-q"))
+    assert control.returncode == 0
+    assert control.plumbing() == ()
+    assert _documented(project) == {"manifest": 1, "written": True}, (
+        "the published members must write this test's artifact and list it in its manifest"
+    )
+
+    _forget_outputs(project)
+    (project / _DOCUMENTED_FILENAME).unlink(missing_ok=True)
+    (project / _ARTIFACTS_DIRNAME).write_text("not a directory\n", encoding="utf-8")
+    injected = _observe(project, pytester.runpytest_subprocess("-q"))
+
+    assert injected.returncode == control.returncode
+    assert injected.outcomes == control.outcomes
+    assert len(injected.plumbing()) == 1, injected.plumbing()
+    assert _documented(project) == {"manifest": 0, "written": False}, (
+        "a disabled capture records nothing through the published members instead of raising"
+    )
+    records = _records(project)
+    assert [record["artifacts_disabled"] for record in records] == [True], records
+    assert records[0]["artifacts"] == [], records
 
 
 def test_failing_redactor_does_not_change_a_passing_test(pytester: pytest.Pytester) -> None:
@@ -409,6 +558,52 @@ def test_failing_artifact_writer_does_not_mask_a_failing_test(pytester: pytest.P
     assert record["failures"], "the failure the run recorded keeps its phase, message and traceback"
 
 
+def test_a_fault_in_the_artifact_write_path_does_not_mask_a_failing_test(
+    pytester: pytest.Pytester,
+) -> None:
+    """A raise in the per-test write path costs one warning, never the failure being written.
+
+    AAP 0.1.2 is the rule: a failure in Foundry's own capture logs one ``WARNING`` and changes
+    neither the test's outcome nor the run's exit code. AAP 0.4.7's artifact-capture context is
+    what makes the path reachable: the coordinator writes the traceback and the log tail at
+    teardown and then ``manifest.json`` through ``ArtifactWriter.finalize``, while a passing test
+    keeps only that manifest (AAP 0.4.5), so the failing test here is what puts the traceback write
+    and the finalize call -- the two the injected raise interrupts -- on the run's path.
+    """
+    project = pytester.path
+    pytester.makeconftest(_conftest_source(None))
+    pytester.makepyfile(test_failing=_FAILING_TEST)
+    control = _observe(project, pytester.runpytest_subprocess("-q"))
+    assert control.returncode == 1
+    assert control.outcomes == {"failed": 1}
+    assert control.plumbing() == ()
+    written = {path.name for path in _foundry_files(project)}
+    assert _TRACEBACK_FILENAME in written, "the control run writes the failure's traceback"
+    assert _MANIFEST_FILENAME in written, "the control run finalises the test's artifacts"
+
+    _forget_outputs(project)
+    pytester.makeconftest(_conftest_source("artifact_write"))
+    injected = _observe(project, pytester.runpytest_subprocess("-q"))
+
+    assert injected.returncode == control.returncode
+    assert injected.outcomes == control.outcomes
+    assert injected.errors == (), "a write-path fault may never be logged above WARNING"
+    fired = injected.plumbing()
+    assert fired, "the planted fault produced no WARNING: the injection missed its target"
+    assert any("error=RuntimeError" in line for line in fired)
+    written_after = {path.name for path in _foundry_files(project)}
+    assert _TRACEBACK_FILENAME in written_after, (
+        "the raise lands on finalize, so the write before it already put the traceback on disk"
+    )
+    assert _MANIFEST_FILENAME not in written_after, (
+        "the injected raise must be what stopped the manifest: a run that still wrote it missed"
+    )
+    record = _record_for(project, "test_failing.py::test_fails")
+    assert record is not None, "a write-path fault may not cost the failing test its record"
+    assert record["outcome"] == "failed", "the fault costs artifacts, never the outcome"
+    assert record["failures"], "the recorded failure keeps its phase, message and traceback"
+
+
 def test_foundry_log_capture_fixture_reports_real_records(pytester: pytest.Pytester) -> None:
     """The public fixture answers a real test with the record that test has just logged."""
     project = pytester.path
@@ -422,3 +617,37 @@ def test_foundry_log_capture_fixture_reports_real_records(pytester: pytest.Pytes
     assert facts["tail"][0].startswith("WARNING")
     assert "foundry log capture fixture probe" in facts["tail"][0]
     assert facts["records"] >= 1
+
+
+def test_failing_terminal_summary_does_not_change_a_passing_test(
+    pytester: pytest.Pytester,
+) -> None:
+    """A terminal write that raises costs one warning, never the exit code the tests earned."""
+    project = pytester.path
+    pytester.makeconftest(_conftest_source(None))
+    pytester.makepyfile(test_probe=_PASSING_TEST)
+    control_result = pytester.runpytest_subprocess("-q")
+    control = _observe(project, control_result)
+    assert control.returncode == 0
+    assert control.plumbing() == ()
+    assert "foundry: profile=default" in _terminal_text(control_result), (
+        "the control run prints the activation proof this case makes unwritable"
+    )
+
+    _forget_outputs(project)
+    pytester.makeconftest(_conftest_source("terminal"))
+    injected_result = pytester.runpytest_subprocess("-q")
+    injected = _observe(project, injected_result)
+
+    assert injected.returncode == control.returncode
+    assert injected.outcomes == control.outcomes
+    assert injected.errors == (), "a terminal fault may never be logged above WARNING"
+    text = _terminal_text(injected_result)
+    assert "INTERNALERROR" not in text, "an unguarded hook becomes pytest's internal error"
+    assert "Traceback" not in text, "a plumbing fault may not print Foundry's own traceback"
+    fired = injected.plumbing()
+    assert len(fired) == 1, "AAP 0.1.2: a plumbing fault in the terminal summary is one warning"
+    assert "activation banner" in fired[0]
+    record = _record_for(project, "test_probe.py::test_ok")
+    assert record is not None, "a terminal fault may not cost the passing test its record"
+    assert record["outcome"] == "passed"

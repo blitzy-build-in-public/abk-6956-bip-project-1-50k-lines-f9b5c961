@@ -1,6 +1,7 @@
 """The extension table that routes a data file to its reader, and composes the load (AAP 0.4.7).
 
-Four shipped readers register at import; :func:`register` is the additive extension point.
+Four shipped readers register at import; :func:`register` is the additive extension point, and
+:func:`generate_cases` is the composition ``foundry.plugin.pytest_generate_tests`` delegates to.
 """
 
 from __future__ import annotations
@@ -16,11 +17,14 @@ from foundry.data.loaders.jsonl import LOADER as JSONL_LOADER
 from foundry.data.loaders.yaml import LOADER as YAML_LOADER
 
 if TYPE_CHECKING:
+    import pytest
+
     from foundry.data.cases import CaseSet
     from foundry.data.matrix import Matrix
 
 __all__ = [
     "SUPPORTED_EXTENSIONS",
+    "generate_cases",
     "load_cases",
     "load_document",
     "load_matrix",
@@ -47,21 +51,18 @@ _LOADERS: dict[str, Loader] = {}
 def register(loader: Loader) -> None:
     """Register a reader under every suffix it claims.
 
-    This is the extension point AAP 0.4.9 promises: a new format -- a new delimited-text
-    dialect, a Rules table, a spreadsheet export -- is added by implementing
+    This is the extension point AAP 0.4.9 promises: a new format -- a new delimited-text dialect, a
+    Rules table, a spreadsheet export -- is added by implementing
     :class:`~foundry.data.loaders.base.Loader` and calling this function with an instance, after
-    which ``.myext`` files reach that reader with no change to the loading functions below.
-
-    Each entry of ``loader.extensions`` is normalised before it is stored: a leading dot is
-    removed and the name is lowercased, so a reader that declares ``".CSV"`` and one that
-    declares ``"csv"`` address the same files. The last registration for a suffix wins, and a
-    re-registration raises nothing: overriding a shipped reader for a suffix is a supported
-    thing to do in a project's own test support module, and a raise here would turn it into a
-    startup failure (AAP 0.14.3 lists the exceptions this package may produce).
-
-    An entry that normalises to the empty string is ignored rather than stored. A suffix-less
-    file is exactly the case :func:`loader_for` reports as unsupported, and a reader claiming
-    ``""`` would silently take every such path instead.
+    which ``.myext`` files reach that reader with no change to the loading functions below. Each
+    entry of ``loader.extensions`` is normalised before it is stored: a leading dot is removed and
+    the name is lowercased, so a reader that declares ``".CSV"`` and one that declares ``"csv"``
+    address the same files. The last registration for a suffix wins, and a re-registration raises
+    nothing: overriding a shipped reader for a suffix is a supported thing to do in a project's own
+    test support module, and a raise here would turn it into a startup failure (AAP 0.14.3 lists the
+    exceptions this package may produce). An entry that normalises to the empty string is ignored
+    rather than stored: a reader claiming ``""`` would silently take every suffix-less path
+    :func:`loader_for` reports as unsupported.
 
     Args:
         loader: The reader to register, whose ``extensions`` names the suffixes it answers for.
@@ -166,9 +167,8 @@ def resolve_data_file(name: str | Path, *, directory: Path) -> Path:
 def load_document(path: Path) -> LoadedTable | LoadedMatrix:
     """Read ``path`` with the reader its suffix selects and return the document it holds.
 
-    The format is decided by :func:`loader_for` and everything format-specific stays in the
-    reader, so this function's result is one of the two neutral shapes regardless of whether the
-    file was CSV, JSON, YAML or JSON Lines.
+    The format is decided by :func:`loader_for` and everything format-specific stays in the reader,
+    so the result is one of the two neutral shapes whatever the file was.
 
     Args:
         path: An already-resolved path, normally one :func:`resolve_data_file` returned. Nothing
@@ -186,26 +186,24 @@ def load_document(path: Path) -> LoadedTable | LoadedMatrix:
     return loader_for(path).load(path)
 
 
-def load_cases(path: Path, *, strict: bool = True, schema_dir: Path | None = None) -> CaseSet:
+def load_cases(path: str | Path, *, strict: bool = True, schema_dir: Path | None = None) -> CaseSet:
     """Read ``path`` and return the cases its document expands to.
 
-    This is the composition the rest of the package calls, and the only place it happens: a
-    tabular document has its sidecar JSON Schema resolved and enforced row by row before
-    :func:`foundry.data.cases.build_case_set` converts the rows, so a rejected row never becomes
-    a case; a matrix document expands straight to its cross-product through
-    :func:`foundry.data.matrix.expand_matrix`.
-
-    Row-level JSON Schema validation applies to tabular documents in this release. A matrix
-    document's axes are expanded as written and are not validated against a schema, because a
-    combination is not a row of the file.
-
-    An empty file is a case set rather than a fault: a header-only CSV, an empty JSON array, a
-    blank YAML document and a blank-only JSON Lines file all return a set whose ``is_empty`` is
-    ``True``, which :func:`foundry.data.cases.build_parameters` turns into one skipped item
-    reading ``no cases in <file>`` (AAP 0.4.7).
+    This is the composition the rest of the package calls, and the only place it happens: a tabular
+    document has its sidecar JSON Schema resolved and enforced row by row before
+    :func:`foundry.data.cases.build_case_set` converts the rows, so a rejected row never becomes a
+    case; a matrix document expands straight to its cross-product through
+    :func:`foundry.data.matrix.expand_matrix`. A matrix document's axes are expanded as written and
+    are not validated against a schema, because a combination is not a row of the file. An empty
+    file is a case set rather than a fault: a header-only CSV, an empty JSON array, a blank YAML
+    document and a blank-only JSON Lines file all return a set whose ``is_empty`` is ``True``, which
+    :func:`foundry.data.cases.build_parameters` turns into one skipped item reading ``no cases in
+    <file>`` (AAP 0.4.7).
 
     Args:
-        path: An already-resolved path, normally one :func:`resolve_data_file` returned.
+        path: The data file to read, as a :class:`str` or a :class:`~pathlib.Path` -- a string names
+            the same file a ``Path`` does (AAP 0.14.3). A relative path is read against the working
+            directory; containment belongs to :func:`resolve_data_file`.
         strict: Whether a column the sidecar schema does not declare is a fault, taken from
             ``data.schema_strict``. A data file that declares no schema is unaffected either way.
         schema_dir: The directory the sidecar schema must stay inside, normally the resolved
@@ -225,6 +223,8 @@ def load_cases(path: Path, *, strict: bool = True, schema_dir: Path | None = Non
     from foundry.data.matrix import expand_matrix
     from foundry.data.schema import enforce_table, load_row_schema
 
+    # A suffix selects the reader, so the accepted string form becomes a path before either lookup.
+    path = Path(path)
     document = load_document(path)
     if isinstance(document, LoadedTable):
         row_schema = load_row_schema(path, base_dir=schema_dir)
@@ -233,7 +233,7 @@ def load_cases(path: Path, *, strict: bool = True, schema_dir: Path | None = Non
     return expand_matrix(document).to_case_set()
 
 
-def load_matrix(path: Path) -> Matrix:
+def load_matrix(path: str | Path) -> Matrix:
     """Read ``path`` as a matrix document and return its expanded cross-product.
 
     A caller asks for a matrix when the data is axes rather than rows -- a pricing grid, a set of
@@ -241,7 +241,9 @@ def load_matrix(path: Path) -> Matrix:
     reported as one instead of being expanded into single-value cases.
 
     Args:
-        path: An already-resolved path, normally one :func:`resolve_data_file` returned.
+        path: The matrix document to read, as a :class:`str` or a :class:`~pathlib.Path`, coerced
+            for the same reason :func:`load_cases` coerces it (AAP 0.14.3); a relative path is read
+            against the working directory.
 
     Returns:
         The expanded matrix: its axes sorted by name, and one case per combination in the order
@@ -253,6 +255,7 @@ def load_matrix(path: Path) -> Matrix:
     """
     from foundry.data.matrix import expand_matrix
 
+    path = Path(path)
     document = load_document(path)
     if not isinstance(document, LoadedMatrix):
         data_error(
@@ -260,3 +263,56 @@ def load_matrix(path: Path) -> Matrix:
             f"not a matrix document: {path}; every top-level value must be a list of axis values",
         )
     return expand_matrix(document)
+
+
+# --- The parametrisation composition the plugin delegates to ---------------
+
+
+def generate_cases(
+    metafunc: pytest.Metafunc, *, marker: pytest.Mark, data_dir: Path, strict: bool
+) -> None:
+    """Parametrise a collected test over the cases of the data file its marker names (AAP 0.3.3).
+
+    The marker carries one file name -- resolved inside ``data_dir``, never a path -- plus at
+    most a non-blank string ``argname``; a loader fault propagates unchanged as pytest's
+    collection error naming file, line and column, and no data rows becomes one skipped
+    parameter reading ``no cases in <file>`` (AAP 0.4.7). :func:`foundry.data.cases.parametrize`
+    then makes one parameter per case, bound to the marker's ``argname`` or the adapter's
+    default, with the cases' own ids, so every worker collects the same node ids.
+
+    Args:
+        metafunc: The metafunc ``pytest_generate_tests`` received for the collected test.
+        marker: The data marker read off that test's definition.
+        data_dir: The resolved ``data.dir``: the name resolves against it, and the sidecar schema
+            must stay inside it.
+        strict: ``data.schema_strict`` -- whether an undeclared column is a fault.
+
+    Returns:
+        ``None``. The parameters are attached to ``metafunc``, which is the state pytest reads.
+
+    Raises:
+        pytest.UsageError: The marker is not one non-blank string file name plus, at most, a
+            non-blank string ``argname``; the message quotes the accepted form.
+    """
+    # Imported here, not at module scope: this module must pull in no pytest (AAP 0.4.8), and
+    # ``foundry.data.cases`` imports pytest at module scope, so it is imported here as well.
+    import pytest
+
+    from foundry.data.cases import parametrize
+
+    accepted = '@pytest.mark.foundry_data("<file>"[, argname="<name>"])'
+    name = marker.args[0] if len(marker.args) == 1 else None
+    argname = marker.kwargs.get("argname")
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or set(marker.kwargs) - {"argname"}
+        or (argname is not None and (not isinstance(argname, str) or not argname.strip()))
+    ):
+        raise pytest.UsageError(f"the data marker takes {accepted}, not {marker!r}")
+    path = resolve_data_file(name, directory=data_dir)
+    case_set = load_cases(path, strict=strict, schema_dir=data_dir)
+    if argname is None:
+        parametrize(metafunc, case_set)
+    else:
+        parametrize(metafunc, case_set, argname=argname)

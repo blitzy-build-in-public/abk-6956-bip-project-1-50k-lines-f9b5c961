@@ -12,9 +12,9 @@ first, stating what that release provides.
   recorded source for every key, unknown-key rejection naming the closest valid key, a
   `secrets.redact_keys` deny list, and the `default`, `local`, `ci` and `staging` profiles.
 - **pytest plugin core** — activation through the `pytest11` entry point with no plugin flag and
-  no configuration file, the owned `foundry_*` marker namespace with `foundry_quarantine`, the
-  declared option group including the generic `--foundry-<dotted.key>` override for every scalar
-  configuration key, and session wiring for the run id, the artifacts root and the
+  no configuration file, the owned `foundry_*` marker namespace with `foundry_quarantine` and
+  `foundry_data`, the declared option group including the generic `--foundry-<dotted.key>` override
+  for every scalar configuration key, and session wiring for the run id, the artifacts root and the
   `foundry: profile=<name>` terminal banner.
 - **Fixture library** — the 12 public fixtures with their documented scopes: session-scoped
   `foundry_config`, `foundry_profile`, `foundry_run_id` and `foundry_artifacts`, plus

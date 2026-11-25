@@ -7,7 +7,8 @@ construction rather than because something happened to be listening. Both templa
 offers are driven here -- ``minimal``, which writes the commented configuration, the smoke test and
 a data file with its JSON Schema, and ``api``, which adds an HTTP test that the cassette the
 scaffold ships replays -- together with the refusal rule of AAP 0.7.4: a non-empty directory
-without ``--force`` exits 2 having created nothing, and ``--force`` rewrites identical files.
+without ``--force`` exits 2 having created nothing, and ``--force`` rewrites the scaffold's own
+files, so an edit made between the two runs is restored and the rewritten paths are printed.
 
 Every invocation is a child process driven through the shared ``run_foundry`` and ``run_pytest``
 fixtures, because AAP 0.14.5 accepts only the real entry point as evidence: the installed console
@@ -284,8 +285,10 @@ def test_second_init_into_a_non_empty_directory_is_refused_then_forced(
     """AAP 0.7.4's refusal rule: exit 2, the reason on stderr, and a directory left byte-identical.
 
     The second half is the same rule seen from the other side: ``--force`` is what an operator
-    passes to write anyway, and since the scaffold is deterministic it must leave the existing bytes
-    alone.
+    passes to write anyway, so it must put the scaffold's own bytes back and report the paths it
+    rewrote. A marker appended between the two runs is what tells that rewrite from a command that
+    only exited ``0``, and the unchanged snapshot is what proves nothing outside the scaffold plan
+    moved.
     """
     project = minimal_scaffold.project
     before = _tree(project)
@@ -305,11 +308,47 @@ def test_second_init_into_a_non_empty_directory_is_refused_then_forced(
         "before the first byte is written (AAP 0.7.4)"
     )
 
+    # --force has a positive effect a tree that never changed cannot show: a marker appended to a
+    # file the scaffold owns is what a rewrite removes, so a --force that wrote nothing at all fails
+    # the restoration below rather than passing on its exit code alone.
+    edited = project / "README.md"
+    marker = "# edited by hand after the first scaffold\n"
+    relative = edited.relative_to(project).as_posix()
+    shipped = dict(before).get(relative)
+    assert shipped is not None, (
+        f"the snapshot of {project} holds no {relative} file, so the edit below has nothing to "
+        "change (AAP 0.7.4)"
+    )
+    edited.write_text(edited.read_text(encoding="utf-8") + marker, encoding="utf-8")
+    assert dict(_tree(project))[relative] != shipped, (
+        f"appending {marker!r} did not change {relative}'s digest, so the restore below would "
+        "prove nothing"
+    )
+
     forced = run_foundry("init", str(project), "--force", cwd=project.parent)
     assert forced.returncode == SUCCESS, _failure_detail("foundry init --force", forced)
+    restored = dict(_tree(project))[relative]
+    assert restored == shipped, (
+        f"foundry init --force left {relative} carrying the edit: its digest is {restored}, not "
+        f"the {shipped} the scaffold ships (AAP 0.4.4)"
+    )
+    assert marker not in edited.read_text(encoding="utf-8"), (
+        f"the marker {marker!r} survived foundry init --force, so {relative} was not rewritten"
+    )
+    printed = _printed_paths(forced)
+    assert len(printed) >= len(EXPECTED_MINIMAL_FILES), (
+        f"foundry init --force printed {len(printed)} line(s) for at least "
+        f"{len(EXPECTED_MINIMAL_FILES)} rewritten file(s); the written paths print one per line "
+        f"(AAP 0.4.4): {printed}"
+    )
+    for rewritten in EXPECTED_MINIMAL_FILES:
+        assert any(PurePosixPath(line).as_posix().endswith(rewritten) for line in printed), (
+            f"foundry init --force never printed {rewritten}, so its output does not report the "
+            f"paths it rewrote (AAP 0.4.4): {printed}"
+        )
     assert _tree(project) == before, (
-        "foundry init --force changed a byte of a scaffold it had already written; two runs must "
-        "write identical files (AAP 0.13.1)"
+        "foundry init --force changed a file the scaffold plan does not write; a forced run writes "
+        "identical bytes and touches nothing else (AAP 0.13.1)"
     )
 
 

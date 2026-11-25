@@ -269,19 +269,15 @@ def check_row_width(
 ) -> None:
     """Check a parsed row's width against the column count its header declares.
 
-    A tabular reader knows the header before it knows any row, and a row with the
-    wrong number of values cannot be zipped into named columns without silently
-    dropping or inventing one. The check names the row by its line and by its
-    0-based index, because a reader that skips blank or comment lines cannot point
-    at the offending row with a line number alone.
-
-    The error names the column it can, so a width fault is located as precisely as
-    the header allows. A row short of the header names the first header column it
-    never filled -- the column the author left out -- which is the "data row missing
-    a required column" state AAP 0.4.7 reports as a collection error naming the
-    file, the line number and the column. A row longer than the header has no
-    absent column to name, so its error carries the line and leaves
-    ``DataError.column`` unset.
+    A tabular reader knows the header before it knows any row, and a row with the wrong number of
+    values cannot be zipped into named columns without silently dropping or inventing one. The check
+    names the row by its line and by its 0-based index, because a reader that skips blank or comment
+    lines cannot point at the offending row with a line number alone. The error names the column it
+    can, so a width fault is located as precisely as the header allows. A row short of the header
+    names the first header column it never filled -- the column the author left out -- which is the
+    "data row missing a required column" state AAP 0.4.7 reports as a collection error naming the
+    file, the line number and the column. A row longer than the header has no absent column to name,
+    so its error carries the line and leaves ``DataError.column`` unset.
 
     Args:
         path: The data file; named by the error.

@@ -18,24 +18,21 @@ value as ``request.param``::
 
     @pytest.mark.parametrize("foundry_db", [Widget], indirect=True)
     def test_a_commit_is_visible_in_the_test(foundry_db: Session) -> None:
-        foundry_db.add(Widget(id=1))
-        foundry_db.commit()
+    foundry_db.add(Widget(id=1))
+    foundry_db.commit()
 
 The value names mapped classes and :class:`~sqlalchemy.Table` objects, alone or in an iterable, as
 :mod:`foundry.db.schema` reads them; an abstract declarative base owns no table and is rejected by
 :func:`foundry.db.schema.normalize_models`. Without the parametrisation the fixture yields a session
-over an empty schema, which a test may fill or ignore.
+over an empty schema.
 
-**Isolation and lazy import.** Every request builds its own engine, so one test's rows and schema
-cannot reach another, and nothing is shared or cached at module or session scope. The teardown runs
-in a ``finally``, so it runs after a failed test and after a ``KeyboardInterrupt`` just as it runs
-after a passing one. ``SQLAlchemy`` is imported inside the fixture, because this module is imported
-during ``pytest_configure`` inside a 150 ms budget while only a minority of tests request the
-database fixture.
-
-**sqlite only, synchronously, offline.** :func:`foundry.db.engine.create_engine` accepts nothing but
-an in-memory sqlite URL, so there is no server to start, no driver to install, no migration step and
-no socket, which is why the URL is not a parameter here.
+**Isolation and lazy import.** Every request builds its own engine, so nothing is shared or cached
+at module or session scope, and the teardown runs in a ``finally`` -- after a failed test and after
+a ``KeyboardInterrupt`` just as after a passing one. ``SQLAlchemy`` is imported inside the fixture,
+because ``pytest_configure`` imports this module inside a 150 ms budget while a minority of tests
+request the database. :func:`foundry.db.engine.create_engine` accepts nothing but an in-memory
+sqlite URL, so there is no server, driver install, migration step or socket, which is why the URL is
+not a parameter here.
 """
 
 from __future__ import annotations
@@ -59,10 +56,9 @@ def _models(request: pytest.FixtureRequest) -> ModelSpec:
 
     ``request.param`` exists only for a fixture parametrised indirectly, so ``getattr`` with a
     ``None`` default is the whole mechanism: a plain ``foundry_db: Session`` request carries no
-    ``param`` attribute at all, and that is a legitimate request rather than an error.
-
-    Nothing is validated here: :func:`foundry.db.schema.normalize_models` normalises ``None``, one
-    declarative model class, one :class:`~sqlalchemy.Table` and an iterable of either, and raises
+    ``param`` attribute at all, and that is a legitimate request rather than an error. Nothing is
+    validated here: :func:`foundry.db.schema.normalize_models` normalises ``None``, one declarative
+    model class, one :class:`~sqlalchemy.Table` and an iterable of either, and raises
     :class:`~foundry.core.exceptions.FoundryError` naming a value it cannot use.
 
     Returns:
@@ -78,14 +74,13 @@ def foundry_db(request: pytest.FixtureRequest) -> Iterator[OrmSession]:
 
     Function scoped: every test that requests the fixture gets a fresh engine, a fresh schema and a
     fresh transaction, and nothing survives into the next test. The schema holds the tables of the
-    models the test passed by indirect parametrisation --
-    ``@pytest.mark.parametrize("foundry_db", [Widget], indirect=True)`` -- or no table at all when
-    the test passed nothing. Writes the test makes, including ones it commits, are rolled back at
-    teardown, and the session's connection, with the in-memory database, is released on the failing
-    and interrupted paths as well as the passing one.
-
-    The yielded value is a plain :class:`sqlalchemy.orm.Session`: query it with SQLAlchemy 2.0 typed
-    statements, add rows with ``session.add`` and commit with ``session.commit``.
+    models the test passed by indirect parametrisation -- ``@pytest.mark.parametrize("foundry_db",
+    [Widget], indirect=True)`` -- or no table at all when the test passed nothing. Writes the test
+    makes, including ones it commits, are rolled back at teardown, and the session's connection,
+    with the in-memory database, is released on the failing and interrupted paths as well as the
+    passing one. The yielded value is a plain :class:`sqlalchemy.orm.Session`: query it with
+    SQLAlchemy 2.0 typed statements, add rows with ``session.add`` and commit with
+    ``session.commit``.
 
     Yields:
         An open session, bound to the test's own engine, whose outer transaction has already begun

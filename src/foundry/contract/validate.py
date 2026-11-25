@@ -363,10 +363,9 @@ def validate_instance(
     :func:`foundry.assertions.assert_json_schema` calls this function, so the failure a test reads
     is fixed here once: the message is ``contract validation failed at <json_path>``, ``json_path``
     carries that path, and ``detail`` carries the redacted path, message, schema path and validator
-    line :func:`to_contract_error` builds.
-
-    ``redact`` is normally the run's engine built from ``secrets.redact_keys``, so a configured key
-    is scrubbed as well as the built-in deny-lists; ``None`` applies those deny-lists alone.
+    line :func:`to_contract_error` builds. ``redact`` is normally the run's engine built from
+    ``secrets.redact_keys``, so a configured key is scrubbed as well as the built-in deny-lists;
+    ``None`` applies those deny-lists alone.
 
     Returns:
         None when the instance satisfies the schema.

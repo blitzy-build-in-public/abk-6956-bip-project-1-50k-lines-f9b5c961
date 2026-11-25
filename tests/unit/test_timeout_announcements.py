@@ -14,12 +14,17 @@ The memo is process-wide by design, which is exactly what makes the announcement
 the run, so the autouse fixture below clears it around every test; a latched fault would otherwise
 swallow the next test's announcement. Nothing here reads the clock, opens a socket or depends on
 the order tests run in, so the module is safe under ``-n auto``.
+
+The last case guards the other half of the same seam: ``cancel_timer`` must disarm the timer the
+arm actually set, whatever the peer lookup answers at cancel time, because a surviving interval
+timer fires into whatever the process runs next.
 """
 
 from __future__ import annotations
 
 import collections
 import logging
+import signal
 from collections.abc import Iterator
 from typing import Final
 
@@ -35,6 +40,13 @@ _MISSING_PLUGIN_TEXT: Final[str] = "pytest-timeout is not importable"
 
 _REFUSED_SETTINGS_TEXT: Final[str] = "refused the derived timer settings"
 """Distinctive fragment of the refused-settings announcement."""
+
+_PROBE_LIMIT_SECONDS: Final[float] = 60.0
+"""The limit the leak probe arms, which is the default ``execution.timeout``.
+
+Long on purpose: the probe is about whether a cancel clears the armed timer, never about the limit
+itself, and a short one could fire into a loaded runner between the arm and the assertion.
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +93,15 @@ class _FakePeer:
         """Record the item whose timer was cancelled."""
         self.cancelled.append(item)
         return True
+
+
+class _ArmableItem:
+    """A stand-in for a pytest item the real peer can arm, which ``object()`` cannot be.
+
+    ``pytest_timeout_set_timer`` stores the closure that disarms the timer on the item as
+    ``cancel_timeout``, so a probe of the arm/cancel balance needs an item that accepts the
+    attribute.
+    """
 
 
 def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
@@ -160,3 +181,28 @@ def test_isolation_holds_and_a_healthy_peer_still_arms(
     assert peer.armed[0][1].timeout == policy.seconds
     assert peer.cancelled == [item]
     assert _warnings(caplog) == []
+
+
+def test_cancelling_disarms_the_timer_armed_before_the_peer_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancel disarms the armed timer even when the peer lookup now answers another module.
+
+    Regression for the per-item timer leak: :func:`foundry.execution.timeout.apply_timer` armed the
+    real ``ITIMER_REAL`` and stored the peer's disarm closure on the item, so a
+    :func:`foundry.execution.timeout.cancel_timer` that re-resolved the peer and cancelled through
+    *that* module left the real timer armed. It then fired into whatever the process ran next, which
+    inside an xdist worker interrupted the worker's own loop and killed the worker mid-session.
+    """
+    policy = timeout.TimeoutPolicy(seconds=_PROBE_LIMIT_SECONDS)
+    item = _ArmableItem()
+    peer = _FakePeer()
+    try:
+        assert timeout.apply_timer(object(), item, policy) is True
+        assert signal.getitimer(signal.ITIMER_REAL)[0] > 0
+        monkeypatch.setattr(timeout, "_load_timeout_module", lambda: peer)
+        assert timeout.cancel_timer(item) is True
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    assert peer.cancelled == []

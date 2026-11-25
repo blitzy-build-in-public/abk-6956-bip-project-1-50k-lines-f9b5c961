@@ -25,6 +25,12 @@ into its own temporary directory (``--foundry-json-report`` takes ``results.json
 ``junit.xml`` and ``report.html`` beside it, ``--foundry-artifacts.dir`` the artifact tree), so the
 repository root stays untouched -- an assertion the test makes -- and the root-level invocation
 whose outputs land there belongs to ``tests/e2e/test_example_project.py`` alone.
+
+The second case proves AAP 0.4.7's xdist worker-crash row, which the runs above cannot reach
+because every worker of theirs stays alive: a generated project kills the process running its second
+test, and the child's ``results.json`` must carry a ``run_error`` naming that worker, a ``not_run``
+record for the item it was executing (assumption A12) and a record for each surviving test, with the
+child exiting 1.
 """
 
 from __future__ import annotations
@@ -63,6 +69,38 @@ REPORT_FILES: Final[tuple[str, ...]] = ("results.json", "junit.xml", "report.htm
 # the run itself -- a lost worker or a session stopped early.
 _RESULT: Final[str] = "result"
 _RUN_ERROR: Final[str] = "run_error"
+
+# The project the worker-crash case writes: four plain tests in one module, the second killing the
+# process that runs it, which under ``-n 2`` is one xdist worker. No fixture, no socket, no sleep.
+_CRASH_MODULE: Final[str] = "test_worker_crash.py"
+_CRASH_PROJECT: Final[str] = '''"""Four plain tests; the second kills the worker executing it."""
+
+import os
+import signal
+
+
+def test_alpha() -> None:
+    """Pass."""
+
+
+def test_beta() -> None:
+    """Kill the interpreter running this test, which under -n 2 is one xdist worker."""
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def test_gamma() -> None:
+    """Pass."""
+
+
+def test_delta() -> None:
+    """Pass."""
+'''
+_KILLED: Final[str] = f"{_CRASH_MODULE}::test_beta"
+"""The node id the crash report names, and so the record assumption A12 must publish as not_run."""
+_SURVIVORS: Final[tuple[str, ...]] = tuple(
+    f"{_CRASH_MODULE}::test_{name}" for name in ("alpha", "gamma", "delta")
+)
+"""The node ids of the three tests the surviving worker runs after its peer dies."""
 
 
 class _Measurement(NamedTuple):
@@ -318,3 +356,58 @@ def test_sharded_run_covers_the_same_tests_in_at_most_sixty_percent_of_the_time(
             "redirections exist so this module leaves the repository root untouched, and a run "
             "present in both trees wrote its artifacts twice (AAP 0.4.6, assumption A5)"
         )
+
+
+def test_a_killed_worker_leaves_a_run_error_and_a_not_run_record(
+    run_pytest: Callable[..., Any], tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """AAP 0.4.7's worker-crash row: a hard worker death yields partial results and exit 1.
+
+    The generated project kills the process running its second test, so one ``-n 2`` worker dies
+    mid-item while its peer keeps going. The child is read through the three things AAP 0.4.7 and
+    assumption A12 promise: partial results are still written, the run itself is declared broken by
+    one ``run_error`` element naming the worker id, and the item the dead worker was executing is
+    named ``not_run`` instead of dropped from the document (AAP 0.4.6). The exit code is 1.
+    """
+    project = tmp_path_factory.mktemp("worker-crash")
+    (project / _CRASH_MODULE).write_text(_CRASH_PROJECT, encoding="utf-8")
+    result = run_pytest("-q", "-n", "2", cwd=project)
+    output = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode == 1, (
+        f"the run exited {result.returncode} after its worker was killed, where AAP 0.4.7's "
+        "worker-crash row fixes exit code 1: partial results are written and the run itself counts "
+        f"as failed. Document: {project / 'results.json'}\n{output}"
+    )
+    records = _records(project)
+    errors = _run_errors(records)
+    assert len(errors) == 1, (
+        f"the killed run wrote {len(errors)} run_error element(s) {list(errors)}, where AAP "
+        f"0.4.7's worker-crash row requires exactly one naming the worker id\n{output}"
+    )
+    workers = [str(error.get("worker_id", "")) for error in errors]
+    assert workers[0].startswith("gw"), (
+        f"the run_error element names worker_id {workers[0]!r}; AAP 0.4.7's worker-crash row "
+        f"requires the id of the worker that died, which xdist spells 'gw<N>'\n{output}"
+    )
+    outcomes = {
+        str(record.get("nodeid", "")): str(record.get("outcome", ""))
+        for record in records
+        if record.get("record_type") == _RESULT
+    }
+    assert outcomes.get(_KILLED) == "not_run", (
+        f"{_KILLED} is recorded as {outcomes.get(_KILLED)!r}, where assumption A12 requires "
+        "outcome 'not_run' for an item that never executed because its worker was lost "
+        "(AAP 0.4.6); an omitted node id means the item vanished from the document. "
+        f"Records: {outcomes}\n{output}"
+    )
+    survivors = {nodeid: outcomes.get(nodeid) for nodeid in _SURVIVORS}
+    assert survivors == dict.fromkeys(_SURVIVORS, "passed"), (
+        f"the tests the surviving worker ran are recorded as {survivors}, where AAP 0.4.7's "
+        f"worker-crash row requires partial results naming each one as passed\n{output}"
+    )
+    nodeids = _nodeids(records)
+    duplicates = sorted({nodeid for nodeid in nodeids if nodeids.count(nodeid) > 1})
+    assert duplicates == [], (
+        f"the killed run recorded {len(duplicates)} test(s) twice: {duplicates}. A crashed item is "
+        f"rescheduled onto a live worker, never executed twice (AAP 0.4.7)\n{output}"
+    )

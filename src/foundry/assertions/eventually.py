@@ -196,13 +196,12 @@ def _read_instant(clock: ClockLike) -> datetime:
 def _seconds_from_now(clock: ClockLike | None) -> Callable[[], float]:
     """Take the baseline and return a callable measuring seconds elapsed since it.
 
-    :class:`foundry.core.types.ClockLike` exposes ``now() -> datetime`` rather than a plain
-    seconds counter, so the baseline is captured here as the instant the call started and each
-    later reading is turned into a difference. ``time.monotonic`` is the default source
-    because it cannot go backwards when the machine's wall clock is adjusted.
-
-    Every reading is taken through :func:`_read_instant`, so a clock that stops returning a
-    ``datetime`` raises this module's own :class:`AssertionError` instead of a builtin one.
+    :class:`foundry.core.types.ClockLike` exposes ``now() -> datetime`` rather than a plain seconds
+    counter, so the baseline is captured here as the instant the call started and each later reading
+    is turned into a difference. ``time.monotonic`` is the default source because it cannot go
+    backwards when the machine's wall clock is adjusted. Every reading is taken through
+    :func:`_read_instant`, so a clock that stops returning a ``datetime`` raises this module's own
+    :class:`AssertionError` instead of a builtin one.
 
     Args:
         clock: The supplied time source, or ``None`` to measure on the monotonic clock.

@@ -5,14 +5,13 @@ Per-test state is held only in ``pytest.Stash`` entries keyed by the :class:`pyt
 attached to a ``pytest.Item`` -- and everything that must reach the controller from an
 ``pytest-xdist`` worker is JSON-serialisable, because a worker's reports are the only channel back
 (AAP 0.4.8). Imports run one way: this package may import ``core``, ``obs``, ``config``, ``http``,
-``cassette`` and ``data``, and must never import ``reporting``, ``cli`` or ``plugin``.
-
-The names below are re-exported lazily through the PEP 562 :func:`__getattr__` rather than imported
-eagerly, because ``plugin.py`` imports :mod:`foundry.execution.state` at module scope and importing
-a submodule executes this file first: one eager sibling import here would land on the 150 ms
+``cassette`` and ``data``, and must never import ``reporting``, ``cli`` or ``plugin``. The names
+below are re-exported lazily through the PEP 562 :func:`__getattr__` rather than imported eagerly,
+because ``plugin.py`` imports :mod:`foundry.execution.state` at module scope and importing a
+submodule executes this file first: one eager sibling import here would land on the 150 ms
 plugin-startup budget (AAP 0.14.2). :data:`__all__` and :data:`_LAZY_IMPORTS` are kept in sync and
-in the same order, and a name outside the table raises ``AttributeError``, which is what lets
-``from foundry.execution import quarantine`` fall through to importing that submodule.
+in the same order, and a name outside the table raises ``AttributeError``, which is what lets ``from
+foundry.execution import quarantine`` fall through to importing that submodule.
 """
 
 from __future__ import annotations

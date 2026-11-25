@@ -2,7 +2,9 @@
 
 AAP 0.2.1 names pytest's captured-log block as a residual leak channel and AAP 0.14.3 forbids a
 secret reaching the terminal, so :class:`foundry.obs.logging.RedactionFilter` rewrites a record in
-place at the logger, ahead of every handler -- Foundry's own ring and the host's alike. The engine's
+place at the logger and at the handler Foundry owns at the tree root, ahead of every handler --
+Foundry's own ring and the host's alike -- so a record a ``foundry`` child logger originates is
+masked too. The engine's
 rules are ``tests/unit/test_obs.py``'s and the six-sink absence proof is
 ``tests/integration/test_redaction_end_to_end.py``'s; this module holds the seam's own contract: the
 argument shapes a caller may log, the record it must leave exactly as written, idempotency across
@@ -31,6 +33,9 @@ _SECRET: Final[str] = "probe-credential-not-a-real-value"
 _TRACE: Final[str] = "trace-not-a-secret-1"
 """The non-secret value beside it, so a mask that swallowed the whole line would be caught."""
 
+_CHILD: Final[str] = f"{_LOGGER}.obs.child"
+"""A child of the ``foundry`` logger, the tree a module of Foundry logs from."""
+
 
 def _record(message: str, args: object = None) -> logging.LogRecord:
     """Return an unemitted ``INFO`` record whose ``args`` are exactly what ``args`` holds."""
@@ -48,6 +53,17 @@ def foundry_filters() -> Iterator[list[logging.Filter]]:
         yield saved
     finally:
         logger.filters[:] = saved
+
+
+@pytest.fixture
+def handler_filters() -> Iterator[list[logging.Filter]]:
+    """Restore the ``foundry`` handler's filter list, so no case outlives the one that ran it."""
+    handler = obs_logging.NULL_HANDLER
+    saved = list(handler.filters)
+    try:
+        yield saved
+    finally:
+        handler.filters[:] = saved
 
 
 @pytest.mark.parametrize(
@@ -110,7 +126,7 @@ def test_a_record_that_cannot_be_interpolated_is_kept_as_it_stands() -> None:
 
 
 def test_installing_twice_keeps_one_filter_carrying_the_newest_engine(
-    foundry_filters: list[logging.Filter],
+    foundry_filters: list[logging.Filter], handler_filters: list[logging.Filter]
 ) -> None:
     """Repeated bootstraps keep exactly one such filter, and it carries the newest engine."""
     first = obs_logging.install_redaction_filter(Redactor(["x-api-key"]))
@@ -130,7 +146,7 @@ def test_installing_twice_keeps_one_filter_carrying_the_newest_engine(
 
 
 def test_installing_touches_no_logger_but_the_foundry_one(
-    foundry_filters: list[logging.Filter],
+    foundry_filters: list[logging.Filter], handler_filters: list[logging.Filter]
 ) -> None:
     """AAP 0.4.8: the root logger and another package's logger keep their filters and handlers."""
     root = logging.getLogger()
@@ -177,7 +193,9 @@ def test_a_raising_engine_costs_one_warning_and_keeps_the_record(
 
 
 def test_a_record_logged_through_the_logger_reaches_a_host_handler_masked(
-    caplog: pytest.LogCaptureFixture, foundry_filters: list[logging.Filter]
+    caplog: pytest.LogCaptureFixture,
+    foundry_filters: list[logging.Filter],
+    handler_filters: list[logging.Filter],
 ) -> None:
     """The guarantee the finding asks for: a host handler renders the mask, not the value."""
     obs_logging.install_redaction_filter(Redactor())
@@ -193,7 +211,9 @@ def test_a_record_logged_through_the_logger_reaches_a_host_handler_masked(
 
 
 def test_the_resolution_line_keeps_the_key_it_names(
-    caplog: pytest.LogCaptureFixture, foundry_filters: list[logging.Filter]
+    caplog: pytest.LogCaptureFixture,
+    foundry_filters: list[logging.Filter],
+    handler_filters: list[logging.Filter],
 ) -> None:
     """AAP 0.1.2: the ``DEBUG`` resolution line carries the layer and the key, mask included."""
     obs_logging.install_redaction_filter(Redactor())
@@ -206,3 +226,50 @@ def test_the_resolution_line_keeps_the_key_it_names(
     assert "option=http.timeout" in lines[0]
     assert "layer=env" in lines[0]
     assert REDACTED not in lines[0], f"the mask ate a diagnostic that names no secret: {lines[0]!r}"
+
+
+def test_a_record_logged_through_a_child_logger_reaches_a_host_handler_masked(
+    caplog: pytest.LogCaptureFixture,
+    foundry_filters: list[logging.Filter],
+    handler_filters: list[logging.Filter],
+) -> None:
+    """A ``foundry`` child's record is masked before a host handler renders it.
+
+    A logger's own filters never see a record its children originate, so the handler Foundry owns at
+    the tree root is what masks it: the host handler receives the marker, and the rest of the line.
+    """
+    obs_logging.install_redaction_filter(Redactor())
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        logging.getLogger(_CHILD).info("caller sent x-trace-id=%s token=%s", _TRACE, _SECRET)
+
+    assert _SECRET not in caplog.text, caplog.text
+    assert f"x-trace-id={_TRACE}" in caplog.text
+    assert REDACTED in caplog.text
+
+
+def test_a_repeated_install_keeps_one_filter_on_the_logger_and_one_on_the_handler(
+    foundry_filters: list[logging.Filter], handler_filters: list[logging.Filter]
+) -> None:
+    """Repeated bootstraps leave one filter on each, and both carry the newest engine."""
+    obs_logging.install_redaction_filter(Redactor(["x-api-key"]))
+    newest = Redactor(["cookie"])
+
+    installed = obs_logging.install_redaction_filter(newest)
+    assert obs_logging.install_redaction_filter(newest) is installed
+
+    on_logger = [
+        attached
+        for attached in logging.getLogger(_LOGGER).filters
+        if isinstance(attached, obs_logging.RedactionFilter)
+    ]
+    on_handler = [
+        attached
+        for attached in obs_logging.NULL_HANDLER.filters
+        if isinstance(attached, obs_logging.RedactionFilter)
+    ]
+    assert len(on_logger) == 1, f"the logger holds more than one filter: {on_logger}"
+    assert len(on_handler) == 1, f"the handler holds more than one filter: {on_handler}"
+    assert on_logger[0] is installed
+    assert on_handler[0] is installed
+    assert installed.redactor is newest

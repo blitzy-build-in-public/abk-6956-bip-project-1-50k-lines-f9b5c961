@@ -17,10 +17,10 @@ the rows are read at collection time through the engine the plugin itself uses,
 schema root, so the sidecar is enforced on every row before it becomes a case: a cell the schema
 stops accepting fails collection instead of passing quietly (AAP 0.4.7).
 
-The parameter list is built here, at import, rather than through a collection hook: the
-``foundry_data`` fixture is function scoped, and the plugin's ``pytest_generate_tests`` carries no
-data-file argument and registers no data marker, so this module is the place that knows which file
-it reads. Building it once is also what keeps the six ids identical on every worker.
+The parameter list is built here, at import, rather than declared with the plugin's
+``foundry_data`` marker: each test recomputes the rule from its own row, so the module reads the
+file beside the schema root it enforces, and building the list once is also what keeps the six ids
+identical on every worker.
 
 A CSV cell arrives as text, so each numeric column is asserted to be text and coerced with
 :func:`int` exactly once, which makes a parse defect visible rather than silent. A case whose

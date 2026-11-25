@@ -8,12 +8,10 @@ no ``conftest.py`` declaration and no configuration file (AAP 0.4.2).
 **Import budget** (AAP 0.14.2). Module scope imports ``pytest``, ``typing``, ``foundry.core`` and
 ``foundry.execution.state`` only; everything heavier is imported inside the hook that needs it.
 
-**State** (AAP 0.4.8). Run state lives in ``config.stash`` behind the typed keys
-``foundry.execution.state`` declares, per-item state in ``item.stash``, and what crosses a worker
-boundary travels as ``TestPayload`` on ``TestReport.user_properties`` (requirement I3).
-
-**Failure isolation** (AAP 0.1.2). Foundry's own faults are one ``WARNING`` and change neither an
-outcome nor an exit code; the ``report.html`` fallback is the sole exception.
+**State and isolation** (AAP 0.4.8, AAP 0.1.2). Run state lives in ``config.stash`` behind
+``foundry.execution.state``'s keys, per-item state in ``item.stash``, and what crosses a worker
+boundary rides ``TestPayload`` on ``TestReport.user_properties`` (I3); Foundry's own faults are one
+``WARNING`` and change neither an outcome nor an exit code, the ``report.html`` fallback excepted.
 """
 
 from __future__ import annotations
@@ -27,7 +25,7 @@ from foundry.core import exceptions, ids
 from foundry.execution import state as exec_state
 
 if typing.TYPE_CHECKING:
-    from collections.abc import Generator, Mapping, Sequence
+    from collections.abc import Generator, Sequence
     from pathlib import Path
 
     from foundry.core.types import AttemptRecord
@@ -62,17 +60,14 @@ _USAGE_EXIT: Final[int] = 4
 _JSON_REPORT_OPTION_DEST: Final[str] = "foundry_json_report"
 """The ``dest`` :func:`foundry.config.cli_layer.alias_dest` gives ``--foundry-json-report``."""
 
-_TYPE_BY_KIND: Final[Mapping[str, type]] = {"float": float, "int": int}
-"""The ``argparse`` type of a generic option, per key kind; every other scalar kind is read as text.
-
-A boolean must be expressible as ``false``, and the rest are validated by the configuration layer.
-"""
-
 _FLAG_KINDS: Final[frozenset[str]] = frozenset({"record-flag", "replay-flag"})
 """The two named options that are switches rather than value options (AAP 0.4.4)."""
 
 _START_PHASE: Final[str] = "setup"
 """The phase whose report opens one attempt, and so the point the in-flight report list resets."""
+
+_DATA_MARKER: Final[str] = "foundry_data"
+"""The opt-in marker binding a test to one data file's cases, delegated to ``foundry.data``."""
 
 _ATTEMPT_REPORTS: Final[pytest.StashKey[list[pytest.TestReport]]] = pytest.StashKey[
     "list[pytest.TestReport]"
@@ -85,16 +80,13 @@ Transient attempt state rather than run state: discarded by the next attempt's f
 _RUN_RECORDS: Final[pytest.StashKey[dict[str, TestPayload]]] = pytest.StashKey[
     "dict[str, TestPayload]"
 ]()
-"""The payloads this process has recorded, by node id: on a worker the node ids it ran, on the
-controller the run's results, the last report of an item leaving the complete payload behind.
-"""
+"""The payloads this process recorded, by node id: a lost worker's item included, as ``not_run``."""
 
 
 class _TerminalReporter(typing.Protocol):
     """The two terminal-reporter members the profile banner is written through (AAP 0.7.4).
 
-    A protocol rather than pytest's class, because only these two members are touched: no ``rich``
-    import and no other reporter state reaches this module.
+    A protocol: only these two members are touched, so no ``rich`` import and no reporter state.
     """
 
     def write_sep(self, sep: str, title: str, **markup: bool) -> object:
@@ -122,12 +114,11 @@ class _XdistNode(typing.Protocol):
 def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginManager) -> None:
     """Declare the whole ``--foundry-*`` option surface, with no configuration file read.
 
-    Historic hook, so it runs before any argument is parsed for an entry-point plugin too: no
-    ``conftest.py`` declares anything (AAP 0.4.2). Registered are the aliases AAP 0.4.4 publishes, a
-    generic ``--foundry-<dotted.key>`` for every *scalar* key of the registry -- so criterion 4's
-    ``--foundry-http.timeout 1.0`` and the table's ``--foundry-timeout`` both exist -- and a
-    placeholder for a misspelt spelling, which AAP 0.4.7 answers with exit 2 where the parser
-    answers 4. Nothing is read from the parsed namespace, so ``--help`` is safe.
+    Historic hook, so it runs before any argument is parsed for an entry-point plugin too (AAP
+    0.4.2). Registered are the aliases AAP 0.4.4 publishes, a generic ``--foundry-<dotted.key>`` for
+    every *scalar* key -- criterion 4's ``--foundry-http.timeout 1.0`` and ``--foundry-timeout``
+    both exist -- and a placeholder for a misspelt spelling, which AAP 0.4.7 answers with exit 2
+    where the parser answers 4. Nothing is read from the parsed namespace, so ``--help`` is safe.
     """
     from foundry.config import cli_layer, keys
 
@@ -148,7 +139,6 @@ def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginMa
                 spelling,
                 keys.option_dest(spec.dotted),
                 help_text=f"{spec.dotted} ({spec.constraint})",
-                kind=spec.kind,
             )
         for alias in spec.aliases:
             if alias == spelling:
@@ -158,7 +148,6 @@ def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginMa
                 alias,
                 cli_layer.alias_dest(alias),
                 help_text=f"{spec.dotted} ({spec.constraint})",
-                kind=spec.kind,
             )
     cli_layer.register_unregistered_options(parser, pluginmanager)
 
@@ -169,13 +158,14 @@ def _add_option(
     dest: str,
     *,
     help_text: str,
-    kind: str = "str",
     is_flag: bool = False,
 ) -> None:
     """Register one option under ``dest``, the name ``foundry.config.cli_layer`` reads it back by.
 
     ``dest`` is never derived here: the registry's ``option_dest`` and ``cli_layer.alias_dest``
-    state the convention, and the reader calls the same two functions.
+    state the convention, and the reader calls the same two functions. Every value option is
+    read as text, so ``foundry.config.validation.coerce_cli_value`` judges it -- a numeric key's
+    declared type included -- and a bad value ends the run at 2 rather than at pytest's 4 (A4).
     """
     if is_flag:
         group.addoption(spelling, dest=dest, action="store_true", default=None, help=help_text)
@@ -184,7 +174,7 @@ def _add_option(
         spelling,
         dest=dest,
         default=None,
-        type=_TYPE_BY_KIND.get(kind, str),
+        type=str,
         metavar="VALUE",
         help=help_text,
     )
@@ -200,13 +190,10 @@ def pytest_load_initial_conftests(early_config: pytest.Config, args: list[str]) 
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Resolve the run once and register everything that must exist before collection starts.
+    """Resolve the run once and register before collection, exiting 2 on a configuration fault (A4).
 
     ``trylast`` so every peer plugin has configured: the deferred registrations see the final plugin
     set, and the ``pytest-timeout`` seed overwrites that peer's derived value, not the reverse.
-
-    Raises:
-        pytest.Exit: A configuration fault, with ``returncode=2`` on both surfaces (A4).
     """
     from foundry.execution import quarantine, session
 
@@ -214,6 +201,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         f"{quarantine.QUARANTINE_MARKER}: quarantined test. A failure is recorded as "
         "quarantined_failed and, in the default 'report' mode, does not fail the run.",
+    )
+    config.addinivalue_line(
+        "markers",
+        f'{_DATA_MARKER}("<file>"[, argname="<name>"]): the cases of one data file, from data.dir.',
     )
     _register_fixtures(config)
     _register_peers(config)
@@ -228,9 +219,8 @@ def pytest_configure(config: pytest.Config) -> None:
 def _boot(config: pytest.Config) -> SessionState:
     """Return this process's run state, adopting the controller's on an xdist worker.
 
-    A worker runs this hook too, so resolving there would mint a second run id and a second artifact
-    directory and the two halves of one run would disagree (requirement I3). ``config.workerinput``
-    exists only on a worker and carries the controller's payload (AAP 0.4.8).
+    Resolving on a worker would mint a second run id and artifact directory, so it adopts the
+    controller's state (requirement I3); ``config.workerinput`` exists only there (AAP 0.4.8).
     """
     from foundry.config import cli_layer
     from foundry.execution import session
@@ -250,9 +240,8 @@ def _boot(config: pytest.Config) -> SessionState:
 def _register_fixtures(config: pytest.Config) -> None:
     """Register the twelve public fixtures before collection, once per process (AAP 0.4.2).
 
-    One module object rather than twelve registrations: pytest's fixture discovery scans whatever it
-    is handed, and :mod:`foundry.fixtures.plugin` re-exports each fixture function itself. The guard
-    stops a repeated ``pytest_configure`` from registering the family twice.
+    One module object, not twelve registrations: fixture discovery scans whatever it is handed and
+    ``foundry.fixtures.plugin`` re-exports each fixture itself, guarded against a second configure.
     """
     if config.pluginmanager.hasplugin(_FIXTURES_PLUGIN_NAME):
         return
@@ -264,9 +253,8 @@ def _register_fixtures(config: pytest.Config) -> None:
 def _register_peers(config: pytest.Config) -> None:
     """Register the collector and the two peer hooks, each only where it can be registered.
 
-    Declaring the xdist or pytest-timeout hookspecs without that peer installed fails pluggy's
-    validation, so those hooks live on classes registered behind ``hasplugin`` (AAP 0.3.3). Neither
-    peer is imported here.
+    Declaring the xdist or pytest-timeout hookspecs without that peer fails pluggy's validation, so
+    both live behind ``hasplugin`` (AAP 0.3.3), and neither peer is imported here.
     """
     manager = config.pluginmanager
     if manager.hasplugin("xdist") and not manager.hasplugin(_XDIST_PLUGIN_NAME):
@@ -301,9 +289,8 @@ def _seed_timeout(config: pytest.Config, state: SessionState) -> None:
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Ensure this run's ``artifacts/<run_id>/`` directory exists, and never fail the run for it.
 
-    The bootstrap already created it and logged the run's one ``INFO`` line, so this only makes the
-    call idempotent for a worker sharing the controller's directory. An unwritable directory is the
-    writer's single ``WARNING`` and leaves every record carrying ``artifacts_disabled`` (AAP 0.4.7).
+    The bootstrap already created it, so this is idempotent for a worker; an unwritable directory is
+    the writer's single ``WARNING`` and leaves every record carrying ``artifacts_disabled`` (0.4.7).
     """
     state = session.config.stash.get(exec_state.SESSION_STATE, None)
     if state is None:
@@ -316,24 +303,31 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    """The data-driven collection seam of AAP 0.3.3, delegating to :mod:`foundry.data`.
+    """Parametrise a marked test over one data file's cases, delegating to :mod:`foundry.data`.
 
-    The adapter is :func:`foundry.data.parametrize`: it binds one argument name to the parameters
-    :func:`foundry.data.cases.build_parameters` built, in case order, and turns a file with no data
-    rows into the one skipped parameter reading ``no cases in <file>`` (AAP 0.4.7). Nothing is
-    generated here, because a metafunc carries no data-file name and re-parametrising a call its
-    owner made would duplicate rather than delegate; a ``DataError`` raised on that route propagates
-    unchanged, so pytest reports a collection error naming file, line and column.
+    ``foundry_data("<file>"[, argname="<name>"])`` names a file under ``data.dir``; a loader fault
+    propagates as pytest's collection error, and an unmarked test returns before ``foundry.data``
+    is imported (AAP 0.3.3, 0.4.7).
     """
+    definition = metafunc.definition
+    marker = None if definition is None else definition.get_closest_marker(_DATA_MARKER)
+    if marker is None:
+        return
+    from foundry.data.registry import generate_cases
+    from foundry.execution import session
+
+    state = session.session_state(metafunc.config)
+    data = state.config.data
+    data_dir = state.invocation_dir / data.dir
+    generate_cases(metafunc, marker=marker, data_dir=data_dir, strict=data.schema_strict)
 
 
 def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
     """Run one item through Foundry's attempt loop, and stop the ``firstresult`` chain.
 
     A one-line delegation: :func:`foundry.execution.coordinator.run_attempts` invokes pytest's own
-    ``runtestprotocol`` once per attempt, so every attempt runs setup, call and teardown and only
-    the final attempt's reports reach the log. Retries are in-framework because they must
-    interoperate with the quarantine verdict and with artifact capture (AAP 0.5.1).
+    ``runtestprotocol`` per attempt, so only the final attempt's reports reach the log. Retries are
+    in-framework to interoperate with the quarantine verdict and artifact capture (AAP 0.5.1).
     """
     from foundry.execution.coordinator import run_attempts
 
@@ -365,9 +359,8 @@ def pytest_runtest_makereport(
 def _stamp(item: pytest.Item, report: pytest.TestReport) -> None:
     """Assemble the item's payload from the data available and write it onto ``report``.
 
-    The reports of the attempt in flight are kept in :data:`_ATTEMPT_REPORTS`, cleared by the
-    attempt's own ``setup``, because a ``teardown`` report alone cannot tell a pass from a skip. The
-    verdict comes from the quarantine registry's ``decide``, the one rule the coordinator applies.
+    The attempt's reports live in :data:`_ATTEMPT_REPORTS`, cleared by that attempt's ``setup``,
+    since a ``teardown`` report alone cannot tell a pass from a skip. The verdict is the registry's.
     """
     from foundry.execution import coordinator, quarantine, session
 
@@ -405,13 +398,20 @@ def _in_flight(item: pytest.Item, outcome: exec_state.OutcomeValue) -> AttemptRe
 
     The coordinator appends an attempt *after* its reports are made, so at the last phase the ledger
     still holds only the attempts already finished; this adds the current one, which is what makes
-    ``attempts`` and ``duration_ms`` the counts the record publishes (AAP 0.4.6, assumption A2).
+    ``attempts`` and ``duration_ms`` the counts the record publishes (AAP 0.4.6, assumption A2). The
+    span comes from the per-attempt stamp the coordinator sets, so it covers this attempt alone:
+    ``assemble_payload`` sums the ledger and ``duration_ms`` is the item's wall clock across all
+    attempts, not a total that counts earlier ones twice. An empty ledger falls back to the item's
+    own start, and a stamp a stash fault cost reports ``0.0`` rather than the whole item's span.
     """
     import time
 
-    started = item.stash.get(exec_state.ITEM_STARTED_MONOTONIC, None)
+    attempts = item.stash.get(exec_state.ITEM_ATTEMPTS, ())
+    started = item.stash.get(exec_state.ITEM_ATTEMPT_STARTED_MONOTONIC, None)
+    if started is None and not attempts:
+        started = item.stash.get(exec_state.ITEM_STARTED_MONOTONIC, None)
     elapsed = 0.0 if started is None else max(0.0, (time.monotonic() - started) * 1000.0)
-    count = len(item.stash.get(exec_state.ITEM_ATTEMPTS, ())) + 1
+    count = len(attempts) + 1
     return exec_state.AttemptPayload(number=count, outcome=outcome, elapsed_ms=elapsed).to_record()
 
 
@@ -426,19 +426,22 @@ class _RecordCollector:
         self._config = config
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
-        """Record the payload ``report`` carries, keyed by node id; the last phase wins."""
-        payload = exec_state.read_properties(report)
-        if payload is None:
-            return
+        """Record the payload ``report`` carries, naming a lost worker's item ``not_run`` (A12)."""
+        from foundry.execution.session import not_run_payload, session_state
+
         try:
-            self._config.stash.setdefault(_RUN_RECORDS, {})[payload.nodeid] = payload
+            payload = exec_state.read_properties(report)
+            if payload is None and report.when not in exec_state.PHASES:
+                payload = not_run_payload(session_state(self._config), report.nodeid)
+            if payload is not None:
+                self._config.stash.setdefault(_RUN_RECORDS, {})[payload.nodeid] = payload
         except Exception as exc:
             # Failure-isolation rule: a bookkeeping fault may not change an outcome or exit code.
             _warn("could not record a test's result payload", exc)
 
 
 class _XdistBridge:
-    """The two xdist hookspecs Foundry implements, registered only when xdist is loaded.
+    """The three xdist hookspecs Foundry implements, registered only when xdist is loaded.
 
     Declaring them unconditionally fails pluggy's validation when the peer is absent, so they live
     here rather than as module-level functions (AAP 0.2.1). Neither body imports ``xdist``.
@@ -462,13 +465,22 @@ class _XdistBridge:
             return
         node.workerinput[WORKER_INPUT_KEY] = session.worker_payload(state)
 
+    def pytest_xdist_node_collection_finished(self, node: _XdistNode, ids: Sequence[str]) -> None:
+        """Record the ids ``node`` collected, so a lost worker's items stay nameable (A12)."""
+        from foundry.execution.session import node_ledger
+
+        try:
+            node_ledger(self._config).record_expected(ids)
+        except Exception as exc:
+            # Failure-isolation rule: a bookkeeping fault changes no outcome or exit code.
+            _warn("could not record a worker's collected node ids", exc)
+
     def pytest_testnodedown(self, node: _XdistNode, error: object) -> None:
         """Record what ``node`` ran, and turn a lost worker into a ``run_error`` (AAP 0.4.7).
 
         A worker that died published no ``config.workeroutput``, so the node-id record is attempted
-        first and its absence records nothing. A non-``None`` ``error`` then becomes the
-        ``run_error`` element naming the worker id, which is what makes a hard worker death produce
-        partial results plus that entry and exit code ``1`` rather than a silent omission.
+        first and its absence records nothing; a non-``None`` ``error`` then becomes the
+        ``run_error`` naming the worker id, so a hard death yields partial results and exit ``1``.
         """
         from foundry.execution import session
         from foundry.execution.sharding import record_worker_output
@@ -520,29 +532,32 @@ class _TimeoutHook:
 def pytest_terminal_summary(
     terminalreporter: _TerminalReporter, exitstatus: int, config: pytest.Config
 ) -> None:
-    """Print the activation banner: the profile, then the run id and the artifact directory.
+    """Print ``foundry: profile=<name>``, then the run id and artifacts root (AAP 0.4.2, 0.7.4).
 
-    The first line is the activation proof AAP 0.4.2 publishes: ``foundry: profile=default`` in a
-    run with no configuration at all. Both lines come from the session state, so nothing is
-    recomputed and ``rich`` is never imported here.
+    The first line is the activation proof a run with no configuration at all still prints.
     """
-    state = config.stash.get(exec_state.SESSION_STATE, None)
-    if state is None:
-        return
-    profile_line, run_line = state.banner_lines()
-    terminalreporter.write_sep("-", profile_line)
-    terminalreporter.write_line(run_line)
+    try:
+        state = config.stash.get(exec_state.SESSION_STATE, None)
+        if state is None:
+            return
+        profile_line, run_line = state.banner_lines()
+        terminalreporter.write_sep("-", profile_line)
+        terminalreporter.write_line(run_line)
+    except Exception as exc:
+        # Failure-isolation rule: the banner may not change an outcome or an exit code.
+        _warn("could not print the Foundry activation banner", exc)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Write this run's report files and compose the exit code, on the controller only.
 
-    This hook runs in a ``finally`` block in every process -- each worker included, and on the
-    zero-test and interrupt paths -- so the report is written only on the controller: a second
-    writer would corrupt ``results.json``. A deselected-only run writes no file, a zero-test run
-    writes an empty document, an interrupted run flushes what it has, and a configuration fault
-    that ended the session in ``pytest_configure`` writes nothing: no state exists to report on.
+    This hook runs in a ``finally`` block in every process, workers included, so only the controller
+    writes: a second writer would corrupt ``results.json``. A deselected-only run writes no file, a
+    zero-test run an empty document, an interrupted run flushes what it has, and a configuration
+    fault that ended the session in ``pytest_configure`` writes nothing to report on.
     """
+    from foundry.execution.session import compose_exit_status
+
     config = session.config
     if _is_worker(config):
         _publish_nodeids(config)
@@ -559,7 +574,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     if state is None:
         return
     try:
-        elements, payloads, errors = _assemble(config, state)
+        collected = [item.nodeid for item in session.items]
+        elements, payloads, errors = _assemble(config, state, collected)
     except Exception as exc:
         # Failure-isolation rule: assembling may not change the exit code the tests earned.
         _warn("could not assemble this run's result records", exc)
@@ -569,23 +585,25 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     except Exception as exc:
         # Failure-isolation rule: a report fault leaves the exit code to the tests.
         _warn("could not write this run's report files", exc)
-    session.exitstatus = _exit_status(state, payloads, errors, exitstatus)
+    session.exitstatus = compose_exit_status(state, payloads, exitstatus, len(errors))
 
 
 def _assemble(
-    config: pytest.Config, state: SessionState
+    config: pytest.Config, state: SessionState, collected: Sequence[str]
 ) -> tuple[list[ResultElement], dict[str, TestPayload], tuple[RunErrorPayload, ...]]:
     """Return the run's elements, the payloads behind them and its run errors.
 
     Assumption A12: a lost worker leaves collected items with no report at all, and they are named
-    ``not_run`` rather than silently omitted. Result records are sorted by node id and the run
-    errors follow them: the order AAP 0.4.6 fixes, with the reporting validator building each.
+    ``not_run`` rather than silently omitted; ``verify`` records the universe that names them -- the
+    controller's collection, or the ids xdist reports per worker -- and logs each decision.
+    Result records are sorted by node id and the run errors follow them (AAP 0.4.6).
     """
     from foundry.execution.session import not_run_payload, sharding_service
     from foundry.reporting import parse_element
 
     payloads = config.stash.setdefault(_RUN_RECORDS, {})
     service = sharding_service(config)
+    service.verify(collected or service.nodes.expected_nodes())
     for nodeid in service.missing_after_run(payloads):
         payloads[nodeid] = not_run_payload(state, nodeid)
     errors = service.errors_payloads()
@@ -605,7 +623,7 @@ def _write_reports(
 
     The three fixed names go to the invocation directory, and ``--foundry-json-report PATH`` moves
     the result document to ``PATH`` with the other two beside it (assumption A5). Each file follows
-    its own ``reporting.*`` switch, and an HTML step that falls back suppresses ``junit.xml``.
+    its own ``reporting.*`` switch, and a fallback HTML step suppresses ``junit.xml``.
     """
     from foundry.reporting import write_all, write_results
 
@@ -638,34 +656,6 @@ def _json_report_path(config: pytest.Config) -> Path | None:
     return None
 
 
-def _exit_status(
-    state: SessionState,
-    payloads: Mapping[str, TestPayload],
-    errors: Sequence[RunErrorPayload],
-    exitstatus: int,
-) -> int:
-    """Compose the run's exit code from the quarantine verdicts and the run errors.
-
-    The verdicts are rebuilt through the registry's ``decide`` rather than counted from outcomes,
-    because that method is the one rule and it is idempotent for an outcome that already names a
-    verdict -- so ``report`` mode cannot fail a run a ``strict`` one would (AAP 0.4.7).
-    """
-    from foundry.execution.session import resolve_exit_status
-
-    decisions = [
-        state.quarantine.decide(
-            quarantined=payload.quarantine.state != "none", outcome=payload.outcome
-        )
-        for payload in payloads.values()
-    ]
-    return resolve_exit_status(
-        exitstatus,
-        quarantine=state.quarantine,
-        decisions=decisions,
-        run_error_count=len(errors),
-    )
-
-
 def _is_worker(config: pytest.Config) -> bool:
     """Report whether this process is an xdist worker, which ``config.workerinput`` alone tells.
 
@@ -677,8 +667,8 @@ def _is_worker(config: pytest.Config) -> bool:
 def _publish_nodeids(config: pytest.Config) -> None:
     """Publish the node ids this worker ran under ``WORKER_OUTPUT_KEY`` (AAP 0.2.1).
 
-    The controller reads it in ``pytest_testnodedown`` and proves the workers ran exactly the set
-    the serial run collects; a process whose ``config.workeroutput`` has gone publishes nothing.
+    The controller reads it in ``pytest_testnodedown``; a process whose ``config.workeroutput`` has
+    gone publishes nothing.
     """
     from foundry.execution.sharding import WORKER_OUTPUT_KEY
 

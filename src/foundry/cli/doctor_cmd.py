@@ -2,25 +2,20 @@
 
 The command has two renderings -- the ``Probe`` / ``Status`` / ``Detail`` table and the single JSON
 document -- and two exit codes: ``0`` when no required probe failed and ``2`` when one did. A
-``warn`` never changes the code, which is why a project that installs no socket guard still
-reports a usable environment.
-
-The probes belong to :mod:`foundry.diagnostics`, which owns their order, isolates a probe that
-raises into a ``fail`` row and guarantees that the table and the document list the same rows in the
-same sequence. This module is a presenter and nothing else: it turns the override options into a
-:class:`~foundry.config.cli_layer.CliInput`, picks a rendering and maps ``ok`` onto a code.
-
-Resolution.  :func:`foundry.diagnostics.checks.run_checks` takes a resolved
+``warn`` never changes the code, which is why a project that installs no socket guard still reports
+a usable environment. The probes belong to :mod:`foundry.diagnostics`, which owns their order,
+isolates a probe that raises into a ``fail`` row and guarantees that the table and the document list
+the same rows in the same sequence. This module is a presenter and nothing else: it turns the
+override options into a :class:`~foundry.config.cli_layer.CliInput`, picks a rendering and maps
+``ok`` onto a code. Resolution. :func:`foundry.diagnostics.checks.run_checks` takes a resolved
 :class:`~foundry.config.models.FoundryConfig` rather than a ``CliInput``, so this command resolves
-the four configuration layers itself, exactly once, with
-``merge.resolve(cli_overrides=<this command's CliInput>)``, and hands the model to ``run_checks``.
-Resolving here is what makes the options this command accepts genuinely affect the configuration the
-doctor probes. A :class:`~foundry.core.exceptions.ConfigError` raised by that call propagates
-unchanged, so the fault is not folded into the configuration probe's row -- which is what a
-resolution attempted inside ``run_checks`` would do.
-
-No probe opens a socket: the plugin probe reads installed distribution metadata and the directory
-probes touch the filesystem.
+the four configuration layers itself, exactly once, with ``merge.resolve(cli_overrides=<this
+command's CliInput>)``, and hands the model to ``run_checks``. Resolving here is what makes the
+options this command accepts genuinely affect the configuration the doctor probes. A
+:class:`~foundry.core.exceptions.ConfigError` raised by that call propagates unchanged, so the fault
+is not folded into the configuration probe's row -- which is what a resolution attempted inside
+``run_checks`` would do. No probe opens a socket: the plugin probe reads installed distribution
+metadata and the directory probes touch the filesystem.
 """
 
 from __future__ import annotations
@@ -149,11 +144,9 @@ def doctor(*, as_json: bool = False, **supplied: object) -> int:
     order: interpreter, plugin entry point, configuration, artifact directory, cassette directory
     and socket guard. With ``--json`` the report leaves as one document and nothing else reaches
     stdout; without it the ``Probe`` / ``Status`` / ``Detail`` table prints, followed by its count
-    line.
-
-    A ``warn`` is information, not a fault: only a ``fail`` of a required probe changes the code,
-    which is what lets a project without a socket guard, or one that has not recorded a cassette
-    yet, report a healthy environment.
+    line. A ``warn`` is information, not a fault: only a ``fail`` of a required probe changes the
+    code, which is what lets a project without a socket guard, or one that has not recorded a
+    cassette yet, report a healthy environment.
 
     Returns:
         :data:`foundry.cli.exit_codes.SUCCESS` when no required probe failed, otherwise

@@ -276,7 +276,10 @@ class ResultRecord(_FrozenRecord):
 
     Field names, order and meaning are the frozen schema of AAP 0.4.6 and the compatibility
     promise of AAP 0.4.9. Every renderer reads this record rather than the run's live state, which
-    is what lets JSON, JUnit, HTML and the comparator agree.
+    is what lets JSON, JUnit, HTML and the comparator agree. ``artifacts_disabled`` is the one
+    additive field: AAP 0.4.7 requires every record of a run whose artifact directory could not be
+    written to carry it, AAP 0.4.9 permits the addition, and it is emitted after the thirteen
+    documented fields so their order is untouched.
 
     Attributes:
         record_type: The discriminator marking this element a result, not a :class:`RunError`.
@@ -293,6 +296,9 @@ class ResultRecord(_FrozenRecord):
         failures: One entry per failing phase.
         artifacts: One entry per artifact file actually written.
         quarantine: The quarantine verdict; its state must agree with ``outcome``.
+        artifacts_disabled: Whether artifact capture was disabled for the run, which is ``true``
+            whenever the artifact directory could not be written (AAP 0.4.7). Defaults to
+            ``false``, so a document written before the field existed still parses.
     """
 
     record_type: Literal["result"] = "result"
@@ -308,6 +314,7 @@ class ResultRecord(_FrozenRecord):
     failures: tuple[FailureRecord, ...] = ()
     artifacts: tuple[ArtifactRecord, ...] = ()
     quarantine: QuarantineRecord = QuarantineRecord()
+    artifacts_disabled: bool = False
 
     @field_validator("run_id")
     @classmethod
@@ -399,7 +406,8 @@ class ResultRecord(_FrozenRecord):
         """Return the record as the JSON-ready object ``results.json`` holds.
 
         Built field by field in the order AAP 0.4.6 tabulates, because ``model_dump`` would emit a
-        datetime where the document carries the text ``to_iso8601`` writes.
+        datetime where the document carries the text ``to_iso8601`` writes. The additive
+        ``artifacts_disabled`` flag follows the thirteen documented fields (AAP 0.4.7, 0.4.9).
         """
         return {
             "record_type": self.record_type,
@@ -415,6 +423,7 @@ class ResultRecord(_FrozenRecord):
             "failures": [failure.to_dict() for failure in self.failures],
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
             "quarantine": self.quarantine.to_dict(),
+            "artifacts_disabled": self.artifacts_disabled,
         }
 
 

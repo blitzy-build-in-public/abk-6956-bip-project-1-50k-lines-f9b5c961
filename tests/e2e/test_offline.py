@@ -40,6 +40,7 @@ EXPECTED_MODULES: Final[frozenset[str]] = frozenset(
         "test_example_project.py",
         "test_init_project.py",
         "test_install.py",
+        "test_not_run.py",
         "test_sharding.py",
         "test_zero_config_subprocess.py",
     }

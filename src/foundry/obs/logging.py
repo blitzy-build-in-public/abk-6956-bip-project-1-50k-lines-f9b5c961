@@ -1,12 +1,13 @@
 """Logging for Foundry: one logger name, one ``NullHandler``, no host reconfiguration.
 
 Every Foundry module logs through the single logger named :data:`LOGGER_NAME` (``"foundry"``) and
-its children, and :func:`attach_handler` and :func:`detach_handler` are the only code that mutates
-its handler list. :func:`install_redaction_filter` is the only code that mutates its filter list: it
-masks the secrets a record carries *before* any handler -- Foundry's or the host's -- renders it, so
-the terminal, pytest's captured-log block and every artifact carry the marker rather than the value
-(AAP 0.2.1, AAP 0.14.3). A library does not reconfigure its host (AAP 0.4.8): no ``basicConfig``, no
-root logger change, and ``propagate`` stays on, which pytest's captured-log blocks depend on.
+its children; :func:`attach_handler` and :func:`detach_handler` are the only code that mutates its
+handler list. :func:`install_redaction_filter` is the only code that mutates its filter list, and
+it puts one filter on that logger and on :data:`NULL_HANDLER`, the handler Foundry owns at the tree
+root, so a record's secrets are masked *before* any handler renders it: a logger's own filters
+never see a record its children originate, the tree-root handler's do (AAP 0.2.1, AAP 0.14.3). A
+library does not reconfigure its host (AAP 0.4.8): no ``basicConfig``, no root logger change, and
+``propagate`` stays on, which pytest's captured-log blocks depend on.
 """
 
 from __future__ import annotations
@@ -40,8 +41,24 @@ _CHILD_PREFIX: Final[str] = LOGGER_NAME + "."
 LOG_FORMAT: Final[str] = "%(levelname)s %(name)s: %(message)s"
 """Format string for a Foundry record; it carries no timestamp, so captured output is stable."""
 
-NULL_HANDLER: Final[logging.NullHandler] = logging.NullHandler()
-"""The one handler a library may add to its own logger, installed once at import."""
+
+class _FilteringNullHandler(logging.NullHandler):
+    """A ``NullHandler`` that runs the filters it carries, then drops the record.
+
+    ``logging.NullHandler.handle`` is a stub, so a filter attached to a plain one is never reached;
+    running the filter chain without emitting keeps the null behaviour and lets the handler mask a
+    ``foundry`` child's record in place at the tree root. No lock is taken.
+    """
+
+    def handle(self, record: logging.LogRecord) -> bool:
+        """Mask ``record`` through the handler's filters, then drop it as a ``NullHandler`` does."""
+        return bool(self.filter(record))
+
+
+NULL_HANDLER: Final[logging.NullHandler] = _FilteringNullHandler()
+"""The one handler a library may add to its own logger, installed once at import. It is the handler
+:func:`install_redaction_filter` rides to mask the records ``foundry`` children originate, which no
+logger's own filter list would see."""
 
 _REDACTION_FAULT: Final[str] = (
     "could not mask the values of a log record, so the records after it keep the values they "
@@ -54,14 +71,12 @@ def get_logger(name: str | None = None) -> logging.Logger:
     """Return the Foundry logger, or the ``foundry`` child logger that ``name`` designates.
 
     Returns:
-        The logger for ``name``. The name is used unchanged only when it is :data:`LOGGER_NAME`
-        itself or one of its dotted children, such as ``"foundry.obs.artifacts"`` -- so calling
-        this with ``__name__`` from a Foundry module is idempotent; a name that merely begins with
-        the same letters, such as ``"foundrydb"``, would land outside the tree and inherit neither
-        the configured level nor the null handler.
+        The logger for ``name``, used unchanged only when it is :data:`LOGGER_NAME` or one of its
+        dotted children such as ``"foundry.obs.artifacts"``, so calling this with ``__name__`` from
+        a Foundry module is idempotent; a name merely beginning with the same letters, such as
+        ``"foundrydb"``, lands outside the tree and inherits neither level nor null handler.
 
-    Nothing is configured here: no level is set and no handler is attached, so obtaining a
-    logger is always free of side effects.
+    Nothing is configured here: no level is set, no handler is attached, no side effects.
     """
     if name is None:
         return logging.getLogger(LOGGER_NAME)
@@ -135,14 +150,14 @@ class RedactionFilter(logging.Filter):
     every handler the host attaches, which is the residual channel AAP 0.2.1 names. The filter
     therefore scrubs the record's rendered message through the run's
     :class:`~foundry.obs.redaction.Redactor` in place, ahead of the handler chain, so the terminal,
-    a captured-log block and an artifact all carry :data:`~foundry.obs.redaction.REDACTED`.
-
-    ``record.msg`` and ``record.args`` are replaced together, and only when the scrub changes the
-    message: a record carrying no secret keeps the format string, the argument shapes and the
-    argument values the caller logged, and a record the engine does rewrite is rendered from the
-    interpolated form, so no format string is ever re-parsed and no argument has to be a ``str``.
-    Every record is kept -- a redaction fault may change neither an outcome nor an exit code
-    (AAP 0.1.2) -- and the fault costs one ``WARNING`` instead.
+    a captured-log block and an artifact all carry :data:`~foundry.obs.redaction.REDACTED`. One
+    instance rides both the ``foundry`` logger and :data:`NULL_HANDLER`: the logger's copy masks the
+    records it originates, the handler's copy those its children originate, which never reach the
+    ancestor logger's filter list. ``record.msg`` and ``record.args`` are replaced together, and
+    only when the scrub changes the message: a record carrying no secret keeps its format string,
+    argument shapes and values, and a rewritten one is rendered from the interpolated form, so no
+    format string is re-parsed. Every record is kept -- a redaction fault may change neither outcome
+    nor exit code (AAP 0.1.2) -- and the fault costs one ``WARNING`` instead.
     """
 
     def __init__(self, redactor: Redactor) -> None:
@@ -186,27 +201,45 @@ class RedactionFilter(logging.Filter):
 
 
 def install_redaction_filter(redactor: Redactor) -> RedactionFilter:
-    """Attach one :class:`RedactionFilter`, bound to ``redactor``, to the ``foundry`` logger.
+    """Install one :class:`RedactionFilter`, bound to ``redactor``, wherever a record can be seen.
 
-    The session bootstrap calls this where the resolved configuration first yields the run's
-    redaction engine, so every record the suite logs through the ``foundry`` logger is masked before
-    any handler renders it (AAP 0.2.1, AAP 0.3.2, AAP 0.14.3). It is idempotent: however many
-    bootstraps share one process -- a ``pytester`` child run, a replay run -- the logger holds
-    exactly one such filter, always carrying the newest engine. No other logger is touched, and
-    ``propagate`` is left on, so the host's own handlers still see the masked record (AAP 0.4.8).
+    The filter goes on the ``foundry`` logger and on :data:`NULL_HANDLER`, the handler Foundry owns
+    at the tree root: a record a ``foundry.*`` child originates never passes the ancestor logger's
+    filter list, and a handler's filters run for every record routed to it, so :data:`NULL_HANDLER`
+    masks the child's record in place before the chain reaches the root logger's handlers (AAP
+    0.2.1, AAP 0.3.2, AAP 0.14.3). It is idempotent: however many bootstraps share one process, the
+    logger and the handler each hold exactly one such filter, always carrying the newest engine. No
+    other logger and no other handler is touched, and ``propagate`` is left on, so the host's own
+    handlers still see the masked record (AAP 0.4.8).
 
     Returns:
-        The filter attached to the ``foundry`` logger.
+        The filter, which is now the logger's and the handler's only one of its kind.
     """
     logger = logging.getLogger(LOGGER_NAME)
     installed = [attached for attached in logger.filters if isinstance(attached, RedactionFilter)]
     if len(installed) == 1 and installed[0].redactor is redactor:
-        return installed[0]
-    for stale in installed:
-        logger.removeFilter(stale)
-    filter_ = RedactionFilter(redactor)
-    logger.addFilter(filter_)
+        filter_ = installed[0]
+    else:
+        for stale in installed:
+            logger.removeFilter(stale)
+        filter_ = RedactionFilter(redactor)
+        logger.addFilter(filter_)
+    _install_handler_filter(filter_)
     return filter_
+
+
+def _install_handler_filter(filter_: RedactionFilter) -> None:
+    """Make ``filter_`` the only :class:`RedactionFilter` on :data:`NULL_HANDLER`.
+
+    The handler's copy is the one that masks a ``foundry.*`` child's records, and a repeated
+    bootstrap replaces it rather than adding to it, so the newest engine is the only one in effect.
+    """
+    ours = [attached for attached in NULL_HANDLER.filters if isinstance(attached, RedactionFilter)]
+    for stale in ours:
+        if stale is not filter_:
+            NULL_HANDLER.removeFilter(stale)
+    if filter_ not in ours:
+        NULL_HANDLER.addFilter(filter_)
 
 
 def _install_null_handler() -> None:

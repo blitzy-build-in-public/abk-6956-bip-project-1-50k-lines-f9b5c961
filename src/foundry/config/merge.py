@@ -1,12 +1,12 @@
 """The four-layer merge: one resolved configuration, with the origin of every value.
 
-:func:`resolve` applies the layers of AAP 0.4.5 -- field defaults, the configuration file with its
-selected ``[profiles.<name>]`` table, the ``FOUNDRY_*`` environment and the ``--foundry-*`` command
-line -- in :data:`foundry.config.layers.LAYER_ORDER` and returns the one immutable
-:class:`foundry.config.models.FoundryConfig` a run reads, with the provenance recorded here because
-``pydantic-settings`` resolves values but names no source. The only fault is
-:class:`foundry.core.exceptions.ConfigError`, each ending the session at exit code 2 before anything
-is collected; a run with no configuration file is not a fault and logs at ``DEBUG``.
+:func:`resolve` applies the layers of AAP 0.4.5 -- field defaults, the file with its selected
+``[profiles.<name>]`` table, the ``FOUNDRY_*`` environment and the ``--foundry-*`` command line --
+in :data:`foundry.config.layers.LAYER_ORDER`, returning the one immutable
+:class:`foundry.config.models.FoundryConfig` a run reads with the provenance recorded here, because
+``pydantic-settings`` names no source. The only fault is
+:class:`foundry.core.exceptions.ConfigError`, ending the session at exit code 2 before anything is
+collected; a run with no configuration file is not a fault, and logs at ``DEBUG``.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ _COMMAND_LINE_DETAIL: Final[str] = "command line"
 """What a rejection of the whole command-line payload names as its detail.
 
 The option spelling of a rejected *value* travels with it, but a payload rejected before any value
-is applied has nothing finer to name than the layer itself.
+is applied has nothing finer than the layer itself to name.
 """
 
 _TOKEN_ENV_KEY: Final[str] = "http.auth.token_env"
@@ -72,12 +72,9 @@ class _Layer:
     def detail_for(self, dotted: str) -> str:
         """Return the detail that names what supplied ``dotted`` inside this layer.
 
-        Args:
-            dotted: The dotted configuration key, for example ``http.timeout``.
-
-        Returns:
-            The per-key detail -- the variable's spelling or the option as it was typed -- when the
-            layer knows one, otherwise the detail the payload carries for the layer as a whole.
+        ``dotted`` is the dotted configuration key, for example ``http.timeout``. The answer is the
+        per-key detail -- the variable's spelling or the option as it was typed -- when the layer
+        knows one, otherwise the detail the payload carries for the layer as a whole.
         """
         return self.details.get(dotted, self.payload.detail)
 
@@ -91,11 +88,10 @@ def resolve(
 
     The single entry point of the configuration package: a pytest session calls it once at boot and
     the ``run``, ``config`` and ``doctor`` commands once per invocation, so its arguments are the
-    whole of a resolution's input and nothing is read from the process the caller cannot see.
-
-    The layers are applied in the order :data:`foundry.config.layers.LAYER_ORDER` states, so the
-    precedence rule holds by construction, and which layer won each key is reported by the returned
-    configuration's :meth:`foundry.config.models.FoundryConfig.source_of`.
+    whole input of a resolution and nothing is read from the process the caller cannot see. The
+    layers apply in the order :data:`foundry.config.layers.LAYER_ORDER` states, so the precedence
+    rule holds by construction, and :meth:`foundry.config.models.FoundryConfig.source_of` reports
+    which layer won each key.
 
     Args:
         cli_overrides: What the command line supplied, already coerced by
@@ -114,12 +110,12 @@ def resolve(
 
     Raises:
         foundry.core.exceptions.ConfigError: For the first fatal fault, each naming the key and the
-            layer that supplied it: a named file that is absent or unreadable, an unknown key in the
-            file, the profile table, the environment or the command line, a file value of a type its
-            key does not declare, an unparseable environment value, a value outside its accepted
-            range, a profile outside the four names, and a configured auth variable the environment
-            does not set. A resolution either returns a configuration or raises this one type, which
-            a caller maps to exit code 2.
+            layer that supplied it: a named file absent or unreadable, an unknown key in the file,
+            the profile table, the environment or the command line, a file value of a type its key
+            does not declare, an unparseable environment value, a value outside its accepted range,
+            a profile outside the four names, and a configured auth variable the environment does
+            not set. A resolution either returns a configuration or raises this one type, which a
+            caller maps to exit code 2.
     """
     cli = cli_layer.EMPTY_CLI_INPUT if cli_overrides is None else cli_overrides
     environment = env.effective_environ(environ)
@@ -170,13 +166,11 @@ def check_secret_variables(config: FoundryConfig, environ: Mapping[str, str]) ->
 
     The check is a membership test: for each variable ``http.auth.*_env`` names while its strategy
     is selected, the name is looked up in ``environ`` and the value never read, stored, compared or
-    logged, so the message can name the variable an operator has to set, never the credential.
-
-    Checking the name here while the value is read at session start keeps two rules together: an
-    absent configured secret variable is a configuration-time fault at exit code 2, while
-    :mod:`foundry.http.auth` resolves the values at session start, so no configuration object,
-    ``results.json`` or report holds a credential. A variable that disappears between those moments
-    raises the same ``ConfigError`` from there.
+    logged, so a message names what an operator has to set, never a credential. Checking the name
+    here while :mod:`foundry.http.auth` reads the value at session start keeps two rules together:
+    an absent configured secret variable is a configuration-time fault at exit code 2, and no
+    configuration object, ``results.json`` or report ever holds a credential; a variable that
+    disappears between those moments raises the same ``ConfigError`` from there.
 
     Raises:
         foundry.core.exceptions.ConfigError: For the first required variable, in the fixed order of
@@ -191,12 +185,9 @@ def check_secret_variables(config: FoundryConfig, environ: Mapping[str, str]) ->
 def _required_secrets(auth: HttpAuthConfig) -> tuple[tuple[str, str], ...]:
     """Return the key-and-variable pairs the selected strategy needs the environment to hold.
 
-    The pairs are ordered as AAP 0.4.5 lists the keys, so a configuration missing both halves of a
-    ``basic`` credential always reports the same one and two runs of a failing resolution print the
-    same message (AAP 0.13.1).
-
-    Args:
-        auth: The resolved ``http.auth`` table.
+    ``auth`` is the resolved ``http.auth`` table. The pairs are ordered as AAP 0.4.5 lists the keys,
+    so a configuration missing both halves of a ``basic`` credential always reports the same one and
+    two runs of a failing resolution print the same message (AAP 0.13.1).
 
     Returns:
         One ``(dotted key, variable name)`` pair per environment variable the strategy requires;
@@ -227,11 +218,11 @@ def _contributions(
     """Assemble the five layers as the payloads the fold applies.
 
     The file layer carries the values the *file* supplied and the profile layer the values the
-    selected ``[profiles.<name>]`` table supplied. Splitting them makes the per-key attribution
-    exact: a value the table overrode reports ``profile:<name>`` rather than ``file:<path>``, and a
-    value it left alone keeps the file's path although the two arrived in one document. The
-    ``default`` layer contributes no values, which is why a key with no entry in the source map
-    reports as ``default`` rather than as absent.
+    selected ``[profiles.<name>]`` table supplied, so attribution is exact: a value the table
+    overrode reports ``profile:<name>`` rather than ``file:<path>``, a value it left alone keeps the
+    file's path although the two arrived in one document, and the ``default`` layer contributes
+    nothing, which is why a key with no entry in the source map reports as ``default`` rather than
+    absent.
 
     Args:
         cli: The command line's coerced overrides, with the option spelling behind each one.
@@ -279,10 +270,8 @@ def _split_profile(
     One pass over the application's sorted keys, so both halves iterate identically on two runs and
     a key can never land in both: the table's keys are exactly
     :attr:`~foundry.config.profiles.ProfileApplication.contributed`, and every other key came from
-    the base file (or from neither, when a caller hands in an empty payload).
-
-    Args:
-        application: The result of :func:`foundry.config.profiles.apply_profile`.
+    the base file (or from neither, when a caller hands in an empty payload). ``application`` is the
+    result of :func:`foundry.config.profiles.apply_profile`.
 
     Returns:
         The ``(file values, profile values)`` pair, each keyed by dotted key in sorted order.
@@ -301,12 +290,10 @@ def _fold(
     """Apply the layers in precedence order, recording the value and the origin of every key.
 
     The loop is :data:`foundry.config.layers.LAYER_ORDER` itself rather than a list written out
-    here, so the precedence rule has one encoding in the package. A later layer overwrites an
+    here, so the precedence rule has one encoding in the package, and a later layer overwrites an
     earlier one's value and its source together, which keeps a value and its attributed origin
-    impossible to disagree.
-
-    Args:
-        contributions: One assembled layer per :class:`foundry.config.layers.ConfigLayer`.
+    impossible to disagree. ``contributions`` holds one assembled layer per
+    :class:`foundry.config.layers.ConfigLayer`.
 
     Returns:
         The merged flat values and, for every key some layer supplied, the
@@ -328,12 +315,8 @@ def _source(layer: ConfigLayer, detail: str) -> ConfigSource:
 
     :mod:`foundry.config.sources` owns the five published spellings, so this function only chooses
     among its constructors and composes no label of its own, which keeps every renderer agreeing on
-    what ``env:FOUNDRY_HTTP__TIMEOUT`` means.
-
-    Args:
-        layer: The layer that supplied the value.
-        detail: What inside that layer named it: the file path, the profile name, the variable's
-            spelling or the option as it was typed.
+    what ``env:FOUNDRY_HTTP__TIMEOUT`` means. ``detail`` is what inside the layer named the value:
+    the file path, the profile name, the variable's spelling or the option as it was typed.
 
     Returns:
         The record for that layer; the ``default`` record for the layer with nothing to name.
@@ -352,17 +335,15 @@ def _source(layer: ConfigLayer, detail: str) -> ConfigSource:
 def _build(values: Mapping[str, object], recorded: Mapping[str, ConfigSource]) -> FoundryConfig:
     """Construct the settings model, attributing a rejected value to the layer that supplied it.
 
-    Args:
-        values: The merged flat values, as :func:`_fold` produced them.
-        recorded: The provenance recorded while folding them.
+    ``values`` are the merged flat values as :func:`_fold` produced them, and ``recorded`` the
+    provenance recorded while folding. The nesting is handed to ``model_validate`` rather than
+    splatted into ``FoundryConfig(...)``: the model's generated ``__init__`` declares one keyword
+    per field, which a ``dict[str, object]`` cannot satisfy under ``mypy --strict``, while
+    validating the mapping runs the same validators and -- because the class keeps the init source
+    alone -- consults no settings source either way.
 
     Returns:
         The validated configuration, without its source map -- the caller attaches that.
-
-    The nesting is handed to ``model_validate`` rather than splatted into ``FoundryConfig(...)``:
-    the model's generated ``__init__`` declares one keyword per field, which a ``dict[str, object]``
-    cannot satisfy under ``mypy --strict``, while validating the mapping runs the same validators
-    and -- because the class keeps the init source alone -- consults no settings source either way.
 
     Raises:
         foundry.core.exceptions.ConfigError: The first value the model rejects, described by
@@ -380,20 +361,15 @@ def _attributed_failure(exc: ValidationError, recorded: Mapping[str, ConfigSourc
 
     :func:`foundry.config.validation.translate_validation_error` owns both the wording and the
     reading of pydantic's report, so it is asked once without a layer to learn which key failed, and
-    the recorder -- which knows that key's origin -- supplies the layer for the second call.
-    Pydantic's location format is therefore never parsed here.
+    the recorder -- which knows that key's origin -- supplies the layer for the second call, so
+    pydantic's location format is never parsed here. A fault the recorder cannot place is returned
+    as the first call built it, which is the cross-field rule case: ``bearer`` without
+    ``http.auth.token_env`` names a companion key that no layer may have set, so the message it
+    already carries is complete.
 
-    A fault the recorder cannot place is returned as the first call built it, which is the
-    cross-field rule case: ``bearer`` without ``http.auth.token_env`` names a companion key that no
-    layer may have set, so the message it already carries is the complete one.
-
-    Args:
-        exc: The failure the settings model raised.
-        recorded: The provenance recorded while merging the layers.
-
-    Returns:
-        The :class:`foundry.core.exceptions.ConfigError` the caller raises, with ``from None`` so
-        the pydantic error -- which echoes the offending input -- is not chained into a traceback.
+    Returns: The :class:`foundry.core.exceptions.ConfigError` the caller raises, with ``from None``
+        so the pydantic error -- which echoes the offending input -- is not chained into a
+        traceback.
     """
     unattributed = validation.translate_validation_error(exc)
     if unattributed.key is None:
@@ -415,11 +391,8 @@ def _note_detail(source: ConfigSource) -> str:
     of the label is the test for that, which keeps the rule about labels in one place instead of
     asking each caller to know how profiles are spelled.
 
-    Args:
-        source: The provenance record of the value being reported.
-
     Returns:
-        The record's detail, or ``""`` when it merely repeats what its layer label already says.
+        ``source``'s detail, or ``""`` when it merely repeats what its layer label already says.
     """
     label_detail = source.layer.partition(_LAYER_SEPARATOR)[2]
     return "" if source.detail == label_detail else source.detail
@@ -429,19 +402,15 @@ def _refuse_unregistered_keys(recorded: Mapping[str, ConfigSource]) -> None:
     """Refuse a recorded key the configuration registry does not declare.
 
     The record is built from payloads each layer already validated, so this guard exists for the
-    caller that bypassed validation by building a
-    :class:`foundry.config.layers.LayerPayload` itself: without it such a key would reach
-    ``sources``, and ``foundry config show`` would print a row no model field backs.
-
-    Args:
-        recorded: The provenance recorded while merging the layers.
+    caller that bypassed validation by building a :class:`foundry.config.layers.LayerPayload`
+    itself: without it such a key would reach ``sources``, and ``foundry config show`` would print a
+    row no model field backs.
 
     Returns:
         Nothing, when every recorded key is registered.
 
-    Raises:
-        foundry.core.exceptions.ConfigError: For the first unregistered key in sorted order,
-            carrying the closest valid spelling and the layer the record attributes it to.
+    Raises: foundry.core.exceptions.ConfigError: For the first unregistered key in sorted order,
+        carrying the closest valid spelling and the layer the record attributes it to.
     """
     for dotted in sorted(recorded):
         if keys.spec_for(dotted) is not None:
@@ -462,17 +431,12 @@ def _complete_sources(config: FoundryConfig, recorded: Mapping[str, ConfigSource
     key and ``foundry config show`` prints one row per key rather than one per key some layer set.
     The key set comes from the configuration itself -- the keys a reader can ask about -- and is
     ordered by sorted key, so two resolutions of the same inputs hand over mappings that compare and
-    iterate identically (AAP 0.4.5, AAP 0.13.1).
+    iterate identically (AAP 0.4.5, AAP 0.13.1). ``recorded`` holds only the keys some layer
+    supplied.
 
-    Args:
-        config: The resolved configuration, whose published leaf keys the map must cover.
-        recorded: The provenance recorded while merging the layers, holding only the keys some layer
-            supplied.
-
-    Returns:
-        One :class:`foundry.config.sources.ConfigSource` per published key: the recorded origin for
-        a key a layer supplied, and the ``default`` record for every other key, which is the field
-        default it kept.
+    Returns: One :class:`foundry.config.sources.ConfigSource` per published key: the recorded origin
+        for a key a layer supplied, and the ``default`` record for every other key, which is the
+        field default it kept.
 
     Raises:
         foundry.core.exceptions.ConfigError: For a recorded key the registry does not declare, as
@@ -492,9 +456,7 @@ def _emit_sources(config: FoundryConfig) -> None:
     of a secret -- is met by passing :meth:`foundry.config.sources.ConfigSource`'s two strings and
     nothing else to :func:`foundry.obs.events.emit_resolution`, so a key beside a credential
     (``http.headers``, ``secrets.redact_keys``) cannot carry one into a captured-log block.
-
-    Args:
-        config: The resolved configuration whose provenance is announced.
+    ``config`` is the resolved configuration whose provenance is announced.
     """
     for dotted in sorted(config.sources):
         source = config.sources[dotted]
@@ -505,10 +467,9 @@ def _log_no_config_file() -> None:
     """Log the ``DEBUG`` line a run with no configuration file produces, and nothing else.
 
     AAP 0.4.7 makes this the whole trace of the zero-configuration state: the run proceeds from the
-    field defaults with the profile ``default`` and exit code 0, so the line is informational and
-    belongs at ``DEBUG`` on the package's own logger. It is emitted through
-    :func:`foundry.obs.events.emit_no_config_file`, the one place a Foundry lifecycle record is
-    written, so the level clamp and the single-line format every other lifecycle line gets apply
-    here too rather than a logger being called from this module.
+    field defaults with the profile ``default`` and exit code 0, so the line belongs at ``DEBUG`` on
+    the package's own logger. It goes through :func:`foundry.obs.events.emit_no_config_file`, the
+    one place a lifecycle record is written, so the level clamp and single-line format apply here
+    too rather than a logger being called from this module.
     """
     events.emit_no_config_file()

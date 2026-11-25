@@ -73,11 +73,9 @@ def _clamp_capacity(capacity: int) -> int:
 def _join_parts(levelname: str, logger_name: str, message: str) -> str:
     """Join a record's three parts into one line, and never render the event prefix twice.
 
-    A message that already begins with :data:`_EVENT_PREFIX` carries the logger name it was
-    emitted under -- every lifecycle line does, because :func:`foundry.obs.events.event_line`
-    renders that prefix itself -- so it is joined as ``"<LEVELNAME> <message>"``. Any other
-    message keeps ``"<LEVELNAME> <logger name>: <message>"``, which names the logger that produced
-    it.
+    A message that already begins with :data:`_EVENT_PREFIX` -- every lifecycle line, since
+    :func:`foundry.obs.events.event_line` renders that prefix itself -- is joined as
+    ``"<LEVELNAME> <message>"``; any other keeps ``"<LEVELNAME> <logger name>: <message>"``.
 
     Returns:
         The single, unnormalised line, which :func:`_normalise_line` then bounds.
@@ -90,13 +88,9 @@ def _join_parts(levelname: str, logger_name: str, message: str) -> str:
 def format_record(record: logging.LogRecord, *, limit: int = MAX_TAIL_LINE_LENGTH) -> str:
     """Format one log record as a single deterministic line.
 
-    Two shapes, and never both prefixes at once: a message that already begins with the event
-    prefix ``"foundry: "`` -- every line :func:`foundry.obs.events.event_line` renders, that prefix
-    being the logger name -- is joined as ``"<LEVELNAME> <message>"``, so a reader sees the prefix
-    once; any other message keeps ``"<LEVELNAME> <logger name>: <message>"``, which names the
-    logger that emitted it. Newlines are replaced by ``" | "`` and, past ``limit`` characters,
-    :data:`TRUNCATION_MARKER` is appended; an uninterpolatable record yields a placeholder, so a
-    capture fault never changes a test's outcome.
+    The two shapes are :func:`_join_parts`'s, never both prefixes at once. Newlines become
+    ``" | "``, past ``limit`` characters :data:`TRUNCATION_MARKER` is appended, and an
+    uninterpolatable record yields a placeholder, so a capture fault never changes an outcome.
     """
     levelname, logger_name, message = _record_parts(record)
     return _normalise_line(_join_parts(levelname, logger_name, message), limit)
@@ -157,9 +151,8 @@ class LogRing(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         """Append ``record`` to the ring, discarding the oldest once it is full.
 
-        Nothing here may raise or log: a fault would become a logging error on a passing test, and
-        logging from a handler on the ``foundry`` logger would re-enter this one, so a malformed
-        record leaves the ring as it was (failure isolation, AAP 0.1.2).
+        Nothing here may raise or log, which would become a logging error on a passing test or
+        re-enter this handler, so a malformed record leaves the ring as it was (AAP 0.1.2).
         """
         try:
             if record.levelno < self.level:

@@ -4,6 +4,7 @@
       "request": {
         "body_sha256": "8dd1bf42a2fb1ede97598ecd73cb7c6384887f3d7785ac87a8d0269425ba0d42",
         "headers_subset": {
+          "authorization": "***",
           "content-type": "application/json"
         },
         "method": "POST",
@@ -20,5 +21,7 @@
     }
   ],
   "recorded_at": "2025-01-01T00:00:00.000+00:00",
-  "redacted_keys": []
+  "redacted_keys": [
+    "authorization"
+  ]
 }

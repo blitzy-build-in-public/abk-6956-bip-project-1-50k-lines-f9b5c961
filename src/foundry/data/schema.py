@@ -1,14 +1,11 @@
 """JSON Schema enforcement for the rows of a data file.
 
 A data file may carry a *sidecar* schema: a JSON Schema document beside it, discovered under the
-data file's full name plus ``.schema.json`` -- tried first, so ``testdata/cart.csv`` is described by
-``testdata/cart.csv.schema.json`` -- or its bare stem plus the same suffix. Nothing else declares a
-schema, so the sidecar's presence is the whole declaration and a data file without one is enforced
-against nothing.
-
-Two checks run for a row, in this order, and both report through
-:func:`foundry.data.loaders.base.data_error`, the package's single ``DataError`` construction
-site, so every fault names the file and, where they are known, the line and the column:
+data file's full name plus ``.schema.json`` or its bare stem plus the same suffix. Nothing else
+declares a schema, so the sidecar's presence is the whole declaration. Two checks run for a row, in
+this order, and both report through :func:`foundry.data.loaders.base.data_error`, the package's
+single ``DataError`` construction site, so every fault names the file and, where they are known, the
+line and the column:
 
 1. **Structure, before values.** A column the schema lists in ``required`` that the row does not
    carry is reported by name, and a column the schema's ``properties`` does not declare is
@@ -25,11 +22,10 @@ as a :class:`~foundry.core.exceptions.ContractError` naming the sidecar it came 
 ``strict=False`` tolerates extra columns: they stay in the row the caller carries forward but are
 left out of the projection the schema validates. Every check is order-stable -- the ``required``
 names, the declared property set and the extra columns are each sorted before the first of them is
-reported -- so the same file reports the same message on every run and on every worker.
-
-Enforcement precedes case construction, so no case exists for a rejected row and the fault surfaces
-at collection time rather than inside a test. Importing the module defines names and does nothing
-else: no schema is loaded, no file is opened and no environment variable is read.
+reported -- so the same file reports the same message on every run and on every worker. Enforcement
+precedes case construction, so no case exists for a rejected row and the fault surfaces at
+collection time rather than inside a test. Importing the module defines names and does nothing else:
+no schema is loaded, no file is opened and no environment variable is read.
 """
 
 from __future__ import annotations
@@ -67,13 +63,10 @@ one is the one enforced, so two data files sharing a stem in different formats n
 def schema_path_for(data_path: Path) -> Path:
     """Return the sidecar schema path that belongs to one data file.
 
-    This is the only place the sidecar's name is decided, and the two spellings are tried in a
-    fixed order: the full-name candidate ``<name>.schema.json`` when that file exists, else the
-    stem candidate ``<stem>.schema.json`` when that one exists, else the full-name candidate. The
-    existence tests stop here so that every caller -- including :func:`load_row_schema` -- reads
-    one decision instead of repeating it, and the final fallback keeps the canonical full-name
-    path as the answer for a data file that declares no schema. A data file whose stem is its own
-    name, one carrying no suffix or a dotfile, has a single candidate rather than two.
+    This is the only place the sidecar's name is decided, so every caller -- including
+    :func:`load_row_schema` -- reads one decision: the full-name candidate when that file exists,
+    else the stem candidate, else the full-name candidate; a data file whose stem is its own name,
+    one carrying no suffix or a dotfile, has a single candidate rather than two.
 
     Args:
         data_path: The data file's path, for example ``testdata/cart.csv``.
@@ -101,21 +94,27 @@ def load_row_schema(
     """Load the sidecar schema of a data file, or report that it has none.
 
     A missing sidecar is the ordinary state of a data file that declares no schema, so it returns
-    ``None`` rather than raising; every other fault in the document -- unreadable, not valid JSON
-    or YAML, not a schema object, a reference outside the document -- is a
-    :class:`~foundry.core.exceptions.ContractError` raised by
-    :func:`foundry.contract.schema.load_schema`, which is the single loader for a schema document.
+    ``None`` rather than raising; every other fault in the document -- unreadable, not valid JSON or
+    YAML, not a schema object, a reference outside itself -- is the
+    :class:`~foundry.core.exceptions.ContractError` that :func:`foundry.contract.schema.load_schema`
+    raises.
 
     Args:
-        data_path: The data file whose sidecar is wanted, for example ``testdata/cart.csv``.
+        data_path: The data file whose sidecar is wanted, for example ``testdata/cart.csv``. A
+            relative path is made absolute against the working directory first, so the sidecar it
+            names is the data file's sibling; joining the same segments again inside ``base_dir``
+            would look for a schema repeating the data file's own leading directories.
         base_dir: The data directory the sidecar must stay inside, normally ``data.dir``; ``None``
             imposes no containment. It is what stops a data file from naming a schema anywhere on
-            the disk.
+            the disk, and making the path absolute leaves it unaffected: the sidecar sits inside
+            ``base_dir`` exactly when the data file does.
 
     Returns:
         The schema document, or ``None`` when :func:`schema_path_for` names no existing file.
     """
-    schema_path = schema_path_for(data_path)
+    # Absolute first, so the sidecar is the file's sibling rather than the path joined twice.
+    resolved = data_path if data_path.is_absolute() else Path.cwd() / data_path
+    schema_path = schema_path_for(resolved)
     if not schema_path.exists():
         return None
     return load_schema(schema_path, base_dir=base_dir)
@@ -188,9 +187,8 @@ def enforce_row(
 
     The violation's own rendering is what reaches the message: it is redacted through ``redact`` --
     the run's engine, built from ``secrets.redact_keys`` -- and flattened to one line by
-    :mod:`foundry.contract.violations`, which is the only party that may print a validator message
-    because such a message quotes the instance value. A cell value and a whole row are never
-    interpolated here.
+    :mod:`foundry.contract.violations`, the only party that may print a validator message because
+    such a message quotes the instance value. A cell value and a whole row are never interpolated.
 
     Args:
         values: The row's column names and values, in the table's column order.
@@ -255,14 +253,11 @@ def enforce_table(
 ) -> LoadedTable:
     """Enforce a table's rows against its schema, when the data file declares one.
 
-    This is the one entry point the data registry calls, and it returns the table that
-    :func:`foundry.data.cases.build_case_set` converts, so schema enforcement always precedes case
-    construction and a rejected row never becomes a case.
-
-    When ``schema`` is not ``None``, every row goes through :func:`enforce_row`, and the validated
-    rows are rebuilt so the caller receives what was actually checked: the row's own values under
-    ``strict``, and the declared columns alone when an author tolerates extras. A data file that
-    declares no schema is enforced against nothing, so the table comes back unchanged.
+    This is the one entry point the data registry calls, so schema enforcement always precedes the
+    case construction :func:`foundry.data.cases.build_case_set` performs. When ``schema`` is not
+    ``None``, every row goes through :func:`enforce_row` and the validated rows are rebuilt, so the
+    caller receives what was actually checked: the row's own values under ``strict``, and the
+    declared columns alone when an author tolerates extras.
 
     Args:
         table: The table a reader produced, with its path, column order and rows.
@@ -271,9 +266,9 @@ def enforce_table(
         redact: The callable that scrubs secrets out of a rendered violation, passed to every
             :func:`enforce_row` call. ``None`` applies the built-in deny-lists.
         schema_source: The name a fault in ``schema`` itself reports the document by. ``None``
-            derives it from :func:`schema_path_for` of ``table.path`` when that sidecar exists,
-            which is the same decision :func:`load_row_schema` made, so the error names the sidecar
-            that was actually enforced. A data file with no sidecar has no document to name.
+            derives it from :func:`schema_path_for` of ``table.path`` when that sidecar exists, so
+            the error names the sidecar that was actually enforced. A data file with no sidecar has
+            no document to name.
 
     Returns:
         ``table`` itself when no schema was given, otherwise a table with the same path and

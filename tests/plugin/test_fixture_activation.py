@@ -10,15 +10,18 @@ session that started from nothing but that list -- no configuration, and no plug
 consecutive tests the same object while the six function-scoped ones hand each test a fresh one,
 which is the scope column observed rather than read.
 
-Both children run with ``PYTEST_DISABLE_PLUGIN_AUTOLOAD`` set, so what they prove is the
+Every child runs with ``PYTEST_DISABLE_PLUGIN_AUTOLOAD`` set, so what they prove is the
 ``pytest_plugins`` declaration path alone; autoloading is what an installed consuming environment
 relies on, and AAP 0.14.1's zero-config test proves that. The child records two facts a green run
 would not show -- that no plugin named ``foundry`` is loaded, and the module it imported, compared
 with ``foundry.__file__`` -- so no substituted copy can stand in. A second child declares nothing
 and requests one fixture, which must then be unresolvable.
 
-``foundry_http`` and ``foundry_api`` are deliberately absent: their modules are sibling deliverables
-still in flight. Nothing here requests or names them.
+``foundry_http`` is deliberately absent: the ten fixtures above are the ones the declaration path is
+proved with. ``foundry_api`` is reached by a third child, which declares only its two modules and
+configures the documented refusal -- a recording run with no ``http.base_url`` -- so the transport
+that mode builds is observed being released rather than left open when the HTTP session it belongs
+to is never constructed.
 """
 
 from __future__ import annotations
@@ -135,6 +138,22 @@ def test_foundry_clock(foundry_clock: object) -> None:
     assert foundry_clock
 '''
 
+_API_CONFTEST: Final[str] = (
+    'pytest_plugins = ["foundry.fixtures.config", "foundry.fixtures.http"]\n'
+)
+"""The declaration a project makes to hold the configured API client and its configuration."""
+
+_RECORDING_TOML: Final[str] = '[cassette]\nmode = "record"\n'
+"""A recording run: the mode whose cassette session builds the live transport it may send on."""
+
+_NO_BASE_URL_MODULE: Final[str] = '''"""Requests the API client with no base URL."""
+
+
+def test_api_needs_a_base_url(foundry_api: object) -> None:
+    """The fixture refuses the configuration before the test body runs."""
+    assert foundry_api
+'''
+
 
 def test_a_fresh_session_activates_the_ten_delivered_fixtures(
     pytester: pytest.Pytester, clean_foundry_env: None, monkeypatch: pytest.MonkeyPatch
@@ -161,3 +180,42 @@ def test_a_session_that_declares_nothing_resolves_no_foundry_fixture(
     result = pytester.runpytest("-q")
     result.assert_outcomes(errors=1)
     assert "fixture 'foundry_clock' not found" in result.stdout.str()
+
+
+def test_a_refused_configuration_releases_the_cassette_transport(
+    pytester: pytest.Pytester, clean_foundry_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recording run with no base URL errors once and leaves no transport open behind it.
+
+    A recording cassette session is built before the HTTP session that owns it, and a mode whose row
+    has a network already holds a live transport by then. The constructor refuses the configuration
+    on its documented error row, so this asserts the whole of that path: the ``ConfigError`` naming
+    ``http.base_url`` reaches the one test that requested the fixture and the run still ends with
+    exit code 1, and the transport the abandoned cassette was handed is closed exactly once rather
+    than outliving the run with its connection pool. ``LiveTransport.close`` is the observation
+    because it is the release a leaked pool would never reach, and it is patched in this process
+    because the child runs in it.
+    """
+    from foundry.http.transport import LiveTransport
+
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    pytester.makeconftest(_API_CONFTEST)
+    (pytester.path / "foundry.toml").write_text(_RECORDING_TOML, encoding="utf-8")
+    pytester.makepyfile(test_api=_NO_BASE_URL_MODULE)
+
+    closed: list[str] = []
+    release = LiveTransport.close
+
+    def _observed_close(self: LiveTransport) -> None:
+        closed.append("close")
+        release(self)
+
+    monkeypatch.setattr(LiveTransport, "close", _observed_close)
+    result = pytester.runpytest("-q")
+    assert result.ret == 1, result.stdout.str()
+    result.assert_outcomes(errors=1)
+    assert "foundry.core.exceptions.ConfigError: http.base_url is not set" in result.stdout.str()
+    assert closed == ["close"], (
+        f"the transport the refused configuration abandoned must be released exactly once: {closed}"
+    )
+    assert not (pytester.path / "cassettes").exists(), "a refused run records no cassette document"

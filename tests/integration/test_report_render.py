@@ -226,13 +226,15 @@ QUARANTINE_HEADING: Final[str] = 'id="quarantined-heading"'
 PANEL_OPEN: Final[str] = '<details class="panel"'
 ERRORS_HEADING: Final[str] = 'id="errors-heading"'
 DURATION_CELL: Final[re.Pattern[str]] = re.compile(
-    r"""<td class="num">(?:\d+\.\d ms|\d+\.\d{2} s)</td>"""
+    r"""<td class="num">(?:&lt; 0\.01 ms|\d+\.\d ms|\d+\.\d{2} ms|\d+\.\d{2} s)</td>"""
 )
-"""One duration cell: ``12.4 ms`` under a second, ``1.25 s`` above it (``_format_duration``).
+"""One duration cell, in every form ``_format_duration`` produces.
 
-Each unit carries the decimal precision the formatter gives it -- one for milliseconds, two for
-seconds -- so the pattern accepts both documented forms and nothing else: a cell with no number, a
-cell with a number and no unit, or a unit at the other unit's precision all fail to match.
+From a second up the cell reads seconds to two decimals (``1.25 s``); from a millisecond up it
+reads milliseconds to one (``12.4 ms``); under a millisecond it gains a second decimal
+(``0.50 ms``); and finer than the unit prints it reads the escaped bound ``&lt; 0.01 ms``.
+``0.0 ms`` is the one zero form, so a cell with no number, a cell with a number and no unit, and a
+unit at another form's precision all fail to match.
 """
 
 
@@ -442,11 +444,23 @@ def _assert_quarantine_verdicts(run: RunOutput) -> None:
 
 
 def _assert_failure_record(run: RunOutput) -> None:
-    """AAP 0.4.6: the plain failure carries the failing phase and a traceback artifact."""
+    """AAP 0.4.6: the plain failure carries the failing phase, its crash message, and a traceback.
+
+    The message is the failing report's own failure message, so the rendered traceback stays in the
+    artifact ``traceback_path`` names instead of being repeated in the record, and no absolute
+    source or library path reaches it.
+    """
     record = run.record_for(API_NODEID)
     assert record["outcome"] == "failed"
     failures = tuple(_mapping(entry) for entry in _sequence(record["failures"]))
     assert [failure["phase"] for failure in failures] == ["call"]
+    message = str(failures[0]["message"])
+    assert message.startswith("AssertionError: deliberate failure"), message
+    assert "def test_api_fails" not in message, (
+        f"the message repeats the rendered traceback: {message[:200]!r}"
+    )
+    for leaked in ("/src/foundry/", "site-packages"):
+        assert leaked not in message, f"the message names {leaked!r}: {message[:200]!r}"
     traceback_path = failures[0]["traceback_path"]
     assert isinstance(traceback_path, str), f"the failure names no traceback: {failures[0]}"
     assert run.file_of(record, traceback_path).is_file(), traceback_path

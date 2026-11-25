@@ -1,17 +1,16 @@
 """The ``foundry`` console application: the ``foundry.cli`` package of AAP 0.3.2.
 
 The five subcommands -- ``run``, ``init``, ``config``, ``report`` and ``doctor`` (AAP 0.4.4) -- live
-in their own modules, and the console entry point
-``[project.scripts] foundry = "foundry.cli.main:main"`` (AAP 0.4.2) is what reaches them, so this
-module is the package marker and the barrel of the public surface, and it holds no logic of its own.
-Its import budget is ``core``, ``obs``, ``config``, ``execution``, ``diagnostics`` and
-``reporting``, and never ``plugin`` (AAP 0.4.8): the plugin activates through the ``pytest11`` entry
-point, and a command line that imported it would make the two surfaces inseparable.
-
-Both published names are defined in :mod:`foundry.cli.main`, which imports ``click`` at module
-scope, so this barrel re-exports them lazily through the PEP 562 :func:`__getattr__` below.
-Nothing in ``click``, ``rich``, ``pytest`` or ``pydantic`` is imported by ``import foundry.cli``,
-while ``from foundry.cli import main`` still resolves on first use.
+in their own modules, and the console entry point ``[project.scripts] foundry =
+"foundry.cli.main:main"`` (AAP 0.4.2) is what reaches them, so this module is the package marker and
+the barrel of the public surface, and it holds no logic of its own. Its import budget is ``core``,
+``obs``, ``config``, ``execution``, ``diagnostics`` and ``reporting``, and never ``plugin`` (AAP
+0.4.8): the plugin activates through the ``pytest11`` entry point, and a command line that imported
+it would make the two surfaces inseparable. Both published names are defined in
+:mod:`foundry.cli.main`, which imports ``click`` at module scope, so this barrel re-exports them
+lazily through the PEP 562 :func:`__getattr__` below. Nothing in ``click``, ``rich``, ``pytest`` or
+``pydantic`` is imported by ``import foundry.cli``, while ``from foundry.cli import main`` still
+resolves on first use.
 """
 
 from __future__ import annotations

@@ -65,7 +65,8 @@ class AttemptRecord:
     """One attempt at running a test, or at issuing an HTTP request (AAP 0.7.2).
 
     Frozen because it crosses the xdist worker boundary as plain data. ``number`` is 1-based,
-    ``outcome`` a short token such as ``"timeout"``, ``elapsed_ms`` the duration, ``retry_on`` the
+    ``outcome`` a short token such as ``"timeout"``, ``elapsed_ms`` the span of that one attempt in
+    milliseconds (a record's ``duration_ms`` is the sum of those spans), ``retry_on`` the
     predicate describing the ending (``None`` for a returned response, so the record count equals
     the attempt count) and ``message`` a description already through the redaction engine.
     """

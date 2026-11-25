@@ -2,13 +2,11 @@
 
 ``execution.quarantine_mode`` (AAP 0.4.5) selects what a marked test's failure does: ``report``, the
 default, records it as ``quarantined_failed``, lists it and still exits 0, while ``strict`` counts
-the same record against the run; a marked test that passes is ``quarantine_passed`` with exit 0 and
-a removal note in either mode (AAP 0.4.7, assumption A11).
-
-:meth:`QuarantineRegistry.run_failed` is the whole exit-code rule, so the terminal, the JSON
-document, the JUnit XML and the HTML report cannot disagree about whether a run passed. The two
-fixed messages (AAP 0.4.6) are duplicated in ``reporting/junit.py``, which this package may not
-import (AAP 0.4.8), and tests keep the copies identical.
+the same record against the run; a marked pass is ``quarantine_passed`` with exit 0 and a removal
+note in either mode (AAP 0.4.7, assumption A11). :meth:`QuarantineRegistry.run_failed` is the whole
+exit-code rule, so the terminal, the JSON document, the JUnit XML and the HTML report cannot
+disagree about whether a run passed. The two fixed messages (AAP 0.4.6) are duplicated in
+``reporting/junit.py``, which this package may not import (AAP 0.4.8); tests keep them identical.
 """
 
 from __future__ import annotations
@@ -70,12 +68,10 @@ def is_quarantined(markers: Iterable[str]) -> bool:
 
     Args:
         markers: Marker *names* for one test, as the plugin hook module derives them from pytest's
-            marker machinery. Order is irrelevant, a ``foundry_*`` marker other than
-            :data:`QUARANTINE_MARKER` is ignored, and an entry that is not a name is skipped: this
-            function reports a fact and never raises (AAP 0.1.2).
+            marker machinery. Order is irrelevant, another ``foundry_*`` marker is ignored and an
+            entry that is not a name is skipped: this reports a fact and never raises (AAP 0.1.2).
 
-    Returns:
-        ``True`` when :data:`QUARANTINE_MARKER` is among the names, ``False`` otherwise.
+    Returns: ``True`` when :data:`QUARANTINE_MARKER` is among the names.
     """
     return any(isinstance(name, str) and name == QUARANTINE_MARKER for name in markers)
 
@@ -89,12 +85,10 @@ class QuarantineDecision:
 
     Frozen and slotted: the decision is taken once, stored in the item's stash and mirrored onto
     ``user_properties`` so it survives a worker boundary, then read by the exit-code composition and
-    by every renderer, which is why those cannot disagree about a test.
-
-    Every decision this module builds keeps the published invariants: ``listed`` is ``True`` only
-    for the two quarantined outcomes, ``note`` is set only for ``quarantine_passed``, ``state`` is
-    ``none`` whenever ``listed`` is ``False``, and ``fails_run`` is ``True`` for a marked failure in
-    ``strict`` mode and for any failure carrying no marker.
+    by every renderer, which is why those cannot disagree about a test. Every decision this module
+    builds keeps the published invariants: ``listed`` only for the two quarantined outcomes,
+    ``note`` only for ``quarantine_passed``, ``state`` ``none`` whenever ``listed`` is ``False``,
+    and ``fails_run`` for a marked failure in ``strict`` mode and for any failure with no marker.
     """
 
     state: QuarantineState
@@ -137,14 +131,12 @@ class QuarantineRegistry:
     """The session's quarantine mode, and the decisions taken under it.
 
     Constructed once per session from the resolved ``execution.quarantine_mode`` value and stored in
-    pytest stash. It accumulates nothing -- the callers aggregate over the decisions it returns --
-    so two items deciding on two workers share no state and a run's exit code never depends on the
-    order its tests executed in (AAP 0.4.8).
-
-    Passing text rather than a member is tolerated, so ``QuarantineRegistry(mode="strict")``
-    resolves to :attr:`foundry.config.enums.QuarantineMode.STRICT`. A value outside the enum falls
-    back to :attr:`foundry.config.enums.QuarantineMode.REPORT`, the mode that fails the fewest runs,
-    and is never raised over: a defect in Foundry's own wiring may not change a run's exit code
+    pytest stash. It accumulates nothing -- callers aggregate over the decisions it returns -- so
+    two items on two workers share no state and a run's exit code never depends on execution order
+    (AAP 0.4.8). Passing text rather than a member is tolerated, so ``mode="strict"`` resolves to
+    :attr:`foundry.config.enums.QuarantineMode.STRICT`, and a value outside the enum falls back to
+    :attr:`foundry.config.enums.QuarantineMode.REPORT`, the mode that fails the fewest runs: a
+    defect in Foundry's own wiring may not change a run's exit code (AAP 0.1.2).
     (AAP 0.1.2).
     """
 
@@ -177,12 +169,12 @@ class QuarantineRegistry:
 
         The outcome and the flags follow one table (AAP 0.4.7). A failure carrying no marker keeps
         its outcome and fails the run; a marked failure becomes ``quarantined_failed`` and fails the
-        run only in ``strict`` mode, the one difference between the modes; a marked pass becomes
-        ``quarantine_passed`` with :data:`QUARANTINE_PASSED_NOTE` and fails nothing (assumption
-        A11); a pass, skip, xfail, xpass or ``not_run`` is listed nowhere either way, because
-        ``not_run`` is the absence of a result rather than a failure (assumption A12). An outcome
-        that already names a quarantine verdict keeps the decision it records, which makes this
-        method idempotent, and a value outside the published nine counts as a failure.
+        run only in ``strict`` mode; a marked pass becomes ``quarantine_passed`` with
+        :data:`QUARANTINE_PASSED_NOTE` and fails nothing (assumption A11); a pass, skip, xfail,
+        xpass or ``not_run`` is listed nowhere, ``not_run`` being the absence of a result rather
+        than a failure (assumption A12). An outcome that already names a quarantine verdict keeps
+        the decision it records, making this idempotent; a value outside the published nine counts
+        as a failure.
         """
         if _is_quarantine_outcome(outcome):
             return _already_decided(outcome, strict=self.is_strict)

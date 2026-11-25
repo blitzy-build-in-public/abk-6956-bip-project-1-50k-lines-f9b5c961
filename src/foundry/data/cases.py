@@ -145,13 +145,12 @@ def build_case_set(table: LoadedTable) -> CaseSet:
     """Convert one loaded table into the cases its rows become, in file order.
 
     Pure conversion: no validation and no schema logic happens here, because
-    ``foundry.data.registry`` runs ``foundry.data.schema.enforce_table`` on the table before
-    calling this. Each row is taken as-is, so a value keeps whatever type the reader gave it
-    -- a string for CSV, the parsed scalar for JSON, YAML and JSON Lines.
-
-    A row's display label is its ``name`` cell when that cell is a non-empty string, and
-    its id otherwise. The id itself is never derived from a cell, which is what lets an
-    author edit data or relabel a row without renaming tests (implicit requirement I6).
+    ``foundry.data.registry`` runs ``foundry.data.schema.enforce_table`` on the table before calling
+    this. Each row is taken as-is, so a value keeps whatever type the reader gave it -- a string for
+    CSV, the parsed scalar for JSON, YAML and JSON Lines. A row's display label is its ``name`` cell
+    when that cell is a non-empty string, and its id otherwise. The id itself is never derived from
+    a cell, which is what lets an author edit data or relabel a row without renaming tests (implicit
+    requirement I6).
 
     Args:
         table: The table a reader loaded, carrying its columns, rows and path.
@@ -207,18 +206,14 @@ def _display_name(values: Mapping[str, object], fallback: str) -> str:
 def build_parameters(case_set: CaseSet) -> list[object]:
     """Build the ``pytest.param`` objects that parametrise a test over one case set.
 
-    This is the primitive :func:`parametrize` hands to pytest, published separately so a
-    caller that parametrises a fixture keyed on something other than a case can reuse it.
-
-    A non-empty set yields one parameter per case, in file order, whose id is exactly the
-    case's id and which carries no marks of its own -- the test's own markers apply as
-    usual. An empty set yields one skipped parameter instead of an empty list, because
-    pytest rejects a parametrisation with no values: the reason reads
-    ``no cases in <file>`` and the session exits 0 (AAP 0.4.7).
-
-    Ids contain no timestamps, host names or worker ids, so two collections of the same
-    file -- on one machine or across a sharded run -- produce identical parameters
-    (implicit requirement I6).
+    This is the primitive :func:`parametrize` hands to pytest, published separately so a caller that
+    parametrises a fixture keyed on something other than a case can reuse it. A non-empty set yields
+    one parameter per case, in file order, whose id is exactly the case's id and which carries no
+    marks of its own -- the test's own markers apply as usual. An empty set yields one skipped
+    parameter instead of an empty list, because pytest rejects a parametrisation with no values: the
+    reason reads ``no cases in <file>`` and the session exits 0 (AAP 0.4.7). Ids contain no
+    timestamps, host names or worker ids, so two collections of the same file -- on one machine or
+    across a sharded run -- produce identical parameters (implicit requirement I6).
 
     Args:
         case_set: The cases to parametrise over, as :func:`build_case_set` returned them.
@@ -263,10 +258,9 @@ def parametrize(
 
     This is the single entry point ``foundry.plugin`` calls from its ``pytest_generate_tests``
     delegation, and it does only what that delegation needs: bind one argument name to the
-    parameters :func:`build_parameters` built, in case order.
-
-    A data file that parsed to no cases produces a skip rather than a collection error, so
-    a file kept for reference with its header alone does not fail the session (AAP 0.4.7).
+    parameters :func:`build_parameters` built, in case order. A data file that parsed to no cases
+    produces a skip rather than a collection error, so a file kept for reference with its header
+    alone does not fail the session (AAP 0.4.7).
 
     Args:
         metafunc: The metafunc pytest passed to ``pytest_generate_tests``, which owns the

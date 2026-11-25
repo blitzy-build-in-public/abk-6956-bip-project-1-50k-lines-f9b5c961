@@ -22,15 +22,14 @@ __all__: list[str] = ["LOADER", "CsvLoader"]
 def _validate_header(path: Path, header: list[str]) -> tuple[str, ...]:
     """Check a CSV header and return it as the table's column tuple.
 
-    A CSV column is addressed by its header name, so a header that names no column or names
-    one column twice cannot be turned into a table: a schema could not refer to the column and
-    a case's values would silently lose the later duplicate. Both faults are reported as a
-    located ``DataError`` at line 1 -- the only line a header can be on -- and the header is
-    otherwise kept exactly as written, because stripping or normalising a name would hide an
-    authoring mistake the error can name instead.
-
-    The names are visited in header order and tracked in a set used for membership only, so
-    the check adds no ordering of its own to the column tuple (implicit requirement I6).
+    A CSV column is addressed by its header name, so a header that names no column or names one
+    column twice cannot be turned into a table: a schema could not refer to the column and a case's
+    values would silently lose the later duplicate. Both faults are reported as a located
+    ``DataError`` at line 1 -- the only line a header can be on -- and the header is otherwise kept
+    exactly as written, because stripping or normalising a name would hide an authoring mistake the
+    error can name instead. The names are visited in header order and tracked in a set used for
+    membership only, so the check adds no ordering of its own to the column tuple (implicit
+    requirement I6).
 
     Args:
         path: The data file the header was read from; named by the error.
@@ -74,19 +73,17 @@ class CsvLoader:
     def load(self, path: Path) -> LoadedTable:
         """Read ``path`` and return its header and data rows as a loaded table.
 
-        The header line supplies ``columns`` in file order. Every following non-blank line is
-        one data row, in file order, whose ``row_index`` counts the *emitted* rows from 0 --
-        contiguous, so the ``<stem>-<row_index>`` case ids built by ``cases.py`` are stable
-        across runs and workers (AAP 0.7.2) -- and whose ``line`` is the 1-based physical line
-        the record starts on, matching ``RawRow.line`` and ``Case.line``. A record's first line
-        is the one after the line the previous record ended on, so a quoted field holding a
-        newline pushes the records that follow it further down the file.
-
-        Three states are not faults. A file with no lines at all returns a table with no
-        columns and no rows. A file whose only line is the header returns the columns with no
-        rows; both are the ``no cases in <file>`` state a caller reports rather than an error
-        (AAP 0.4.7). A blank line between records is skipped without becoming a row, so a
-        hand-edited file keeps working while the row indices stay contiguous. A row of empty
+        The header line supplies ``columns`` in file order. Every following non-blank line is one
+        data row, in file order, whose ``row_index`` counts the *emitted* rows from 0 -- contiguous,
+        so the ``<stem>-<row_index>`` case ids built by ``cases.py`` are stable across runs and
+        workers (AAP 0.7.2) -- and whose ``line`` is the 1-based physical line the record starts on,
+        matching ``RawRow.line`` and ``Case.line``. A record's first line is the one after the line
+        the previous record ended on, so a quoted field holding a newline pushes the records that
+        follow it further down the file. Three states are not faults. A file with no lines at all
+        returns a table with no columns and no rows. A file whose only line is the header returns
+        the columns with no rows; both are the ``no cases in <file>`` state a caller reports rather
+        than an error (AAP 0.4.7). A blank line between records is skipped without becoming a row,
+        so a hand-edited file keeps working while the row indices stay contiguous. A row of empty
         strings is *not* skipped: it is a real row whose values a schema can complain about.
 
         Args:

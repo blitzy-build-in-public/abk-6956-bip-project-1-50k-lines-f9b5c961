@@ -62,12 +62,11 @@ class FoundryFactory:
 
     ``foundry_factory`` returns one of these per test. ``faker`` exposes the underlying instance for
     a caller that wants a typed reference, ``seed`` the value the instance was seeded with, and
-    every other attribute is proxied to the instance.
-
-    The class seeds nothing itself: :func:`foundry_factory` calls ``seed_instance`` before wrapping
-    the instance, so constructing a factory never touches Faker's module-wide random state. The
-    representation names the seed alone, never a generated value, so logging a factory cannot put
-    generated data into a log, a report or an artifact.
+    every other attribute is proxied to the instance. The class seeds nothing itself:
+    :func:`foundry_factory` calls ``seed_instance`` before wrapping the instance, so constructing a
+    factory never touches Faker's module-wide random state. The representation names the seed alone,
+    never a generated value, so logging a factory cannot put generated data into a log, a report or
+    an artifact.
     """
 
     faker: Faker
@@ -122,11 +121,10 @@ def foundry_factory(request: pytest.FixtureRequest, foundry_run_id: str) -> Foun
 
     Function scoped: one instance per test, a fresh Faker behind it and a seed derived from the
     session's run id and this item's node id through :func:`_seed_for`, so neither a test's draws
-    nor its seeding reach any other test.
-
-    The instance is seeded with ``seed_instance`` and never with ``Faker.seed``, which would reseed
-    the module-wide shared generator. Identical drawn values across Faker releases depend on the
-    pinned version and on the test making its calls in the same order.
+    nor its seeding reach any other test. The instance is seeded with ``seed_instance`` and never
+    with ``Faker.seed``, which would reseed the module-wide shared generator. Identical drawn values
+    across Faker releases depend on the pinned version and on the test making its calls in the same
+    order.
 
     Returns:
         A :class:`FoundryFactory` wrapping a Faker instance already seeded for this test.

@@ -2,11 +2,10 @@
 
 ``foundry_clock`` is function scoped and returns a :class:`FoundryClock` frozen at
 :data:`DEFAULT_INSTANT`, so two runs of the same test start from the same moment and neither
-consults the machine's clock. The class publishes three operations: :meth:`FoundryClock.now`
-returns the current instant, timezone-aware UTC; :meth:`FoundryClock.advance` moves it by a
-keyword-only delta and returns the new one, combining every component into a single step, so
-``advance(minutes=2, hours=1)`` is one 62-minute move; and :meth:`FoundryClock.set` replaces it
-outright.
+consults the machine's clock. The class publishes three operations: :meth:`FoundryClock.now` returns
+the current instant, timezone-aware UTC; :meth:`FoundryClock.advance` moves it by a keyword-only
+delta and returns the new one, combining every component into a single step, so ``advance(minutes=2,
+hours=1)`` is one 62-minute move; and :meth:`FoundryClock.set` replaces it outright.
 
 Why frozen
     A test asserting "this poller gave up after three attempts" must not depend on how quick the
@@ -16,11 +15,11 @@ Why frozen
 
 Not injected into ``foundry_poll``
     The poller keeps a real sleeper as its default, because a suite polling a live service still has
-    to wait. Determinism is opt-in and requesting the clock never changes how anything else waits.
+    to wait; determinism is opt-in.
 
 No wall-clock read, aware instants only
     Nothing here reads the interpreter's clock and :mod:`time` is not imported (enforced by
-    ``tests/unit/test_sleep_policy.py``). Every instant returned carries :data:`datetime.UTC`: an
+    ``tests/unit/test_sleep_policy.py``). Every instant returned carries :data:`datetime.UTC`; an
     aware instant in another zone is converted and a naive one raises
     :class:`foundry.core.exceptions.FoundryError`, because assuming the host's local zone is the
     very dependence this fixture removes.
@@ -120,7 +119,6 @@ class FoundryClock:
     The class is Foundry's deterministic time source and satisfies
     :class:`foundry.core.types.ClockLike` structurally, so it can be handed to
     :func:`foundry.assertions.eventually` as its ``clock`` without that module importing this one.
-
     The instant starts at the constructor's value (:data:`DEFAULT_INSTANT` by default),
     :meth:`advance` moves it forward by an explicit delta and :meth:`set` replaces it. Those three
     operations are the whole contract: no attribute to assign, no implicit movement and no tolerance
@@ -219,10 +217,9 @@ def foundry_clock() -> FoundryClock:
     """Return a fresh frozen clock for this test, starting at :data:`DEFAULT_INSTANT`.
 
     Function scoped, so advancing the clock in one test cannot move the instant another test sees,
-    and no single clock is shared between items or between xdist workers.
-
-    The clock is deliberately not wired into ``foundry_poll``: that fixture keeps a real sleeper so
-    a suite still waits against a live service, and determinism stays something a test asks for.
+    and no single clock is shared between items or between xdist workers. The clock is deliberately
+    not wired into ``foundry_poll``: that fixture keeps a real sleeper so a suite still waits
+    against a live service, and determinism stays something a test asks for.
 
     Returns:
         A :class:`FoundryClock` whose :meth:`~FoundryClock.now` is :data:`DEFAULT_INSTANT`.

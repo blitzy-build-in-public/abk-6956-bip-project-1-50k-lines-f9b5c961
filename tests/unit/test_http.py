@@ -39,6 +39,7 @@ from foundry.http import (
 from foundry.http.auth import AuthHeader, resolve_auth
 from foundry.http.retries import backoff, classify, should_retry
 from foundry.http.url import join_url, redact_url, require_base_url, strip_userinfo
+from foundry.obs.redaction import MAX_EXCERPT_BYTES, REDACTED, TRUNCATION_MARKER
 
 _BASE: Final[str] = "http://peer.test"
 """A name that resolves nowhere: the suite guard refuses it, so a real send would fail loudly."""
@@ -545,6 +546,31 @@ def test_request_dump_reports_the_exchange_with_every_credential_masked() -> Non
     serialised = json.dumps(dump)
     assert _SENTINEL not in serialised
     assert _QUERY_TOKEN not in serialised
+
+
+def test_both_dumps_carry_a_body_over_the_excerpt_budget_whole_and_redacted() -> None:
+    """A body past ``MAX_EXCERPT_BYTES`` survives in full in both dumps, its secret masked."""
+    long_value = "n" * 1_200
+    request_body = {"note": long_value, "password": _SENTINEL}
+    answered = {"echo": request_body, "received_bytes": len(long_value)}
+    transport, received = _recorder(
+        201, body=json.dumps(answered).encode(), headers={"Content-Type": "application/json"}
+    )
+    settings = SessionSettings(base_url=_BASE, redact_keys=("password",))
+    with _session(settings, transport=transport) as session:
+        response = session.post("/orders", json=request_body)
+    sent = received[0].content.decode()
+    assert len(sent.encode()) > MAX_EXCERPT_BYTES
+    assert len(response.text.encode()) > MAX_EXCERPT_BYTES
+    dumped_request = response.request_dump()["body"]
+    dumped_response = response.response_dump()["body"]
+    assert dumped_request == sent.replace(_SENTINEL, REDACTED)
+    assert dumped_response == response.text.replace(_SENTINEL, REDACTED)
+    for dumped in (dumped_request, dumped_response):
+        assert isinstance(dumped, str)
+        assert long_value in dumped
+        assert _SENTINEL not in dumped
+        assert TRUNCATION_MARKER not in dumped
 
 
 # --- Every status is a value (AAP 0.4.3) ---------------------------------

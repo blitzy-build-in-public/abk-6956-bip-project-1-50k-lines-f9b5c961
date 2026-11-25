@@ -6,7 +6,6 @@ context stay on the attributes and in ``repr()``, which echoes a value only in i
 shape and describes any other by its length, keeping a credential out of a file, the terminal and a
 report (AAP 0.1.1, AAP 0.14.3). A capability package composes the message from the context it alone
 holds, so a caller branches on ``DataError.column`` rather than parsing prose.
-
 :class:`FieldValueError` and :class:`ElementTypeError` serve modules that must raise a
 ``ValueError``- or ``TypeError``-compatible fault, and both stay out of ``__all__``.
 """

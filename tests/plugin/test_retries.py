@@ -72,9 +72,11 @@ _RECORD_KEYS: Final[frozenset[str]] = frozenset(
         "failures",
         "artifacts",
         "quarantine",
+        "artifacts_disabled",
     }
 )
-"""The thirteen keys a result record carries, in AAP 0.4.6's order and spelled as it spells them."""
+"""The thirteen keys AAP 0.4.6 publishes for a result record, in its order, plus the additive
+``artifacts_disabled`` flag AAP 0.4.7 requires on every record of an unwritable-artifacts run."""
 
 
 def _flaky_source(counter: Path) -> str:

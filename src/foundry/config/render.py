@@ -91,9 +91,9 @@ _TEXT_KINDS: Final[frozenset[str]] = frozenset({"str", "path"})
 class ConfigRow:
     """One row of the ``foundry config show`` table (AAP 0.7.4).
 
-    Plain text in three columns, and the layout is not its business: :func:`rows` produces the rows
-    and :mod:`foundry.cli.render` decides widths, colours and borders, so the table can be printed
-    with ``rich`` and inspected as tuples in a test without the two drifting apart.
+    Plain text in three columns; the layout is not its business, since :func:`rows` produces the
+    rows and :mod:`foundry.cli.render` decides widths, colours and borders, so the table can be
+    printed with ``rich`` and inspected as tuples in a test without the two drifting apart.
 
     Attributes:
         key: The dotted configuration key, for example ``http.timeout``.
@@ -108,18 +108,15 @@ class ConfigRow:
     source: str
 
     def as_tuple(self) -> tuple[str, str, str]:
-        """Return the three cells in the order of :data:`SHOW_COLUMNS`.
-
-        The form :mod:`foundry.cli.render` hands straight to ``rich``.
-        """
+        """Return the three cells in the order of :data:`SHOW_COLUMNS`, ready for ``rich``."""
         return (self.key, self.value, self.source)
 
 
 def redactor_for(config: FoundryConfig) -> Redactor:
     """Return the redactor every rendering of ``config`` passes its values through.
 
-    One engine serves every sink, built from the resolved ``secrets.redact_keys`` plus the
-    deny-lists it adds itself, so a project that widens the list widens what ``config show`` prints.
+    One engine serves every sink, built from the resolved ``secrets.redact_keys`` plus its own
+    deny-lists, so a project that widens the list widens what ``config show`` prints.
     """
     return Redactor(config.secrets.redact_keys)
 
@@ -127,10 +124,10 @@ def redactor_for(config: FoundryConfig) -> Redactor:
 def render_value(spec: keys.KeySpec, value: object, redactor: Redactor) -> str:
     """Render one configuration value for the Value column of the table.
 
-    The shape of the value decides the rendering: a boolean as the configuration file spells it, an
-    enumeration by the member's value rather than its name, a path in POSIX form, a number in its
-    shortest exact form, a list comma-joined in the order it was authored, and a header table as
-    ``name=value`` pairs sorted by name.
+    The shape decides the rendering: a boolean as the configuration file spells it, an enumeration
+    by the member's value rather than its name, a path in POSIX form, a number in its shortest exact
+    form, a list comma-joined in authored order, and a header table as ``name=value`` pairs sorted
+    by name.
 
     Two shapes can carry a credential and both are redacted here: the ``http.headers`` table through
     :meth:`foundry.obs.redaction.Redactor.header`, and the text a ``str``- or ``path``-kind key
@@ -167,9 +164,9 @@ def rows(config: FoundryConfig, *, not_applied: CliInput | None = None) -> tuple
     does not declare has no row even if the settings model holds a value for it, and each Source
     cell is :meth:`foundry.config.sources.ConfigSource.label`.
 
-    ``not_applied`` carries the overrides of a command that resolved without them: those are listed
-    separately rather than folded into the resolution, so their rows come after every resolved row
-    and their Source cell reads ``not-applied:<--option>``, which no layer label resembles.
+    ``not_applied`` carries the overrides of a command that resolved without them: listed apart from
+    the resolution, so their rows come after every resolved row and their Source cell reads
+    ``not-applied:<--option>``, which no layer label resembles.
 
     Returns:
         One row per leaf key in sorted key order, then one row per not-applied override.
@@ -204,7 +201,7 @@ def not_applied_values(cli: CliInput, *, redactor: Redactor | None = None) -> di
     The shared source of the not-applied section in all three renderings, so the table, the JSON
     document and the TOML document list the same keys in the same order with the same values. An
     override is a scalar, so no configured key name applies to one, and a caller holding a
-    configuration passes its redactor so every rendered value goes through one engine.
+    configuration passes its redactor so every value goes through one engine.
     """
     scrub = default_redactor() if redactor is None else redactor
     rendered: dict[str, str] = {}
@@ -225,7 +222,7 @@ def sources_document(config: FoundryConfig) -> dict[str, dict[str, str]]:
     """Return the provenance document: one ``{"layer", "detail"}`` record per leaf key.
 
     Both values are names -- the layer, and the file path, variable, option spelling or profile name
-    behind it -- so no configuration value can reach the document, which is what lets it be printed
+    behind it -- so no configuration value reaches the document, which is what lets it be printed
     and recorded without a redaction step of its own.
     """
     return {dotted: config.source_of(dotted).as_dict() for dotted in sorted(keys.leaf_keys())}
@@ -257,9 +254,9 @@ def to_json_document(
     """Return the object ``foundry config show --format json`` serialises.
 
     The two members ``resolved`` and ``sources`` are fixed, and a run without ``--resolved`` reports
-    the overrides it did not apply: those ride a third member, ``not_applied``, that appears only
-    when the command supplied at least one, which keeps the documented shape intact for a consumer
-    that reads the two it was promised.
+    the overrides it did not apply in a third member, ``not_applied``, that appears only when the
+    command supplied at least one, which keeps the documented shape intact for a consumer that reads
+    the two it was promised.
     """
     document: dict[str, object] = {
         RESOLVED_SECTION: resolved_document(config),
@@ -278,10 +275,8 @@ def to_json_text(config: FoundryConfig, *, not_applied: CliInput | None = None) 
     One document and nothing else: keys sorted at every level, two-space indentation, non-ASCII text
     left readable, and exactly one trailing newline. Sorting also places ``resolved`` and
     ``sources`` first whenever no override was deferred, and makes two invocations byte-identical.
-
-    Args:
-        config: The resolved configuration to document.
-        not_applied: The overrides the command supplied but did not apply, or ``None``.
+    ``config`` is the resolved configuration to document and ``not_applied`` the overrides it
+    supplied but did not apply, or ``None``.
 
     Returns:
         The document as JSON text, ending with one newline.
@@ -321,10 +316,7 @@ def _leaf_values(config: FoundryConfig) -> dict[str, object]:
 
     The settings model knows its own fields; the registry knows the published surface. Selecting by
     the registry keeps a field that no key declares out of every rendering, the same rule
-    :func:`rows` follows for its keys.
-
-    Args:
-        config: The resolved configuration to read.
+    :func:`rows` follows for its keys. ``config`` is the resolved configuration to read.
 
     Returns:
         One entry per leaf key, holding the resolved value or ``None`` when no layer set it.
@@ -337,17 +329,13 @@ def _sorted_specs() -> tuple[keys.KeySpec, ...]:
     """Return the registry's key specs ordered by dotted key.
 
     Returns:
-        The 28 specs, sorted, which fixes the row order of the table and the insertion order of the
-        document.
+        The 28 specs, sorted, which fixes the row order of the table and the document's key order.
     """
     return tuple(sorted(keys.KEY_SPECS, key=_spec_dotted))
 
 
 def _spec_dotted(spec: keys.KeySpec) -> str:
-    """Return the dotted key a spec declares, as the sort key of :func:`_sorted_specs`.
-
-    Args:
-        spec: The registry entry to read.
+    """Return the dotted key ``spec`` declares, as the sort key of :func:`_sorted_specs`.
 
     Returns:
         The dotted key, for example ``http.timeout``.
@@ -360,15 +348,12 @@ def _document_value(value: object, redactor: Redactor) -> object:
 
     The document form is not the table form: a value keeps its type where the document can carry it
     and loses it only where the format has no equivalent -- an enumeration becomes its value, a path
-    its POSIX string, a header table a mapping of redacted values.
+    its POSIX string, a header table a mapping of redacted values. ``value`` is the resolved value,
+    or ``None`` for a key no layer set, and ``redactor`` the redactor credentials are scrubbed
+    through.
 
-    Args:
-        value: The resolved value, or ``None`` for a key no layer set.
-        redactor: The redactor to scrub credentials through.
-
-    Returns:
-        ``None``, a boolean, a number, a string, a list or a mapping, ready for :func:`json.dumps`
-        or ``tomli-w``.
+    Returns: ``None``, a boolean, a number, a string, a list or a mapping, ready for
+        :func:`json.dumps` or ``tomli-w``.
     """
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -392,11 +377,8 @@ def _ordered(value: Iterable[object]) -> tuple[object, ...]:
     sets and the document publishes. An unordered collection is sorted, so rendering cannot depend
     on hashing; the settings model parses both list-valued keys into lists, so this is a guard.
 
-    Args:
-        value: The collection to order.
-
     Returns:
-        The elements as a tuple, sorted when ``value`` is a set or a frozenset.
+        ``value``'s elements as a tuple, sorted when it is a set or a frozenset.
     """
     if isinstance(value, (set, frozenset)):
         return tuple(sorted(value, key=repr))
@@ -425,10 +407,10 @@ def _element_text(element: object) -> str:
 def _header_pairs(table: Mapping[object, object], redactor: Redactor) -> str:
     """Render a header table as ``name=value`` pairs, with secret values redacted.
 
-    The pairs are ordered by case-folded name by
-    :meth:`foundry.obs.redaction.Redactor.headers`, so the cell reads the same on two runs whatever
-    order the file or the environment supplied the headers in, and a name in ``secrets.redact_keys``
-    or in the deny-list prints ``***``. A table with no header yields an empty cell.
+    The pairs are ordered by case-folded name by :meth:`foundry.obs.redaction.Redactor.headers`, so
+    the cell reads the same on two runs whatever order the file or the environment supplied the
+    headers in, and a name in ``secrets.redact_keys`` or in the deny-list prints ``***``. An empty
+    table yields an empty cell.
     """
     redacted = redactor.headers(_header_table(table))
     return _PAIR_SEPARATOR.join(f"{name}={value}" for name, value in redacted.items())
@@ -437,8 +419,8 @@ def _header_pairs(table: Mapping[object, object], redactor: Redactor) -> str:
 def _header_table(table: Mapping[object, object]) -> dict[str, str]:
     """Return a header table as the ``str``-to-``str`` mapping the redactor accepts.
 
-    A name or value of another type is rendered rather than dropped, so the row still shows that the
-    header exists.
+    A name or value of another type is rendered rather than dropped, so the row still shows the
+    header.
     """
     return {_text_of(name): _text_of(value) for name, value in table.items()}
 
@@ -464,8 +446,8 @@ def _toml_ready(document: Mapping[str, object]) -> dict[str, object]:
     """Return a nested document with every unset value dropped.
 
     TOML has no null, so a key no layer set -- an unset ``http.base_url`` or credential name -- is
-    absent from the document rather than written empty. A table is kept even when the drop empties
-    it, so the document keeps the shape of the configuration.
+    absent from the document rather than written empty. A table survives the drop even when it
+    empties, so the document keeps the shape of the configuration.
     """
     ready: dict[str, object] = {}
     for key, value in document.items():
@@ -483,12 +465,9 @@ def _toml_ready(document: Mapping[str, object]) -> dict[str, object]:
 def _toml_scalar(value: object) -> object:
     """Return one element of a document list, dropping an unset value.
 
-    Args:
-        value: One element of a list-valued key.
-
     Returns:
-        The element, or an empty string when it is ``None``: a TOML array cannot hold a null, and
-        an empty element keeps the array's length.
+        ``value``, or an empty string when it is ``None``: a TOML array cannot hold a null, and an
+        empty element keeps the array's length.
     """
     return "" if value is None else value
 
@@ -498,8 +477,8 @@ def _with_sources_table(rendered: str, sources: Mapping[str, Mapping[str, str]])
 
     One line per attributed key, ``"http.timeout" = { layer = "env", detail =
     "FOUNDRY_HTTP__TIMEOUT" }``. ``tomli-w`` writes a nested table as a ``[sources.<key>]`` section
-    instead of an inline table, so the table is composed here from the quoting it applies. The
-    entries are sorted by key, so two runs print the rows in the same order.
+    instead of an inline table, so the table is composed here from the quoting it applies, entries
+    sorted by key so two runs print the rows in the same order.
     """
     lines = [f"[{SOURCES_TABLE}]"]
     for dotted in sorted(sources):
@@ -515,12 +494,9 @@ def _toml_string(value: str) -> str:
     """Return ``value`` as a quoted, escaped TOML basic string.
 
     ``tomli-w`` is the declared TOML writer, so rather than growing a second implementation of the
-    format's escaping the value is rendered as the value of a probe document and the quoted literal
-    is taken from it. A key containing a dot and a path containing a quote or a backslash therefore
-    come out as TOML's own grammar spells them.
-
-    Args:
-        value: The text to quote.
+    format's escaping, the value is rendered as the value of a probe document and the quoted literal
+    is taken from it: a key containing a dot and a path containing a quote or a backslash come out
+    as TOML's own grammar spells them.
 
     Returns:
         The value as a TOML basic string, quotes included.

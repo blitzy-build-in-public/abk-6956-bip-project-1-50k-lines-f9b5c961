@@ -1,33 +1,37 @@
-"""Unit tests for ``foundry.execution``: the retry budget, quarantine, sharding, timeout, the wire.
+"""Unit tests for ``foundry.execution``: the retry budget, sharding, timeout, the wire.
 
-Five modules, each pinned to the contract AAP 0.4.5 to 0.4.8 give it: A2's retry arithmetic,
-the exit-code rule of both quarantine modes with A11's ``quarantine_passed``, sharding's collection
-comparison and the ``run_error`` a lost worker leaves, pytest-timeout's derived settings, and the
-typed stash keys with the ``user_properties`` codec (implicit requirement I3).
+Four modules, each pinned to the contract AAP 0.4.5 to 0.4.8 give it: A2's retry arithmetic,
+sharding's collection comparison and the ``run_error`` a lost worker leaves, pytest-timeout's
+derived settings, and the typed stash keys with the ``user_properties`` codec (implicit requirement
+I3). The retry driver's in-flight attempt builder is pinned to AAP 0.4.6's ``duration_ms`` as well:
+an attempt measures its own span, and the clock is patched, so no assertion reads a real one.
 
 No test here drives pytest machinery, sleeps, reads the wall clock or opens a socket (AAP 0.14.3),
 and the one subprocess proves ``foundry.execution.state`` pulls in no heavy dependency (I5). The
-coordinator's per-test capture of the two streams (AAP 0.4.6) has its own module,
-``tests.unit.test_execution_capture``.
+coordinator's per-test capture of the two streams (AAP 0.4.6) and the quarantine verdict table
+(AAP 0.4.7, A11) each have their own module, ``tests.unit.test_execution_capture`` and
+``tests.unit.test_execution_quarantine``.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
 
 import pytest
 
-from foundry.config.enums import QuarantineMode
 from foundry.core.exceptions import ConfigError
 from foundry.core.types import AttemptRecord, Phase
-from foundry.execution import quarantine, retry, sharding, state, timeout
+from foundry.execution import retry, sharding, state, timeout
 from foundry.obs import capture
 from foundry.obs.redaction import TRUNCATION_MARKER as REDACTION_TRUNCATION_MARKER
+from foundry.plugin import _in_flight
 
 # Fixed run id, profile, node id and timestamps, so no assertion reads the wall clock.
 _RUN_ID: Final[str] = "20250102T030405-0abc12"
@@ -197,122 +201,6 @@ def test_the_attempt_summary_is_one_chronological_line() -> None:
     message = retry.exhausted_message(_NODEID, _attempts("failed", "failed", "failed"))
     assert message.startswith(f"{_NODEID}: ")
     assert "retries exhausted after 3 attempts" in message
-
-
-@pytest.mark.parametrize(
-    ("mode", "quarantined", "outcome", "expected_state", "expected_outcome", "fails_run"),
-    [
-        ("report", True, "failed", "failed", "quarantined_failed", False),
-        ("strict", True, "failed", "failed", "quarantined_failed", True),
-        ("report", True, "error", "failed", "quarantined_failed", False),
-        ("report", False, "failed", "none", "failed", True),
-        ("strict", False, "failed", "none", "failed", True),
-        ("report", True, "passed", "passed", "quarantine_passed", False),
-        ("strict", True, "passed", "passed", "quarantine_passed", False),
-        ("report", False, "passed", "none", "passed", False),
-        ("report", True, "skipped", "none", "skipped", False),
-        ("report", False, "not_run", "none", "not_run", False),
-    ],
-)
-def test_decide_follows_the_published_table(
-    mode: str,
-    quarantined: bool,
-    outcome: state.OutcomeValue,
-    expected_state: str,
-    expected_outcome: state.OutcomeValue,
-    fails_run: bool,
-) -> None:
-    """Every row of AAP 0.4.7's table, with the state, the outcome and the exit-code verdict."""
-    registry = quarantine.QuarantineRegistry(mode=mode)
-    decision = registry.decide(quarantined=quarantined, outcome=outcome)
-    assert decision.state == expected_state
-    assert decision.outcome == expected_outcome
-    assert decision.fails_run is fails_run
-    assert decision.listed is (expected_state != "none")
-    assert decision.as_payload() == state.QuarantinePayload(state=expected_state)
-
-
-def test_report_mode_keeps_the_run_green_where_strict_mode_fails_it() -> None:
-    """The two modes produce one record and two exit codes: the whole difference between them."""
-    report = quarantine.QuarantineRegistry(mode=QuarantineMode.REPORT).decide(
-        quarantined=True, outcome="failed"
-    )
-    strict = quarantine.QuarantineRegistry(mode=QuarantineMode.STRICT).decide(
-        quarantined=True, outcome="failed"
-    )
-    assert report.outcome == strict.outcome == "quarantined_failed"
-    assert report.fails_run is False
-    assert strict.fails_run is True
-    assert quarantine.QuarantineRegistry(mode="report").run_failed([report]) is False
-    assert quarantine.QuarantineRegistry(mode="strict").run_failed([strict]) is True
-
-
-def test_a_quarantined_pass_is_a_success_carrying_the_removal_note() -> None:
-    """Assumption A11: a green marked test succeeds, and the note asks for the marker's removal."""
-    decision = quarantine.QuarantineRegistry().decide(quarantined=True, outcome="passed")
-    assert decision.outcome == "quarantine_passed"
-    assert decision.fails_run is False
-    assert quarantine.QuarantineRegistry().run_failed([decision]) is False
-    assert decision.note == quarantine.QUARANTINE_PASSED_NOTE
-    assert decision.note is not None
-    assert "remove the foundry_quarantine marker" in decision.note
-    assert decision.as_dict()["listed"] is True
-
-
-@pytest.mark.parametrize("mode", [QuarantineMode.REPORT, QuarantineMode.STRICT])
-def test_deciding_an_already_decided_outcome_changes_nothing(mode: QuarantineMode) -> None:
-    """A record decoded from the wire and decided again keeps the verdict it already carries."""
-    registry = quarantine.QuarantineRegistry(mode=mode)
-    for outcome in quarantine.quarantined_outcomes():
-        first = registry.decide(quarantined=True, outcome=outcome)
-        assert registry.decide(quarantined=True, outcome=first.outcome) == first
-        assert registry.decide(quarantined=False, outcome=first.outcome) == first
-
-
-@pytest.mark.parametrize(("mode", "failing_in_strict"), [("report", 0), ("strict", 1)])
-def test_the_counts_tally_the_verdicts_and_the_strict_share(
-    mode: str, failing_in_strict: int
-) -> None:
-    """The tallies name how many marked failures the run itself counts as failures."""
-    registry = quarantine.QuarantineRegistry(mode=mode)
-    decisions = [
-        registry.decide(quarantined=True, outcome="passed"),
-        registry.decide(quarantined=True, outcome="failed"),
-        registry.decide(quarantined=False, outcome="passed"),
-    ]
-    counts = dict(registry.counts(decisions))
-    assert counts == {"failed": 1, "failing_in_strict": failing_in_strict, "passed": 1}
-
-
-@pytest.mark.parametrize(
-    ("markers", "expected"),
-    [
-        (["foundry_quarantine"], True),
-        (["slow", "foundry_quarantine"], True),
-        (["slow"], False),
-        ([], False),
-    ],
-)
-def test_is_quarantined_matches_the_marker_name_alone(markers: list[str], expected: bool) -> None:
-    """Only the registered marker name counts; the namespace prefix alone does not."""
-    assert quarantine.is_quarantined(markers) is expected
-    assert quarantine.is_quarantined(iter(markers)) is expected
-
-
-def test_a_mode_name_resolves_and_an_unknown_mode_falls_back_to_report() -> None:
-    """A value read from configuration needs no cast, and a defect never fails a run."""
-    assert quarantine.QuarantineRegistry(mode="strict").is_strict is True
-    assert quarantine.QuarantineRegistry(mode="STRICT").mode is QuarantineMode.STRICT
-    assert quarantine.QuarantineRegistry(mode="nonexistent").mode is QuarantineMode.REPORT
-    assert quarantine.QuarantineRegistry(mode="strict").label == "quarantine=strict"
-
-
-def test_the_marker_vocabulary_is_the_published_one() -> None:
-    """The names AAP 0.4.2, 0.4.6 and 0.4.9 fix, spelled as the report republishes them."""
-    assert quarantine.QUARANTINE_MARKER == "foundry_quarantine"
-    assert quarantine.MARKER_NAMESPACE_PREFIX == "foundry_"
-    assert quarantine.QUARANTINED_SKIP_MESSAGE == "foundry: quarantined failure"
-    assert quarantine.quarantined_outcomes() == ("quarantined_failed", "quarantine_passed")
 
 
 _ONE: Final[str] = "tests/test_a.py::test_one"
@@ -493,7 +381,7 @@ def test_a_limit_outside_the_published_range_is_a_config_error(seconds: object) 
 def test_the_stash_keys_are_typed_distinct_and_disjoint() -> None:
     """One key per piece of state: no two modules can claim a slot, and none is a bare string."""
     keys = (*state.SESSION_STASH_KEYS, *state.ITEM_STASH_KEYS)
-    assert len(keys) == 10
+    assert len(keys) == 11
     assert len({id(key) for key in keys}) == len(keys)
     assert all(isinstance(key, pytest.StashKey) for key in keys)
     assert state.SESSION_STATE is not state.SESSION_CONFIG
@@ -580,6 +468,55 @@ def test_the_attempt_payload_mirrors_the_attempt_record() -> None:
     assert decoded.to_record() == record
     assert state.AttemptPayload.from_dict({"outcome": "failed"}) is None
     assert state.AttemptPayload.from_dict({**wire.as_dict(), "number": 0}) is None
+
+
+@pytest.mark.parametrize(
+    (
+        "finished_ms",
+        "item_start",
+        "attempt_start",
+        "now",
+        "expected_ms",
+        "expected_number",
+    ),
+    [
+        ((400.0,), 1_000.0, 1_000.25, 1_000.5, 250.0, 2),
+        ((), 500.0, None, 500.5, 500.0, 1),
+        ((400.0, 300.0), 1_000.0, None, 1_000.5, 0.0, 3),
+    ],
+    ids=["per-attempt-stamp", "empty-ledger-uses-the-item-start", "no-stamp-double-counts-nothing"],
+)
+def test_the_in_flight_attempt_measures_only_its_own_span(
+    finished_ms: tuple[float, ...],
+    item_start: float,
+    attempt_start: float | None,
+    now: float,
+    expected_ms: float,
+    expected_number: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AAP 0.4.6: each attempt's ``elapsed_ms`` is its own span, so their sum is the item's clock.
+
+    ``assemble_payload`` adds the in-flight attempt to the finished ledger, so an attempt measured
+    from the item's start would report the whole run: the first case's 400 ms attempt plus a 500 ms
+    item span yields a ``duration_ms`` of 900 ms for a run that took 650 ms. An empty ledger has no
+    earlier attempt to double count, which is why only then does the item's own start stand in, and
+    a missing per-attempt stamp with a non-empty ledger reports nothing rather than the whole item.
+    """
+    item = SimpleNamespace(stash=pytest.Stash())
+    item.stash[state.ITEM_ATTEMPTS] = [
+        AttemptRecord(number=number, outcome="failed", elapsed_ms=elapsed)
+        for number, elapsed in enumerate(finished_ms, start=1)
+    ]
+    item.stash[state.ITEM_STARTED_MONOTONIC] = item_start
+    if attempt_start is not None:
+        item.stash[state.ITEM_ATTEMPT_STARTED_MONOTONIC] = attempt_start
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+
+    in_flight = _in_flight(item, "passed")
+
+    assert in_flight.number == expected_number
+    assert in_flight.elapsed_ms == pytest.approx(expected_ms)
 
 
 def test_the_run_error_payload_round_trips() -> None:

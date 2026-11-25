@@ -11,9 +11,8 @@ would break silently, because a cassette is a file that outlives the run that wr
 * a :class:`~foundry.cassette.transport.ReplayTransport` answers from the document or raises the
   typed miss, touching no socket on either path (criterion 8), through a JSON loader only.
 
-Where the code departs from the brief: the matcher seam is ``match_interaction`` rather than
-``match`` (a soft keyword since Python 3.10); ``off`` and ``passthrough`` differ in ``reads`` and
-the ``falls_through`` that follows from it; and ``FoundryResponse.source`` comes from the
+Where the code departs from the brief: ``off`` and ``passthrough`` differ in ``reads`` and the
+``falls_through`` that follows from it, and ``FoundryResponse.source`` comes from the
 ``foundry.cassette.source`` extension, so the tag is asserted with the ``***`` marker.
 
 Everything is built under ``tmp_path``; the committed fixture is only read, hashed before and after,
@@ -51,6 +50,7 @@ from foundry.cassette import (
     RequestFingerprint,
     behaviour_for,
     cassette_path,
+    match,
     match_interaction,
 )
 from foundry.cassette import store as cassette_store
@@ -349,14 +349,16 @@ def test_matching_interactions_are_served_in_recording_order() -> None:
     interactions = (first, second)
     fingerprint = RequestFingerprint("GET", "/echo", normalise_query("page=2&limit=10"))
     assert matching_indices(fingerprint, interactions) == (0, 1)
-    assert match_interaction(fingerprint, interactions) == (0, first)
-    assert match_interaction(fingerprint, interactions, consumed=1) == (1, second)
-    assert match_interaction(fingerprint, interactions, consumed=9) == (1, second)
+    assert match(fingerprint, interactions) == (0, first)
+    assert match(fingerprint, interactions, consumed=1) == (1, second)
+    assert match(fingerprint, interactions, consumed=9) == (1, second)
     # A request the cassette does not hold is answered with ``None`` for the transport to report.
     missing = RequestFingerprint("DELETE", "/nowhere")
     assert matching_indices(missing, interactions) == ()
-    assert match_interaction(missing, interactions) is None
+    assert match(missing, interactions) is None
     assert describe(missing) == "DELETE /nowhere"
+    # Both spellings are one function, so an existing ``match_interaction`` import keeps working.
+    assert match_interaction is match
 
 
 # --- Redaction at capture (implicit requirement I4, AAP 0.3.2) -------------

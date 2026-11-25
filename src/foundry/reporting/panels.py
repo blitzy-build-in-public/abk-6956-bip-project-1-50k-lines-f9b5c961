@@ -8,6 +8,7 @@ message so two runs render identically. AAP 0.3.2, 0.4.6, 0.4.8, 0.7.4, 0.14.3.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -39,6 +40,7 @@ __all__: Final[tuple[str, ...]] = (
     "build_panels",
     "href_for",
     "read_log_tail",
+    "visible_control_characters",
 )
 
 DEFAULT_LOG_TAIL_LINES: Final[int] = CAPTURE_LINES_DEFAULT
@@ -80,6 +82,9 @@ _COMPONENT: Final[str] = "reporting.panels"
 
 _TRUNCATION_SUFFIX: Final[str] = "\u2026"
 """Marker appended to a line cut at :data:`MAX_LOG_LINE_CHARS`, one character wide."""
+
+_CONTROL_ESCAPE: Final[re.Pattern[str]] = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]")
+"""Every control character with no visible form: C0 without tab and newline, DEL and C1."""
 
 _REQUEST_KIND: Final[ArtifactKind] = "request"
 
@@ -139,16 +144,16 @@ class FailurePanel:
         nodeid: The test's pytest node id, unsanitised, as ``results.json`` records it.
         outcome: The test's final outcome, such as ``failed``, ``error`` or ``quarantined_failed``.
         phase: The pytest phase this failure belongs to.
-        message: The failure message, already redacted.
+        message: The failure message, redacted and free of raw control characters.
         request_path: Href of the recorded request dump, or ``None`` when the record carries no
             such artifact, artifacts were disabled, or the path would escape the run directory.
         response_path: Href of the recorded response dump, or ``None`` on the same conditions.
         traceback_path: Href of the traceback artifact, or ``None`` on the same conditions. The
             panel links to the file and never inlines it.
         log_lines: The captured log tail, newest last, redacted and width-truncated. Empty when
-            nothing was captured or the tail could not be read.
-        log_available: Whether the tail was read successfully. ``False`` tells the template to say
-            the tail is unavailable instead of rendering an empty block.
+            capture held no lines or the tail could not be read.
+        log_available: Whether capture produced a tail: ``True`` for a tail with lines and for one
+            that was captured but held none, ``False`` only when the tail is unavailable.
     """
 
     nodeid: str
@@ -175,12 +180,32 @@ class FailurePanel:
 
     @property
     def has_log(self) -> bool:
-        """Return whether there is a log tail to render in the monospace block.
+        """Return whether the monospace block has captured lines to render.
 
-        A tail that was read but held no lines yields ``False`` as well: an empty ``<pre>`` block
-        reads as a rendering fault.
+        A tail that was captured but held no lines yields ``False`` as well: an empty ``<pre>``
+        block reads as a rendering fault, so the template names that state in words instead.
         """
         return self.log_available and bool(self.log_lines)
+
+
+# --- Control characters -----------------------------------------------------
+
+
+def visible_control_characters(text: str) -> str:
+    r"""Spell every control character in ``text`` as its ``\xNN`` escape, keeping tab and newline.
+
+    Autoescaping covers ``& < > ' "`` only, so a control character a failing test wrote into its
+    message would reach ``report.html`` as a raw byte: it renders invisibly and leaves the document
+    unreadable as text. Each becomes a backslash, an ``x`` and two lowercase hex digits a reader can
+    search for; tab and newline stay because they carry the line structure (AAP 0.6, 0.14.1). The
+    Errors section takes the same treatment through
+    :func:`foundry.reporting.html.build_context`, and nothing here raises (AAP 0.14.3).
+
+    Returns:
+        The text with every :data:`_CONTROL_ESCAPE` match replaced in place, or unchanged if it
+        holds none.
+    """
+    return _CONTROL_ESCAPE.sub(lambda match: f"\\x{ord(match.group()):02x}", text)
 
 
 # --- Links to captured artifacts --------------------------------------------
@@ -303,16 +328,17 @@ def _read_tail_text(path: Path, *, max_bytes: int = MAX_LOG_TAIL_BYTES) -> str:
 
 
 def _prepare_line(line: str, redactor: Redactor) -> str:
-    """Redact one captured log line and cut it to :data:`MAX_LOG_LINE_CHARS`.
+    """Redact one captured log line, spell its control characters and cut it to the width limit.
 
-    Redaction runs before truncation: a cut taken first could leave the leading characters of a
-    secret that straddles the boundary in the report.
+    Redaction and the control-character escapes both run before the cut: a cut taken first could
+    leave the leading characters of a secret in the report, and the width is measured against the
+    text a reader actually sees rather than against the raw line.
 
     Returns:
         The line, redacted and at most :data:`MAX_LOG_LINE_CHARS` characters wide, terminated with
         :data:`_TRUNCATION_SUFFIX` when it was cut.
     """
-    scrubbed = redactor.text(line)
+    scrubbed = visible_control_characters(redactor.text(line))
     if len(scrubbed) <= MAX_LOG_LINE_CHARS:
         return scrubbed
     return scrubbed[: MAX_LOG_LINE_CHARS - 1] + _TRUNCATION_SUFFIX
@@ -375,20 +401,24 @@ def _log_tail_for(
     redactor: Redactor,
     limit: int,
 ) -> tuple[tuple[str, ...], bool]:
-    """Return the log tail one record's panels share.
+    """Return the log tail one record's panels share, and whether capture produced one.
 
     The tail belongs to the test, not to one of its failing phases, so it is read once per record
-    and every panel of that test carries the same lines.
+    and every panel of that test carries the same lines. A record lists a ``log_tail`` artifact
+    only when the ring held a line -- an empty sequence writes no file -- so capture that ran and
+    captured nothing lists none, and that absence is an empty tail rather than a fault.
 
     Returns:
-        ``(lines, available)`` as :func:`read_log_tail` returns them, ``((), False)`` when artifacts
-        were disabled, the run captures no tail, or the record listed no tail artifact.
+        ``(lines, available)`` in the three states a panel tells apart: the newest lines; no lines
+        with ``available`` true when capture was enabled and the record listed no tail; and
+        ``available`` false when artifacts were disabled, the run captures no tail, or the listed
+        tail could not be read.
     """
     if run_dir is None or limit == 0:
         return (), False
     artifact = _artifact_of(record, _LOG_TAIL_KIND)
     if artifact is None:
-        return (), False
+        return (), True
     return read_log_tail(
         Path(run_dir) / artifact.path, limit=limit, redactor=redactor, run_dir=Path(run_dir)
     )
@@ -425,7 +455,7 @@ def _panels_for_record(
                 nodeid=record.nodeid,
                 outcome=record.outcome,
                 phase=failure.phase,
-                message=redactor.text(failure.message),
+                message=visible_control_characters(redactor.text(failure.message)),
                 request_path=request_path,
                 response_path=response_path,
                 traceback_path=(

@@ -3,8 +3,9 @@
 Every assertion here reads the document a browser would open, which is what ``html`` promises it
 produces: a self-contained, byte-identical report from the frozen result records of one run, with
 nothing referencing an absolute scheme, a ``<link>`` or a ``src=``; the stylesheet inlined; every
-node id escaped; the rows sorted by node id; the Quarantined and Errors regions named landmarks;
-and the Jinja2 template shipped beside the renderer supplying the page rather than a copy of it.
+node id escaped; the failure message preformatted so a traceback keeps its line structure; the rows
+sorted by node id; the Quarantined and Errors regions named landmarks; and the Jinja2 template
+shipped beside the renderer supplying the page rather than a copy of it.
 
 Determinism and isolation (AAP 0.14.3): fixed timestamps, files under ``tmp_path``, no sleep, no
 network, no patched renderer, and no import of ``http``, ``data``, ``db``, ``execution``, ``cli``
@@ -49,6 +50,18 @@ _SCRIPT_NODEID = f"{_MODULE}::test_<script>alert(1)</script>"
 """A node id carrying markup, which every renderer must treat as text."""
 
 _ABSOLUTE_SCHEMES = ("http://", "https://")
+
+_TRACEBACK_LINES: tuple[str, ...] = (
+    "AssertionError: the checkout total did not match",
+    "> assert total == 3",
+    "E assert 4 == 3",
+    "tests/test_cart.py:12: AssertionError",
+)
+"""A four-line failure message shaped as pytest reports a failed assertion.
+
+The summary, the source line, the ``E`` line and the location read as themselves only while the
+line breaks survive, which is what the preformatted message block is for.
+"""
 
 
 def _record(**overrides: object) -> ResultRecord:
@@ -202,6 +215,24 @@ def test_a_failure_panel_links_the_dumps_and_shows_the_log_tail(tmp_path: Path) 
     assert _SECRET not in document
 
 
+def test_a_multi_line_failure_message_keeps_its_line_structure() -> None:
+    """The message renders preformatted, so one source line stays one rendered line."""
+    record = _record_for(
+        "a",
+        outcome=Outcome.FAILED,
+        failures=(FailureRecord(phase="call", message="\n".join(_TRACEBACK_LINES)),),
+    )
+    document = _render([record])
+    assert document.count('<pre class="message">') == 1
+    block = document.split('<pre class="message">', 1)[1].split("</pre>", 1)[0]
+    assert block.splitlines() == [
+        "AssertionError: the checkout total did not match",
+        "&gt; assert total == 3",
+        "E assert 4 == 3",
+        "tests/test_cart.py:12: AssertionError",
+    ]
+
+
 def _hrefs(document: str) -> list[str]:
     """Return every ``href`` value a rendered document carries, in document order."""
     return [remainder.split('"', 1)[0] for remainder in document.split('href="')[1:]]
@@ -224,6 +255,62 @@ def test_the_link_base_defaults_to_the_working_directory(
     other = _hrefs(_render([record], artifacts_root=run_dir, report_dir=elsewhere))
     assert other != explicit
     assert all(not href.startswith("/") and "://" not in href for href in other)
+
+
+_ENCODED_DIRECTORY = "test_cart.py%3A%3Atest_total"
+"""The artifact directory of :data:`_NODEID` as the artifact-name sanitiser names it.
+
+``::`` is percent-escaped once on disk, so a link carrying that name unchanged is decoded a second
+time by the browser and points at a directory that does not exist.
+"""
+
+
+def _encoded_capture(tmp_path: Path) -> tuple[ResultRecord, Path]:
+    """Return a failing record whose artifacts sit under a percent-escaped directory name."""
+    run_dir = tmp_path / "artifacts" / _RUN_ID
+    artifacts = tuple(
+        _write_artifact(run_dir, f"{_ENCODED_DIRECTORY}/{name}", text, kind=kind)
+        for kind, name, text in _CAPTURED_FILES
+    )
+    record = _record(
+        outcome=Outcome.FAILED,
+        artifacts=artifacts,
+        failures=(FailureRecord(phase="call", message="AssertionError: totals differ"),),
+    )
+    return record, run_dir
+
+
+def test_the_traceback_row_links_the_double_encoded_path(tmp_path: Path) -> None:
+    """The traceback row is a link: a twice-encoded href, the once-encoded path as its text."""
+    record, run_dir = _encoded_capture(tmp_path)
+    document = _render([record], artifacts_root=run_dir, report_dir=tmp_path)
+    row = document.split("<dt>traceback</dt>", 1)[1].split("</dd>", 1)[0].strip()
+    assert row.startswith('<dd><a href="')
+    href, _, remainder = row[len('<dd><a href="') :].partition('">')
+    assert remainder.endswith("</a>")
+    link_text = remainder[: -len("</a>")]
+    assert "%253A%253A" in href and "%3A%3A" not in href
+    assert link_text == href.replace("%25", "%")
+    assert (tmp_path / link_text).is_file()
+
+
+def test_a_panel_of_a_test_that_logged_nothing_reports_an_empty_tail(tmp_path: Path) -> None:
+    """Capture that ran and logged nothing says so, and never reports a capture fault."""
+    run_dir = tmp_path / "artifacts" / _RUN_ID
+    artifacts = tuple(
+        _write_artifact(run_dir, f"tests__test_cart.py__a/{name}", text, kind=kind)
+        for kind, name, text in _CAPTURED_FILES
+        if kind != "log_tail"
+    )
+    record = _record_for(
+        "a",
+        outcome=Outcome.FAILED,
+        artifacts=artifacts,
+        failures=(FailureRecord(phase="call", message="AssertionError: no log records"),),
+    )
+    document = _render([record], artifacts_root=run_dir, report_dir=tmp_path)
+    assert "log tail captured no lines" in document
+    assert "log tail unavailable" not in document
 
 
 def test_a_run_with_no_records_states_that_nothing_was_collected() -> None:
@@ -275,3 +362,74 @@ def test_the_report_is_complete_without_javascript() -> None:
     assert "<details" in document
     start = document.index("<html")
     assert "data-foundry-js=" not in document[start : document.index(">", start)]
+
+
+@pytest.mark.parametrize(
+    ("milliseconds", "display"),
+    [
+        (0.0, "0.0 ms"),
+        (0.001, "< 0.01 ms"),
+        (0.04, "0.04 ms"),
+        (0.5, "0.50 ms"),
+        (3.5, "3.5 ms"),
+        (12.5, "12.5 ms"),
+        (999.9, "999.9 ms"),
+        (1000.0, "1.00 s"),
+        (3_600_000.0, "3600.00 s"),
+    ],
+    ids=[
+        "zero",
+        "below-resolution",
+        "two-decimals-milliseconds",
+        "half-millisecond",
+        "milliseconds",
+        "sub-second",
+        "just-under-a-second",
+        "one-second",
+        "one-hour",
+    ],
+)
+def test_a_duration_renders_at_its_own_magnitude(milliseconds: float, display: str) -> None:
+    """Each magnitude gets its own form, so a non-zero measurement never renders as zero."""
+    assert html._format_duration(milliseconds) == display
+    assert (display == "0.0 ms") is (milliseconds == 0.0)
+
+
+def test_a_report_of_one_test_reads_one_test() -> None:
+    """The header's copy is number-aware: one record reads ``1 test``, two read ``2 tests``."""
+    single = _render([_record_for("a")])
+    assert "<span>1 test</span>" in single
+    assert "1 tests" not in single
+    assert "<span>2 tests</span>" in _render([_record_for("a"), _record_for("b")])
+
+
+@pytest.mark.parametrize(
+    ("workers", "span"),
+    [
+        ((), None),
+        (("gw0",), "<span>1 run error</span>"),
+        (("gw0", "gw2", "gw3"), "<span>3 run errors</span>"),
+    ],
+    ids=["no-run-errors", "one-run-error", "three-run-errors"],
+)
+def test_the_header_counts_the_run_errors_only_when_there_are_some(
+    workers: tuple[str, ...], span: str | None
+) -> None:
+    """The header names the run's own errors, and the strip keeps its nine outcomes and no more."""
+    elements: list[object] = [_record_for("a"), *(_run_error(worker) for worker in workers)]
+    assert html.build_context(elements).run_error_count == len(workers)
+    document = _render(elements)
+    header = document[document.index('<header class="report-header">') : document.index("<main>")]
+    if span is None:
+        assert "run error" not in header
+    else:
+        assert span in header
+    assert document.count('<span class="count">') == 9
+
+
+def test_a_control_character_in_a_run_error_is_spelled_out() -> None:
+    """A run error's message reaches the page as escape text, so the document stays plain text."""
+    document = _render([_run_error("gw0", "worker died: \x00bell\x07end")])
+    assert "worker died: \\x00bell\\x07end" in document
+    unprintable = {member for member in document if ord(member) < 0x20 and member not in "\n\t"}
+    assert unprintable == set(), repr(unprintable)

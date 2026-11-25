@@ -6,16 +6,13 @@ not import ``foundry.config`` (AAP 0.4.8) need the same numbers, so ``logging.ca
 definition site here for their default and their bounds. ``tests/unit/test_config_constants.py``
 parses the bounds back out of ``foundry.config.keys.constraint_for`` and compares every ``*_RANGE``
 text with the registry's constraint text byte for byte, so a copy cannot drift from the published
-surface AAP 0.4.9 fixes.
-
-:func:`range_fault_message` is the one wording of a value outside its accepted range, shared by the
-configuration layer and the two capability packages that validate a hand-built policy; AAP 0.4.5
-pins its shape, so a person correcting ``foundry.toml``, an environment variable, a command-line
-option or a policy built inside a test reads the same sentence whichever surface reported the fault.
-
-The module holds immutable constants plus one pure function and imports the standard library alone:
-importing it reads no environment variable, touches no file, configures no logger and mutates
-nothing (AAP 0.4.8 import-time discipline).
+surface AAP 0.4.9 fixes. :func:`range_fault_message` is the one wording of a value outside its
+accepted range, shared by the configuration layer and the two capability packages that validate a
+hand-built policy; AAP 0.4.5 pins its shape, so a person correcting ``foundry.toml``, an environment
+variable, a command-line option or a policy built inside a test reads the same sentence whichever
+surface reported the fault. The module holds immutable constants plus one pure function and imports
+the standard library alone: importing it reads no environment variable, touches no file, configures
+no logger and mutates nothing (AAP 0.4.8 import-time discipline).
 """
 
 from __future__ import annotations

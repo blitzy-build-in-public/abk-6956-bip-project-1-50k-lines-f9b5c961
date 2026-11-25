@@ -14,20 +14,31 @@ mistake the subtraction exists to prevent. Neither arm runs a test: ``--collect-
 cheapest invocation that still boots pytest fully, parses the ``--foundry-*`` option group, resolves
 the configuration and reaches session start and session finish.
 
-**Which clock the budget is read from.** Each invocation is sampled twice: the wall clock
-(``time.perf_counter``) around the child, and the CPU time the child consumed
+**Which clock the budget is read from.** The budget is the one AAP 0.14.2 states -- "<= 150 ms,
+median of 5 ``pytest --collect-only`` runs on a one-test directory, measured against
+``-p no:foundry``" -- so it is read from the wall clock: the median ``elapsed_ms`` of the
+with-plugin arm minus the median of the without-plugin arm, over the interleaved pairs the host did
+not starve (below), and it fails the build. Each invocation is sampled twice: that wall clock
+(``time.perf_counter`` around the child), and the CPU time the child consumed
 (``resource.getrusage(RUSAGE_CHILDREN)``, read as the delta across the call). Both describe the same
 work, and on an idle host they agree to within a millisecond, because both arms are CPU-bound
-processes -- measured here: 466 ms of wall clock against 465 ms of CPU time for arm A. On a shared
+processes -- measured here: 462 ms of wall clock against 461 ms of CPU time for arm A. On a shared
 host they diverge sharply: the child is descheduled, which adds to wall clock and to nothing else.
 Measured on this 2-vCPU host under a parallel batch of agents, the wall-clock delta across identical
-runs moved between 126 ms and 1009 ms while the CPU-time delta stayed inside 125-139 ms, so a budget
-read from wall clock fails for reasons that have nothing to do with the plugin. The budget is
-therefore asserted on the CPU-time delta -- the plugin's own share of the work -- and the wall-clock
-figures are printed beside it on every run so the reader can see how contended the host was. AAP
-0.4.8 forbids import-time I/O, so CPU time is a faithful measure of everything the plugin may do on
-this path; ``tests/unit/test_layering.py`` and the fresh-interpreter guard below bound it statically
-and at run time.
+runs moved between 126 ms and 1009 ms while the CPU-time delta stayed inside 125-139 ms. So the CPU
+time of those very same pairs is printed beside the wall clock on every run and carries a second
+assertion of the same 150 ms ceiling: it is host-insensitive, which keeps a figure naming the
+plugin's own share of the work readable when the host will not give an honest pair. Neither figure
+substitutes for the other -- only the wall clock is the AAP's budget, and only it can show a
+regression that waits rather than computes -- and neither assertion is conditional on the other
+passing.
+
+The premise the CPU figure rests on -- that nothing on the plugin's startup path waits on I/O -- now
+holds: :mod:`foundry` resolves ``__version__`` on first access through a module ``__getattr__``, so
+importing the package reads no distribution metadata (AAP 0.4.8), and
+:func:`test_importing_the_plugin_imports_no_heavy_library` proves from a fresh interpreter that
+``import foundry.plugin`` pulls in none of the heavy libraries either, which leaves the path nothing
+to do but import and register. ``tests/unit/test_layering.py`` bounds the same rule statically.
 
 **This module is the repository's single allowlisted user of the plugin-disable flag.** The static
 scan in ``tests/unit/test_no_dash_p_flag.py`` fails the build on any other occurrence, because a
@@ -60,8 +71,8 @@ all printed beside the figures.
 
 The fresh-interpreter test is the runtime counterpart of AAP 0.4.8's module-scope import rule: it
 asserts what an installed ``import foundry.plugin`` actually pulls in, which no static scan can. No
-sleep is spent and no wall-clock reading is taken -- ``time.perf_counter`` and the kernel's CPU
-accounting are the only clocks (AAP 0.14.3). Every file these tests write is written by a child
+sleep is spent and no calendar is read -- ``time.perf_counter`` measures the interval and the
+kernel's CPU accounting the work (AAP 0.14.3). Every file these tests write is written by a child
 process whose working directory is the ``tmp_path`` project they were given.
 """
 
@@ -88,7 +99,11 @@ __all__: Final[tuple[str, ...]] = ("build_one_test_project",)
 # --- The budget, the sample and the project both arms share ------------------
 
 STARTUP_BUDGET_MS: Final[float] = 150.0
-"""The plugin-startup budget AAP 0.14.2 sets, in milliseconds: the delta may not exceed it."""
+"""The plugin-startup budget AAP 0.14.2 sets, in milliseconds: neither delta may exceed it.
+
+The wall-clock delta is the AAP's own figure and the assertion that enforces it; the CPU-time delta
+of the same pairs is asserted against the same ceiling beside it.
+"""
 
 SAMPLE_COUNT: Final[int] = 5
 """How many timed invocations each arm gets: the count AAP 0.14.2 names for the median."""
@@ -213,11 +228,11 @@ class RunPytest(Protocol):
 class TimedRun:
     """One measured invocation: which arm, what it cost, and what it collected.
 
-    ``cpu_ms`` is what the budget is read from and ``elapsed_ms`` is the wall clock a user waits;
-    both are kept beside the exit code and the collected node ids so the caller can establish that
-    the invocation did the work before the clock is allowed to say anything. ``throttled`` is the
-    CPU-quota throttling this cgroup recorded while the invocation ran, or ``None`` on a host that
-    keeps no such counters.
+    ``elapsed_ms`` is the wall clock AAP 0.14.2 budgets and ``cpu_ms`` the CPU time of the same
+    invocation, reported beside it; both are kept beside the exit code and the collected node ids so
+    the caller can establish that the invocation did the work before a clock is allowed to say
+    anything. ``throttled`` is the CPU-quota throttling this cgroup recorded while the invocation
+    ran, or ``None`` on a host that keeps no such counters.
     """
 
     arm: ArmName
@@ -374,7 +389,11 @@ def _timed_pair(run_pytest: RunPytest, project: Path) -> tuple[TimedRun, TimedRu
 
 
 def test_plugin_startup_stays_inside_the_budget(run_pytest: RunPytest, tmp_path: Path) -> None:
-    """The plugin's startup cost, median of five interleaved pairs, stays inside 150 ms."""
+    """The plugin's startup cost stays inside 150 ms on both clocks, median of five pairs.
+
+    The budget AAP 0.14.2 states is the wall clock, so that is the figure asserted first; the CPU
+    time of the same pairs follows it.
+    """
     project = build_one_test_project(tmp_path)
     honest: list[tuple[TimedRun, TimedRun]] = []
     starved: list[tuple[TimedRun, TimedRun]] = []
@@ -399,32 +418,47 @@ def test_plugin_startup_stays_inside_the_budget(run_pytest: RunPytest, tmp_path:
     with_plugin = [pair[0] for pair in measured]
     without_plugin = [pair[1] for pair in measured]
 
-    samples_a = tuple(run.cpu_ms for run in with_plugin)
-    samples_b = tuple(run.cpu_ms for run in without_plugin)
-    median_a = _median(samples_a)
-    median_b = _median(samples_b)
-    delta = median_a - median_b
-    wall_a = _median(tuple(run.elapsed_ms for run in with_plugin))
-    wall_b = _median(tuple(run.elapsed_ms for run in without_plugin))
+    wall_samples_a = tuple(run.elapsed_ms for run in with_plugin)
+    wall_samples_b = tuple(run.elapsed_ms for run in without_plugin)
+    wall_a = _median(wall_samples_a)
+    wall_b = _median(wall_samples_b)
+    wall_delta = wall_a - wall_b
+    cpu_samples_a = tuple(run.cpu_ms for run in with_plugin)
+    cpu_samples_b = tuple(run.cpu_ms for run in without_plugin)
+    cpu_a = _median(cpu_samples_a)
+    cpu_b = _median(cpu_samples_b)
+    cpu_delta = cpu_a - cpu_b
     substituted = len(measured) - len(honest)
     throttling = describe_quota_throttling(
         [run.throttled for pair in attempts for run in pair if run.throttled is not None]
     )
     print(
-        f"plugin startup: with plugin {median_a:.1f} ms CPU, without {median_b:.1f} ms CPU, "
-        f"delta {delta:.1f} ms (budget {STARTUP_BUDGET_MS:.0f} ms, {SAMPLE_COUNT} pairs); "
-        f"wall clock {wall_a:.1f} ms against {wall_b:.1f} ms, delta {wall_a - wall_b:.1f} ms; "
-        f"pairs the host starved {len(starved)} set aside, {substituted} of the least starved "
-        f"measured after {SAMPLE_COUNT + PAIR_RETRY_BUDGET} pairs; {throttling}"
+        f"plugin startup: wall clock with plugin {wall_a:.1f} ms, without {wall_b:.1f} ms, "
+        f"delta {wall_delta:.1f} ms (AAP 0.14.2 budget {STARTUP_BUDGET_MS:.0f} ms over "
+        f"{SAMPLE_COUNT} pairs); CPU time with plugin {cpu_a:.1f} ms against {cpu_b:.1f} ms, "
+        f"delta {cpu_delta:.1f} ms; pairs the host starved {len(starved)} set aside, "
+        f"{substituted} of the least starved measured after {SAMPLE_COUNT + PAIR_RETRY_BUDGET} "
+        f"pairs; {throttling}"
     )
 
-    # Only the ceiling is asserted: the two arms share the interpreter's start and pytest's boot, so
-    # the difference carries noise of its own and a negative delta is a fast sample, never a fault.
-    assert delta <= STARTUP_BUDGET_MS, (
-        f"plugin startup overhead {delta:.2f} ms exceeds the 150 ms budget "
-        f"(with plugin: {median_a:.2f} ms, without: {median_b:.2f} ms, "
-        f"samples A: {sorted(samples_a)}, samples B: {sorted(samples_b)}; "
-        f"wall clock: with plugin {wall_a:.2f} ms, without {wall_b:.2f} ms; "
+    # Only the ceiling is asserted, on either clock: the two arms share the interpreter's start and
+    # pytest's boot, so the difference carries noise of its own and a negative delta is a fast
+    # sample, never a fault.
+    assert wall_delta <= STARTUP_BUDGET_MS, (
+        f"plugin startup overhead {wall_delta:.2f} ms of wall clock exceeds the 150 ms budget "
+        f"AAP 0.14.2 sets (median of {SAMPLE_COUNT} pytest --collect-only runs against "
+        f"-p no:foundry): with plugin {wall_a:.2f} ms, without {wall_b:.2f} ms, "
+        f"samples A: {sorted(wall_samples_a)}, samples B: {sorted(wall_samples_b)}; "
+        f"CPU time: with plugin {cpu_a:.2f} ms, without {cpu_b:.2f} ms, "
+        f"delta {cpu_delta:.2f} ms; {len(starved)} starved pairs set aside, "
+        f"{substituted} of the least starved measured; {throttling})"
+    )
+    assert cpu_delta <= STARTUP_BUDGET_MS, (
+        f"the plugin's own CPU time, {cpu_delta:.2f} ms, exceeds the 150 ms budget AAP 0.14.2 "
+        f"sets, which no amount of host contention explains (with plugin {cpu_a:.2f} ms, "
+        f"without {cpu_b:.2f} ms, samples A: {sorted(cpu_samples_a)}, "
+        f"samples B: {sorted(cpu_samples_b)}); wall clock: with plugin {wall_a:.2f} ms, "
+        f"without {wall_b:.2f} ms, delta {wall_delta:.2f} ms; "
         f"{len(starved)} starved pairs set aside, {substituted} of the least starved measured; "
         f"{throttling})"
     )

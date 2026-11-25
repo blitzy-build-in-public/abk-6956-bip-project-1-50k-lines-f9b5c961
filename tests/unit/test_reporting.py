@@ -82,6 +82,7 @@ _DOCUMENTED_FIELDS = (
     "failures",
     "artifacts",
     "quarantine",
+    "artifacts_disabled",
 )
 
 
@@ -155,7 +156,8 @@ def test_outcome_exposes_exactly_the_nine_documented_values() -> None:
 
 
 def test_result_record_exposes_the_documented_fields() -> None:
-    assert set(ResultRecord.model_fields) == set(_DOCUMENTED_FIELDS)
+    """The thirteen AAP 0.4.6 fields in their order, then the additive AAP 0.4.7 disabled flag."""
+    assert tuple(ResultRecord.model_fields) == _DOCUMENTED_FIELDS
 
 
 def test_profile_names_cover_the_configuration_enum() -> None:

@@ -1,7 +1,8 @@
 """Deciding which recorded interaction, if any, is the request about to be sent.
 
 Method, path, sorted query and body hash decide a match, in recording order, and a masked query
-value on either side matches any value.
+value on either side matches any value. :func:`match` is the published lookup, and
+``match_interaction`` is the same function under the spelling earlier releases shipped.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ __all__: Final[tuple[str, ...]] = (
     "RequestFingerprint",
     "describe",
     "mask_query",
+    "match",
     "match_interaction",
     "matches_recorded",
     "matching_indices",
@@ -86,12 +88,9 @@ def _values_match(left: str, right: str) -> bool:
     """Return whether two query values match: equal, or either of them the redaction marker.
 
     A masked pair holds the marker instead of the value the client sent, and the two sides of a
-    comparison are masked with the engine of their own run, which need not be the same one: a
-    cassette recorded before a name became secret-bearing, or under a different
-    ``secrets.redact_keys`` set, holds a plaintext value where the lookup holds the marker. Reading
-    the marker as a value that matches any value widens matching only -- no request that matched
-    before stops matching -- and a narrowing rule would invalidate every cassette already recorded,
-    which AAP 0.4.9 forbids without a new major version.
+    comparison are masked with the engine of their own run, which need not be the same one: reading
+    the marker as a value that matches any value widens matching only, so no cassette already
+    recorded is invalidated (AAP 0.4.9).
     """
     return left == right or REDACTED in (left, right)
 
@@ -145,7 +144,7 @@ def matching_indices(
     )
 
 
-def match_interaction(
+def match(
     fp: RequestFingerprint,
     interactions: Sequence[Interaction],
     *,
@@ -169,15 +168,17 @@ def match_interaction(
     return (index, interactions[index])
 
 
+match_interaction = match  # the spelling earlier releases shipped, kept for existing imports
+
+
 def describe(fp: RequestFingerprint) -> str:
     """Return the request as ``"GET /checkout?page=2"``, for a miss diagnostic.
 
     The query is re-encoded with :func:`urllib.parse.urlencode` from the already sorted pairs, so
     one fingerprint always renders the same text, and a redaction marker stays readable as ``***``
     because ``urlencode`` is called with ``safe="*"``, the way
-    :meth:`foundry.obs.redaction.Redactor.url` renders the same target. ``transport.py`` embeds
-    the result in
-    :class:`foundry.core.exceptions.CassetteMissError`.
+    :meth:`foundry.obs.redaction.Redactor.url` renders the same target; ``transport.py`` embeds the
+    result in :class:`foundry.core.exceptions.CassetteMissError`.
 
     Returns:
         The one-line description, with the query omitted when the request carried none.

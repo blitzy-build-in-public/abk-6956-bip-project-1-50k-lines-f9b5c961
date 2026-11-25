@@ -4,8 +4,8 @@
 primitive ``eventually(fn, *, timeout, interval, sleep=time.sleep)``, so a test waits for a live
 dependency without assembling a loop of its own. :meth:`FoundryPoll.eventually` is a thin adapter
 over :func:`foundry.assertions.eventually` and holds no polling logic of its own -- no deadline
-arithmetic, no poll counter, no failure message -- and an empty adapter is what makes the helper and
-the fixture produce one message shape.
+arithmetic, no poll counter, no failure message -- which is what makes the helper and the fixture
+produce one message shape.
 
 **Why the default is the real sleeper.** ``sleep`` defaults to :func:`time.sleep`, because a suite
 that polls a live service still has to wait for it. A test that cannot afford the wait passes its
@@ -13,14 +13,13 @@ own callable per call -- a recording fake, or a frozen clock's ``advance`` -- wh
 sleep in Foundry's suite under the 100 ms cap.
 
 **Why the clock is injectable but never injected.** ``clock`` is accepted per call and defaults to
-``None``, meaning the monotonic clock, so this fixture never requests ``foundry_clock``: a frozen
-clock wired in by default would make a suite polling a real service give up on its first poll. A
-supplied clock also keeps such a test terminating, because the helper stops on its
-``ceil(timeout / interval) + 2`` poll budget when the clock never advances.
-
-**Import cost.** The :mod:`foundry.assertions` import sits inside :meth:`FoundryPoll.eventually`, so
-registering the fixture during ``pytest_configure`` pulls none of the assertion helpers into the
-plugin's import graph. There is no module-level state and no background thread.
+``None``, the monotonic clock, so this fixture never requests ``foundry_clock``: a frozen clock
+wired in by default would make a suite polling a real service give up on its first poll. A supplied
+clock also keeps such a test terminating, because the helper stops on its ``ceil(timeout / interval)
++ 2`` poll budget when the clock never advances. The :mod:`foundry.assertions` import sits inside
+:meth:`FoundryPoll.eventually`, so registering the fixture during ``pytest_configure`` pulls none of
+the assertion helpers into the plugin's import graph. There is no module-level state and no
+background thread.
 """
 
 from __future__ import annotations
@@ -52,7 +51,6 @@ class FoundryPoll:
     The object exists so a test can hold the polling primitive as a fixture instead of importing
     :func:`foundry.assertions.eventually` directly. Beyond that it is deliberately empty: the two
     fields are the per-call defaults, and :meth:`eventually` forwards everything to the helper.
-
     Frozen and slotted, because a test that wants a different sleeper or a frozen clock passes it to
     the call rather than reassigning a field, so one test can never change how a later one waits.
 

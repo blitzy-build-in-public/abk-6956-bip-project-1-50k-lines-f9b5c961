@@ -41,8 +41,10 @@ from foundry.data import (
     build_parameters,
     case_stem,
     expand_axes,
+    generate_cases,
     load_cases,
     load_matrix,
+    load_row_schema,
     loader_for,
     matrix_case_id,
     parametrize,
@@ -170,6 +172,27 @@ def test_the_four_loaders_agree_on_ids_and_values(
             assert actual.id == expected.id, name
             assert actual.row_index == expected.row_index, name
             assert dict(actual.values) == dict(expected.values), (name, actual.id)
+
+
+@pytest.mark.parametrize("name", TABULAR_FILES)
+def test_a_string_path_loads_what_a_path_loads(name: str, fixtures_dir: Path) -> None:
+    """A ``str`` argument names the same file a ``Path`` does, case for case.
+
+    ``foundry_data.cases`` hands a data file name through as a string, so a bare string reaching
+    the composition entry point is the ordinary mistake: it must read the file instead of failing
+    on a string's missing ``suffix``, and no builtin may leave ``foundry.data`` for an argument of
+    an accepted type (AAP 0.14.3).
+    """
+    from_path = load_cases(fixtures_dir / name)
+    from_string = load_cases(str(fixtures_dir / name))
+    assert from_string == from_path
+    assert [case.id for case in from_string.cases] == [case.id for case in from_path.cases]
+
+
+def test_a_string_path_expands_the_matrix_a_path_expands(fixtures_dir: Path) -> None:
+    """``load_matrix`` accepts the string form on the same terms as ``load_cases``."""
+    matrix_path = fixtures_dir / "matrix.yaml"
+    assert load_matrix(str(matrix_path)).cases == load_matrix(matrix_path).cases
 
 
 # --- The case model --------------------------------------------------------
@@ -464,6 +487,63 @@ def test_a_ragged_row_reports_its_line_and_its_missing_column(fixtures_dir: Path
     assert "(column 'expected_total')" in message
 
 
+def test_a_relative_data_path_finds_the_sibling_sidecar(
+    tmp_path: Path, fixtures_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative data path plus its data directory reads the sidecar beside the data file.
+
+    The data directory is the box the sidecar must stay inside, so deriving the schema path from
+    the relative data path as written would join that path onto the data directory a second time
+    and report the schema missing for a document that sits next to the data file.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    data_path = _write_table_with_schema(
+        data_dir, "relative", f"{_CSV_HEADER}\n{_VALID_ROW}\n", fixtures_dir / SCHEMA_FIXTURE
+    )
+    monkeypatch.chdir(tmp_path)
+
+    schema = load_row_schema(Path("data") / data_path.name, base_dir=Path("data"))
+
+    assert schema is not None
+    assert schema["title"] == "Foundry example data row"
+    properties = schema["properties"]
+    assert isinstance(properties, Mapping)
+    assert frozenset(properties) == DOCUMENTED_COLUMNS
+
+    case_set = load_cases(Path("data") / data_path.name, schema_dir=Path("data"))
+    assert [dict(case.values) for case in case_set.cases] == [
+        {
+            "case_id": "C-001",
+            "currency": "EUR",
+            "tier": "bronze",
+            "quantity": "2",
+            "unit_price": "10.00",
+            "expected_total": "20.00",
+        }
+    ]
+
+
+def test_a_sidecar_outside_the_data_directory_is_still_refused(
+    tmp_path: Path, fixtures_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolving a relative data path keeps containment: a schema outside it is refused."""
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escaped = _write_table_with_schema(
+        outside, "escaped", f"{_CSV_HEADER}\n{_VALID_ROW}\n", fixtures_dir / SCHEMA_FIXTURE
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ContractError) as excinfo:
+        load_row_schema(Path("outside") / escaped.name, base_dir=Path("inside"))
+
+    assert "outside the schema directory" in str(excinfo.value)
+    assert excinfo.value.json_path == "$"
+
+
 # --- The extension registry ------------------------------------------------
 
 
@@ -543,6 +623,52 @@ def test_parametrize_binds_every_case_to_the_named_argument(fixtures_dir: Path) 
     assert [parameter.id for parameter in recorder.parameters] == [
         f"cases-{index}" for index in range(ROWS_PER_TABLE)
     ]
+
+
+# --- The parametrisation seam the plugin delegates to ----------------------
+
+
+def _data_marker(*args: object, **kwargs: object) -> pytest.Mark:
+    """Return the ``foundry_data`` marker the plugin hands the delegation for one test."""
+    return pytest.mark.foundry_data(*args, **kwargs).mark
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "argname"),
+    [
+        pytest.param({}, "case", id="default-argument"),
+        pytest.param({"argname": "row"}, "row", id="named-argument"),
+    ],
+)
+def test_generate_cases_binds_the_cases_of_the_marker_file(
+    fixtures_dir: Path, kwargs: dict[str, str], argname: str
+) -> None:
+    """The delegation resolves the marker's name against ``data.dir`` and binds one case each."""
+    recorder = _ParametrizeRecorder()
+    marker = _data_marker("cases.csv", **kwargs)
+    generate_cases(recorder, marker=marker, data_dir=fixtures_dir, strict=True)
+    assert recorder.argnames == [argname]
+    assert [parameter.id for parameter in recorder.parameters] == [
+        f"cases-{index}" for index in range(ROWS_PER_TABLE)
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        pytest.param(_data_marker(), id="no-positional"),
+        pytest.param(_data_marker("cases.csv", "cases.json"), id="two-positionals"),
+        pytest.param(_data_marker(3), id="non-string-name"),
+        pytest.param(_data_marker(""), id="blank-name"),
+        pytest.param(_data_marker("cases.csv", strict=True), id="foreign-keyword"),
+        pytest.param(_data_marker("cases.csv", argname=3), id="non-string-argname"),
+        pytest.param(_data_marker("cases.csv", argname=" "), id="blank-argname"),
+    ],
+)
+def test_a_malformed_data_marker_is_a_usage_error(marker: pytest.Mark, fixtures_dir: Path) -> None:
+    """Every shape but one is refused naming the accepted form, never silently ignored."""
+    with pytest.raises(pytest.UsageError, match="foundry_data"):
+        generate_cases(_ParametrizeRecorder(), marker=marker, data_dir=fixtures_dir, strict=True)
 
 
 # --- YAML safety -----------------------------------------------------------

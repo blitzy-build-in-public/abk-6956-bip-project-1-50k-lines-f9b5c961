@@ -13,18 +13,16 @@ named by its percent-encoded node id, so parallel workers never contend for a fi
 its files or only ``manifest.json``. The run id is the plugin's -- read out of ``config.stash``
 through the typed key :data:`foundry.obs.artifacts.SESSION_RUN_ID` -- so the fixture, the terminal
 banner and the directory name one value (AAP 0.4.3); one is minted through
-:func:`foundry.core.ids.run_id` only where no session state exists, which keeps a suite that
-registers this module without the plugin working.
+:func:`foundry.core.ids.run_id` only where no session state exists, which keeps a suite registering
+this module without the plugin working. That key lives in ``foundry.obs`` because
+``foundry.fixtures`` may not import ``foundry.execution`` (AAP 0.4.8).
 
-A directory that cannot be written disables capture for the run: the fault is reported once at
-``WARNING`` on the ``foundry`` logger, every later ``write`` returns ``None`` and no outcome or exit
-code changes, and a path escaping the run directory still surfaces as
-:class:`foundry.core.exceptions.ArtifactError`. That key lives in ``foundry.obs``, not beside the
-session state in ``foundry.execution``, because ``foundry.fixtures`` may not import it (AAP 0.4.8).
-
-``foundry.plugin`` imports this module during ``pytest_configure`` inside the 150 ms budget, so
-module scope imports only ``pytest`` and the standard library: Foundry imports sit inside the
-fixture that first needs them, and annotation names under ``TYPE_CHECKING``.
+**Failure isolation.** An artifacts directory that cannot be written disables capture for the run:
+the writer reports the fault once at ``WARNING`` on the ``foundry`` logger, its later writes return
+``None``, and no test outcome or exit code changes. A path escaping the run directory still surfaces
+as :class:`foundry.core.exceptions.ArtifactError`, and no directory is created eagerly. Module scope
+imports only ``pytest`` and the standard library inside the 150 ms budget, Foundry imports sitting
+inside the fixture that first needs them.
 """
 
 from __future__ import annotations
@@ -48,9 +46,10 @@ class FoundryArtifacts(Protocol):
     :class:`foundry.obs.artifacts.ArtifactWriter` satisfies them structurally, so a test can
     annotate its parameter with this protocol without importing :mod:`foundry.obs`, exactly as
     :class:`foundry.core.types.ClockLike` does for the poller. ``dir_for`` is the session-scoped
-    half, answering with the directory of any collected item; ``write`` and ``manifest`` are the
-    per-test half, addressing the test the writer is bound to, so an unbound writer raises
-    rather than guessing.
+    half: it answers with the directory of any collected item. ``write`` and ``manifest`` are the
+    per-test half: they address the test that is running, so a test body writes its own evidence and
+    reads back its own artifacts without naming a node id, and a call with no test running raises
+    rather than guessing a directory.
     """
 
     def dir_for(self, nodeid: str) -> Path:
@@ -74,7 +73,7 @@ class FoundryArtifacts(Protocol):
         name: str | None,
         data: str | bytes,
     ) -> ArtifactRef | None:
-        """Redact one payload and write it as an artifact of the bound test.
+        """Redact one payload and write it as an artifact of the test that is running.
 
         Its reference comes back -- kind, run-relative ``path``, ``bytes`` and ``sha256`` -- or
         ``None`` when capture is disabled or the write failed, which keeps a capture fault out of
@@ -88,18 +87,28 @@ class FoundryArtifacts(Protocol):
             data: The payload, as text or as bytes decoded as UTF-8 with replacement.
 
         Raises:
-            foundry.core.exceptions.ArtifactError: The writer is not bound to a test, the name is
-                not a file inside the test's directory, or the path escapes the run directory.
-            foundry.core.exceptions.FoundryError: ``kind`` has no file name and ``name`` is None.
+            foundry.core.exceptions.ArtifactError: No test is capturing artifacts, so there is no
+                per-test directory to write into; ``dir_for(nodeid)`` and ``for_node(nodeid)``
+                address one test's artifacts from outside a test body. Also raised when the name is
+                not a file inside the test's directory, or the target path escapes the run
+                directory.
+            foundry.core.exceptions.FoundryError: ``kind`` has no file name and ``name`` is
+                ``None``, so there is no file to write.
         """
         ...
 
     @property
     def manifest(self) -> tuple[ArtifactRef, ...]:
-        """Return the bound test's artifacts, one reference per file, sorted by kind and path.
+        """Return the artifacts written for the test that is running, sorted by kind and path.
 
-        The tuple is empty before anything was written and for a writer bound to no test; the
-        ordering is what keeps two runs byte-identical.
+        Returns:
+            One reference per file this run wrote for the test in flight, in artifact order, or
+            ``()`` before anything was written and for a run whose capture is disabled. The ordering
+            is what keeps two runs byte-identical.
+
+        Raises:
+            foundry.core.exceptions.ArtifactError: No test is capturing artifacts, so no test's
+                manifest can be named.
         """
         ...
 
@@ -151,11 +160,15 @@ def foundry_artifacts(
 ) -> FoundryArtifacts:
     """Return the run's writer, typed as :class:`FoundryArtifacts`, for its artifact tree.
 
-    Session scoped: one writer per run, holding the root the run's per-test directories hang
-    from. It is built from the resolved configuration and the run id alone -- no clock reading,
-    no filesystem access -- so constructing it is free and no directory exists until a test asks
-    for one, which keeps the unwritable-directory state observable rather than raised.
-
+    Session scoped: one writer per run, holding the root the run's per-test directories hang from.
+    It is built from the resolved configuration and the run id alone -- no clock reading, no
+    filesystem access -- so constructing it is free and no directory exists until a test asks for
+    one, which keeps the unwritable-directory state observable rather than raised. ``dir_for``
+    addresses any collected item by node id. ``write`` and ``manifest`` answer for the test that is
+    running: called from a test body they write into that test's own directory, so the reference
+    also appears in its ``manifest.json`` and in the record's ``artifacts[]``, and in a run whose
+    capture is disabled they record nothing. Called with no test running at all they raise
+    :class:`foundry.core.exceptions.ArtifactError` naming that, rather than guessing a directory.
     Redaction is wired in twice on purpose: ``secrets.redact_keys`` widens the header and query
     deny-lists :class:`foundry.obs.redaction.Redactor` always applies, and the writer scrubs the
     payload text of every artifact it writes, so a configured secret has no route onto the disk,

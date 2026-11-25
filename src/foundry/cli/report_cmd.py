@@ -105,12 +105,11 @@ def compare_command(base: Path, new: Path, *, as_json: bool = False) -> int:
     BASE is the baseline ``results.json`` and NEW the newer one, both written by a Foundry run. The
     three groups print in the fixed order Newly failing, Newly passing, Still failing (AAP 0.7.4),
     each with its size and its node ids in ascending order, and an empty group prints ``(none)`` so
-    that all three are always visible.
-
-    Raises: foundry.core.exceptions.DataError: Either path is missing, is a directory, cannot be
-    decoded as UTF-8, or does not hold a Foundry result document. Deliberately not caught here: the
-    command line maps it to exit code ``2`` with the message on stderr and nothing on stdout (AAP
-    0.4.4), and :func:`foundry.cli.main.main` is the one place that mapping is stated.
+    that all three are always visible. Raises: foundry.core.exceptions.DataError: Either path is
+    missing, is a directory, cannot be decoded as UTF-8, or does not hold a Foundry result document.
+    Deliberately not caught here: the command line maps it to exit code ``2`` with the message on
+    stderr and nothing on stdout (AAP 0.4.4), and :func:`foundry.cli.main.main` is the one place
+    that mapping is stated.
     """
     diff = diff_files(base, new)
     if as_json:

@@ -1,12 +1,13 @@
 """The published surface as an executable contract: fixed names, keys, exit codes and options.
 
 AAP 0.4.9 fixes a set of names for ``0.1.0`` -- addable, never renamed and never removed -- and
-AAP 0.13.2 requires every public name to carry a docstring and every configuration key to be visible
-through ``foundry config show``. This module is the executable form of both, one group per contract
-source: AAP 0.4.3 (fixtures, client surface, assertions, enumerations, exceptions, version),
-AAP 0.4.4 (the subcommands and their options), AAP 0.4.5 (the 28 keys, both directions, through the
-command line), AAP 0.4.6 (the record fields and the nine outcomes) and AAP 0.4.9 (the direction of
-the promise: a removal or rename always fails, while an addition is reported).
+AAP 0.13.2 requires every public name to carry a docstring. This module is the executable form of
+both, one group per contract source: AAP 0.4.3 (fixtures, client surface, assertions,
+enumerations, exceptions, version), AAP 0.4.4 (the subcommands and their options), AAP 0.4.6 (the
+record fields and the nine outcomes) and AAP 0.4.9 (the direction of the promise: a removal or
+rename always fails, while an addition is reported). AAP 0.4.5's 28 keys, compared in both
+directions through ``foundry config show``, are the same contract in their own module,
+``tests.plugin.test_public_contract_keys``, which keeps this one inside AAP 0.14.2's 700 lines.
 
 Introspection is legitimate because the contract *is* the surface, with one exception: AAP 0.14.3
 forbids a capability that exists only in a unit test, so one inner test driven by ``pytester``
@@ -99,8 +100,10 @@ RESULT_RECORD_KEYS: Final[tuple[str, ...]] = (
     "failures",
     "artifacts",
     "quarantine",
+    "artifacts_disabled",
 )
-"""The thirteen fields a result record carries, in the order AAP 0.4.6 tabulates them."""
+"""The thirteen fields AAP 0.4.6 publishes, in its order, plus the additive ``artifacts_disabled``
+field AAP 0.4.7 requires on every record of a run whose artifact directory could not be written."""
 
 RUN_ERROR_KEYS: Final[tuple[str, ...]] = (
     "record_type",
@@ -110,38 +113,6 @@ RUN_ERROR_KEYS: Final[tuple[str, ...]] = (
     "message",
 )
 """The five fields of a run-error element, the second kind ``results.json`` holds (AAP 0.4.6)."""
-
-CONFIG_KEYS: Final[tuple[str, ...]] = (
-    "profile",
-    "http.base_url",
-    "http.timeout",
-    "http.headers",
-    "http.retries.max_attempts",
-    "http.retries.backoff_base",
-    "http.retries.backoff_max",
-    "http.retries.retry_on",
-    "http.auth.strategy",
-    "http.auth.token_env",
-    "http.auth.user_env",
-    "http.auth.password_env",
-    "http.auth.header_name",
-    "http.auth.header_value_env",
-    "artifacts.dir",
-    "artifacts.keep_passed",
-    "reporting.html",
-    "reporting.json",
-    "data.dir",
-    "data.schema_strict",
-    "cassette.dir",
-    "cassette.mode",
-    "execution.retries",
-    "execution.timeout",
-    "execution.quarantine_mode",
-    "secrets.redact_keys",
-    "logging.level",
-    "logging.capture_lines",
-)
-"""The 28 dotted configuration keys of AAP 0.4.5, row for row and in that table's order."""
 
 EXCEPTIONS: Final[Mapping[str, tuple[str, tuple[str, ...]]]] = {
     "FoundryError": ("Exception", ("message", "hint")),
@@ -358,22 +329,6 @@ def _public_names(module: Any) -> tuple[str, ...]:
     )
 
 
-def _flatten(document: Mapping[str, Any], *, prefix: str = "") -> dict[str, Any]:
-    """Return ``document`` as dotted leaves, treating a documented key's own mapping as one leaf.
-
-    The key set says where a document stops nesting: the empty ``http.headers`` table is one leaf,
-    and a group no key declares keeps nesting, so the comparison bites in both directions.
-    """
-    leaves: dict[str, Any] = {}
-    for name, value in document.items():
-        dotted = f"{prefix}{name}"
-        if isinstance(value, Mapping) and dotted not in CONFIG_KEYS:
-            leaves.update(_flatten(value, prefix=f"{dotted}."))
-        else:
-            leaves[dotted] = value
-    return leaves
-
-
 def _help_text(*path: str) -> str:
     """Return the ``--help`` text of the command at ``path``, failing if it cannot be printed."""
     result = CliRunner().invoke(foundry.cli.main.build_group(), [*path, "--help"])
@@ -474,7 +429,7 @@ def test_all_twelve_fixtures_resolve_in_a_real_run(
 
 
 def test_result_record_field_set(pytester: pytest.Pytester, repo_root: Path) -> None:
-    """AAP 0.4.6: every record carries the thirteen documented fields; an extra one is additive.
+    """AAP 0.4.6: every record carries the thirteen documented fields, plus the AAP 0.4.7 flag.
 
     The frozen models are checked beside the written document, so a renamed field fails here too.
     """
@@ -567,41 +522,6 @@ def test_exception_re_exports_and_version() -> None:
     assert foundry.__version__ == "0.1.0", (
         f"foundry.__version__ is {foundry.__version__!r}; AAP 0.4.3 publishes '0.1.0' for this "
         "release, and `foundry --version` prints it"
-    )
-
-
-def test_configuration_key_set_matches_the_documented_table(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_foundry_env: None
-) -> None:
-    """AAP 0.4.5, AAP 0.13.2: the 28 keys, compared in both directions through the command line.
-
-    The command runs in an empty directory with no ``FOUNDRY_*`` variable, so it prints the field
-    defaults. A missing key and an undocumented key each fail, and the provenance document covers
-    the same leaf set, because AAP 0.4.5 promises a source per key.
-    """
-    monkeypatch.chdir(tmp_path)
-    cli = foundry.cli.main.build_group()
-    result = CliRunner().invoke(cli, ["config", "show", "--format", "json"])
-    assert result.exit_code == 0, (
-        f"`foundry config show --format json` exited {result.exit_code}:\n{result.output}"
-    )
-    document = json.loads(result.output)
-    assert isinstance(document, dict), type(document).__name__
-    leaves = _flatten(document["resolved"])
-    missing = sorted(set(CONFIG_KEYS) - set(leaves))
-    undocumented = sorted(set(leaves) - set(CONFIG_KEYS))
-    assert not missing, (
-        f"`config show` does not resolve {missing}, which AAP 0.4.5 publishes as configuration keys"
-    )
-    assert not undocumented, (
-        f"`config show` resolves {undocumented}, which no AAP 0.4.5 key declares: a key is part of "
-        "the published surface, and an undocumented one is invisible to a consumer"
-    )
-    sources = document["sources"]
-    assert sorted(sources) == sorted(leaves), (
-        "the provenance document does not cover exactly the resolved keys (AAP 0.4.5 promises a "
-        f"source for every key): missing={sorted(set(leaves) - set(sources))} "
-        f"extra={sorted(set(sources) - set(leaves))}"
     )
 
 

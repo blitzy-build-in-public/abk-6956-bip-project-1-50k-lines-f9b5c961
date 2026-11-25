@@ -13,7 +13,7 @@ from typing import Final
 
 import httpx
 
-from foundry.cassette.matcher import RequestFingerprint, describe, mask_query, match_interaction
+from foundry.cassette.matcher import RequestFingerprint, describe, mask_query, match
 from foundry.cassette.models import (
     CassetteDocument,
     Interaction,
@@ -305,9 +305,7 @@ class ReplayTransport(httpx.BaseTransport):
                 touched on the way here.
         """
         fingerprint = fingerprint_from_request(request, redactor=self._redactor)
-        found = match_interaction(
-            fingerprint, self._interactions, consumed=self._consumed.get(fingerprint, 0)
-        )
+        found = match(fingerprint, self._interactions, consumed=self._consumed.get(fingerprint, 0))
         if found is None:
             return self._delegate_or_raise(request, fingerprint)
         _, interaction = found

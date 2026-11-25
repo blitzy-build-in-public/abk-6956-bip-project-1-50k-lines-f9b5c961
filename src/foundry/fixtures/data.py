@@ -195,12 +195,10 @@ def foundry_data(
 
     Function scoped (AAP 0.4.3), so every test that requests the fixture gets a loader built from
     the configuration resolved for it, and nothing is shared with the next test or with another
-    xdist worker.
-
-    The loader reads two settings and nothing else: ``data.dir`` is the root every name resolves
-    against -- resolved against pytest's invocation directory when it is relative -- and
-    ``data.schema_strict`` decides whether a column the sidecar schema does not declare is a fault
-    (AAP 0.4.5). The resolved directory doubles as the schema containment root, so a data file
+    xdist worker. The loader reads two settings and nothing else: ``data.dir`` is the root every
+    name resolves against -- resolved against pytest's invocation directory when it is relative --
+    and ``data.schema_strict`` decides whether a column the sidecar schema does not declare is a
+    fault (AAP 0.4.5). The resolved directory doubles as the schema containment root, so a data file
     cannot name a schema document anywhere else on the disk. ``foundry_config`` is requested as an
     argument rather than read from a session stash, which is what lets a project override the public
     fixture and have this fixture read the overridden value.

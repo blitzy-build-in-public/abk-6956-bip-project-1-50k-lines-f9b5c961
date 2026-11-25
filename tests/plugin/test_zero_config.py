@@ -71,6 +71,15 @@ _ARTIFACT_RECORD: Final[str] = "artifacts.json"
 A run id, the run directory it named and the per-test directory ``dir_for`` answered with.
 """
 
+_PUBLISHED_MODULE: Final[str] = "test_zero_config_published_write"
+"""File name of the inner module that drives the published ``write`` and ``manifest`` members."""
+
+_PUBLISHED_RECORD: Final[str] = "published-write.json"
+"""What that inner module writes for the outer assertions to read.
+
+The artifact the published ``write`` member recorded, and the manifest it read back.
+"""
+
 _EVENTS_MODULE: Final[str] = "test_zero_config_events"
 """File name of the inner module run under a conftest that records the Foundry log."""
 
@@ -163,6 +172,37 @@ def test_zero_config_artifacts(foundry_artifacts, foundry_run_id, request) -> No
     )
 '''
 """The inner test of the run identity and the per-test artifact directory (AAP 0.4.6)."""
+
+_PUBLISHED_MODULE_SOURCE: Final[str] = '''"""Drive the published write and manifest members."""
+
+import json
+import pathlib
+
+
+def test_zero_config_published_write(foundry_artifacts) -> None:
+    """AAP 0.4.3: ``write`` returns a reference to a file in this test's own directory."""
+    reference = foundry_artifacts.write("stdout", None, "published write")
+    assert reference is not None, "the published write member returned no reference"
+    assert reference.kind == "stdout", reference
+    assert pathlib.PurePosixPath(reference.path).name == "stdout.log", reference
+    matches = sorted(pathlib.Path("artifacts").glob(f"*/{reference.path}"))
+    assert len(matches) == 1, f"the reference {reference.path!r} names no file on disk: {matches}"
+    assert matches[0].read_text(encoding="utf-8") == "published write"
+    manifest = foundry_artifacts.manifest
+    assert reference in manifest, f"the written artifact is missing from {manifest}"
+    pathlib.Path(__file__).with_name("published-write.json").write_text(
+        json.dumps(
+            {
+                "path": reference.path,
+                "manifest": [entry.path for entry in manifest],
+                "directory": str(matches[0].parent.name),
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+'''
+"""The inner test of the published ``write`` and ``manifest`` members (AAP 0.4.3)."""
 
 _EVENTS_MODULE_SOURCE: Final[str] = '''"""A plain passing test that requests nothing."""
 
@@ -398,3 +438,42 @@ def test_no_config_file_logs_a_debug_line(
     result.assert_outcomes(passed=1)
     lines = (pytester.path / _EVENT_RECORD).read_text(encoding="utf-8").splitlines()
     assert _NO_CONFIG_LINE in [line.strip() for line in lines]
+
+
+def test_the_published_write_and_manifest_members_work(
+    pytester: pytest.Pytester, clean_foundry_env: None
+) -> None:
+    """AAP 0.4.3: ``write`` and ``manifest`` answer for the test in flight, file and record alike.
+
+    The inner test drives both members exactly as the fixture table publishes them -- no node id and
+    no unpublished member anywhere in it. ``artifacts.keep_passed`` then keeps what a passing test
+    wrote, so the file and its record entry are still readable after the run, and the option is the
+    run's only configuration, which keeps this on the zero-configuration surface.
+    """
+    pytester.makepyfile(**{_PUBLISHED_MODULE: _PUBLISHED_MODULE_SOURCE})
+    result = pytester.runpytest("--foundry-artifacts.keep_passed", "true")
+    assert result.ret == 0
+    result.assert_outcomes(passed=1)
+
+    recorded = _read_json(pytester.path / _PUBLISHED_RECORD)
+    assert isinstance(recorded, dict)
+    relative = recorded["path"]
+    assert isinstance(relative, str)
+    assert Path(relative).name == "stdout.log", relative
+    assert recorded["manifest"] == [relative], recorded
+
+    records = _read_json(pytester.path / "results.json")
+    assert isinstance(records, list)
+    record = records[0]
+    assert isinstance(record, dict)
+    run_id = record["run_id"]
+    assert isinstance(run_id, str)
+    written = pytester.path / "artifacts" / run_id / relative
+    assert written.is_file(), f"the write member recorded {relative!r} but wrote no such file"
+    assert written.parent.parent == pytester.path / "artifacts" / run_id
+    assert written.parent.name == recorded["directory"]
+    assert _PUBLISHED_MODULE in written.parent.name, written.parent.name
+    for forbidden in _HIDDEN_NODEID_CHARACTERS:
+        assert forbidden not in written.parent.name, written.parent.name
+    listed = [{"kind": entry["kind"], "path": entry["path"]} for entry in record["artifacts"]]
+    assert {"kind": "stdout", "path": relative} in listed, listed

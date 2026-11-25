@@ -1,10 +1,9 @@
 """Per-test artifact capture: the layout, the redaction and the module's one filesystem write.
 
 A run records each test's artifacts under ``artifacts/<run_id>/<sanitized-nodeid>/`` (AAP 0.4.6)
-through :class:`ArtifactWriter`, the only write site here: node ids are percent-encoded and
-never redacted, and payload text passes through :class:`foundry.obs.redaction.Redactor` (AAP
-0.3.2), with a failed write disabling capture at ``WARNING`` (AAP 0.4.7). Importing it binds
-names only (AAP 0.4.8).
+through :class:`ArtifactWriter`: node ids are percent-encoded and never redacted, and payload text
+passes through :class:`foundry.obs.redaction.Redactor` (AAP 0.3.2), a failed write disabling
+capture at ``WARNING`` (AAP 0.4.7). Importing it binds names only (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -101,8 +100,9 @@ class _WriterState:
 class ArtifactWriter:
     """Write, redact and account for one run's per-test artifacts (AAP 0.7.1).
 
-    Every writing method is total: a failing write disables capture and returns ``None`` (AAP
-    0.4.7), ``ArtifactError`` being the one exception raised.
+    Every writing method is total, a failing write disabling capture and returning ``None``
+    (AAP 0.4.7); ``ArtifactError`` is the one exception raised. A writer bound to one test writes
+    into its directory, and the session-scoped writer answers for the test in flight.
     """
 
     def __init__(
@@ -152,14 +152,25 @@ class ArtifactWriter:
 
     @property
     def manifest(self) -> tuple[ArtifactRef, ...]:
-        """Return the artifacts written for the bound test, sorted by ``(kind, path)``."""
+        """Return the artifacts written for one test, sorted by ``(kind, path)``.
+
+        A writer bound to one test answers for it; the session-scoped writer answers for the test
+        in flight, which is the published member ``foundry_artifacts.manifest`` (AAP 0.4.3).
+
+        Raises:
+            ArtifactError: The writer is session scoped and no test is capturing artifacts.
+        """
+        if self._nodeid is None:
+            if self._state.disabled:
+                return ()
+            return self._scoped().manifest
         return tuple(sorted(self._refs.values(), key=lambda ref: (ref.kind, ref.path)))
 
     def ensure_run_dir(self) -> bool:
         """Create this run's ``artifacts/<run_id>/`` directory and report whether capture is on.
 
-        The one place the run directory is made; a directory that cannot be created is AAP 0.4.7's
-        "artifacts directory not writable" row, reported once at ``WARNING``.
+        A directory that cannot be created is AAP 0.4.7's "artifacts directory not writable" row,
+        reported once at ``WARNING``.
         """
         if self._state.disabled:
             return False
@@ -197,11 +208,49 @@ class ArtifactWriter:
         derived._state = self._state
         return derived
 
+    def _scoped(self) -> ArtifactWriter:
+        """Return the writer the published members address for the test in flight.
+
+        ``self`` when this writer is already bound to one test, which is what keeps the delegation
+        from recursing. The session-scoped writer answers through the bound writer the driver
+        publishes for the running item (AAP 0.4.8), so ``foundry_artifacts.write`` and
+        ``foundry_artifacts.manifest`` address the caller's own test directory as AAP 0.4.3
+        publishes them, and the reference lands in that test's manifest and result record.
+
+        Raises:
+            ArtifactError: No test is capturing artifacts, so no per-test directory exists to write
+                into; ``dir_for(nodeid)`` and ``for_node(nodeid)`` address one test from outside a
+                test body.
+        """
+        if self._nodeid is not None:
+            return self
+        writer = active_writer()
+        if writer is None or writer is self:
+            raise ArtifactError(
+                "no test is capturing artifacts, so the session-scoped writer has no test to "
+                "write for",
+                attempted_path=self._run_dir,
+                run_dir=self._run_dir,
+                hint=(
+                    "the session-scoped writer answers write and manifest for the test in flight, "
+                    "from inside a test body; dir_for(nodeid) and for_node(nodeid) address one "
+                    "test's artifacts from anywhere else"
+                ),
+            )
+        return writer
+
     def write(self, kind: ArtifactKind, name: str | None, data: str | bytes) -> ArtifactRef | None:
         """Redact ``data`` and write it as one artifact of the bound test (AAP 0.4.7).
 
-        The reference comes back, or ``None`` while capture is disabled.
+        The reference comes back, or ``None`` while capture is disabled (AAP 0.4.3).
+
+        Raises:
+            ArtifactError: The writer is session scoped and no test is capturing artifacts.
         """
+        if self._nodeid is None:
+            if self._state.disabled:
+                return None
+            return self._scoped().write(kind, name, data)
         source = _decode(data)
         scrubbed = self._redactor.text(source)
         return self._store(kind, name, scrubbed, redacted=scrubbed != source)
@@ -209,9 +258,14 @@ class ArtifactWriter:
     def write_json(
         self, kind: ArtifactKind, payload: object, name: str | None = None
     ) -> ArtifactRef | None:
-        """Redact a JSON-shaped payload and write it as indented, key-sorted JSON."""
+        """Redact a JSON payload and write it as indented, key-sorted JSON.
+
+        Raises ArtifactError when the writer is session scoped and no test is capturing artifacts.
+        """
         if self._state.disabled:
             return None
+        if self._nodeid is None:
+            return self._scoped().write_json(kind, payload, name)
         scrubbed = _dump(self._redactor.json_value(payload), self._redactor)
         try:
             unchanged = scrubbed == _dump(payload, self._redactor)
@@ -223,9 +277,14 @@ class ArtifactWriter:
     def write_text(
         self, kind: ArtifactKind, text: str, name: str | None = None
     ) -> ArtifactRef | None:
-        """Redact captured text and write it as an artifact ending in exactly one newline."""
+        """Redact captured text and write it as an artifact ending in one newline.
+
+        Raises ArtifactError when the writer is session scoped and no test is capturing artifacts.
+        """
         if self._state.disabled:
             return None
+        if self._nodeid is None:
+            return self._scoped().write_text(kind, text, name)
         scrubbed = self._redactor.text(text)
         return self._store(kind, name, _one_newline(scrubbed), redacted=scrubbed != text)
 
@@ -238,7 +297,15 @@ class ArtifactWriter:
         return self._store("log_tail", None, text, redacted=scrubbed != list(lines))
 
     def write_manifest(self) -> ArtifactRef | None:
-        """Build and write this test's JSON ``manifest.json``, never redacted (AAP 0.4.6)."""
+        """Build and write this test's JSON ``manifest.json``, never redacted (AAP 0.4.6).
+
+        The document carries the AAP 0.4.6 fields and every artifact but the manifest itself; a
+        session-scoped writer with no test capturing artifacts raises ArtifactError.
+        """
+        if self._nodeid is None:
+            if self._state.disabled:
+                return None
+            return self._scoped().write_manifest()
         document = build_document(
             run_id=self._run_id,
             nodeid=self._bound_nodeid(),
@@ -254,8 +321,13 @@ class ArtifactWriter:
     def finalize(self, *, passed: bool) -> tuple[ArtifactRef, ...]:
         """Finish one test's artifacts: prune a passing test, then write the manifest.
 
-        Disabled capture skips the prune, still writes the manifest and returns ``()`` (AAP 0.4.7).
+        Disabled capture skips the prune, still writes the manifest and returns ``()`` (AAP 0.4.7);
+        a session-scoped writer with no test capturing artifacts raises ArtifactError.
         """
+        if self._nodeid is None:
+            if self._state.disabled:
+                return ()
+            return self._scoped().finalize(passed=passed)
         if not self._state.disabled:
             nodeid = self._bound_nodeid()
             if passed and not self._keep_passed:
@@ -349,10 +421,13 @@ class ArtifactWriter:
         nodeid = self._nodeid
         if nodeid is None:
             raise ArtifactError(
-                "this artifact writer is not bound to a test",
+                "this artifact writer is bound to no test, so it has no per-test directory",
                 attempted_path=self._run_dir,
                 run_dir=self._run_dir,
-                hint="call for_node(nodeid) to get a writer for one test's artifacts",
+                hint=(
+                    "the session-scoped writer answers write and manifest for the test in flight; "
+                    "dir_for(nodeid) and for_node(nodeid) address one test's artifacts directly"
+                ),
             )
         return nodeid
 
@@ -402,10 +477,9 @@ import-time state to reset; the value is the *bound* writer of the test in fligh
 def set_active_writer(writer: ArtifactWriter | None) -> None:
     """Make ``writer`` the writer of the test in flight, or unbind with ``None``.
 
-    ``foundry.execution.coordinator`` binds it before an item's first attempt and unbinds it once
-    the attempts are done, so nothing another test writes lands in this test's directory.
-    Overwriting rather than resetting a token is deliberate: a writer bound for a test that never
-    finished would be worse.
+    ``foundry.execution.coordinator`` binds it before an item's first attempt and unbinds it after
+    the last, so nothing another test writes lands here. Overwriting rather than resetting a token
+    is deliberate: a writer bound for a test that never finished would be worse.
     """
     _ACTIVE_WRITER.set(writer)
 
