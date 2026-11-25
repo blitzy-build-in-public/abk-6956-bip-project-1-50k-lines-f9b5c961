@@ -1,12 +1,16 @@
 """End-to-end proof that ``-n 3`` runs every example test exactly once, faster than serially.
 
 Acceptance criterion 7 and AAP 0.14.2: the sharded median wall clock is at most 60 % of the serial
-median over the same node-id set, from three alternating runs per side. The children run in a
-module-scoped fixture because ``execution.timeout`` (60 s) covers the call phase only.
+median over the same node-id set, from three alternating runs per side. Every run must first show
+that its 24 records spent ``_work.TOTAL_WORK_MS`` — AAP 0.14.2's 12 s of aggregate example work —
+and the serial median must clear the same figure, so the ratio compares real work, not timer noise.
+The children run in a module-scoped fixture because ``execution.timeout`` (60 s) covers the call
+phase only.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import statistics
 import time
@@ -17,10 +21,10 @@ from typing import Any, Final, NamedTuple
 import pytest
 
 EXAMPLE_DIR: Final[str] = "examples/checkout"
+WORK_MODULE: Final[str] = "_work.py"
 EXPECTED_TOTAL: Final[int] = 24
 WORKER_COUNT: Final[int] = 3
 RATIO_BUDGET: Final[float] = 0.60
-SERIAL_FLOOR_MS: Final[float] = 3_000.0
 RUN_PAIRS: Final[int] = 3
 REPORT_FILES: Final[tuple[str, ...]] = ("results.json", "junit.xml", "report.html")
 RESULTS, ARTIFACTS = "results.json", "artifacts"
@@ -94,6 +98,18 @@ def _timings(runs: Sequence[_Run]) -> str:
     return ", ".join(f"{run.label}={run.elapsed_ms:.0f} ms" for run in runs)
 
 
+def _aggregate_work_ms(example_project: Path) -> float:
+    """Return ``_work.py``'s TOTAL_WORK_MS: the work AAP 0.14.2 budgets across 24 tests."""
+    # Loaded by path rather than imported: examples/checkout is not on sys.path.
+    spec = importlib.util.spec_from_file_location("checkout_work", example_project / WORK_MODULE)
+    assert spec is not None and spec.loader is not None, f"{WORK_MODULE} is not loadable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    total = getattr(module, "TOTAL_WORK_MS", None)
+    assert isinstance(total, int | float), f"{WORK_MODULE} declares no TOTAL_WORK_MS: {total!r}"
+    return float(total)
+
+
 @pytest.fixture(scope="module")
 def sharding_runs(
     repo_root: Path,
@@ -112,8 +128,9 @@ def sharding_runs(
 
 
 def test_sharded_run_covers_the_same_tests_in_at_most_sixty_percent_of_the_time(
-    repo_root: Path, sharding_runs: tuple[_Run, ...]
+    repo_root: Path, example_project: Path, sharding_runs: tuple[_Run, ...]
 ) -> None:
+    aggregate_ms = _aggregate_work_ms(example_project)
     for run in sharding_runs:
         assert run.result.returncode == 0, f"run {run.label} exited {run.result.returncode}"
         nodeids = _nodeids(run.records)
@@ -122,6 +139,16 @@ def test_sharded_run_covers_the_same_tests_in_at_most_sixty_percent_of_the_time(
         assert errors == [], f"run {run.label} declared the run itself broken: {errors}"
         duplicates = sorted({nodeid for nodeid in nodeids if nodeids.count(nodeid) > 1})
         assert duplicates == [], f"run {run.label} repeated {duplicates}"
+        spent_ms = sum(
+            record.get("duration_ms", 0.0)
+            for record in run.records
+            if record.get("record_type") == RESULT
+        )
+        assert spent_ms >= aggregate_ms, (
+            f"run {run.label} recorded {spent_ms:.0f} ms of test work, under the "
+            f"{aggregate_ms:.0f} ms of aggregate work AAP 0.14.2 budgets across "
+            f"{EXPECTED_TOTAL} tests"
+        )
     for index, first in enumerate(sharding_runs):
         for second in sharding_runs[index + 1 :]:
             left, right = _nodeids(first.records), _nodeids(second.records)
@@ -138,9 +165,9 @@ def test_sharded_run_covers_the_same_tests_in_at_most_sixty_percent_of_the_time(
         f"AAP 0.14.2 budgets {RATIO_BUDGET:.2f}. Serial: {_timings(serial)}. "
         f"Sharded: {_timings(sharded)}"
     )
-    assert serial_median >= SERIAL_FLOOR_MS, (
-        f"the serial median was {serial_median:.0f} ms, under the {SERIAL_FLOOR_MS:.0f} ms floor "
-        f"that keeps the ratio above meaningful: {_timings(serial)}"
+    assert serial_median >= aggregate_ms, (
+        f"the serial median was {serial_median:.0f} ms, under the {aggregate_ms:.0f} ms of "
+        f"aggregate work AAP 0.14.2 budgets, which keeps the ratio above noise: {_timings(serial)}"
     )
     run_ids = [_run_id(run) for run in sharding_runs]
     assert len(set(run_ids)) == len(sharding_runs), f"repeated run ids: {sorted(run_ids)}"

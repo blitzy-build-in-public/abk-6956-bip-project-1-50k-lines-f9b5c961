@@ -57,8 +57,7 @@ def _service() -> sharding.ShardingService:
 
 @pytest.mark.parametrize(("repeats", "attempts"), [(0, 1), (2, 3), (10, 11)])
 def test_max_attempts_counts_repeats_after_the_first(repeats: int, attempts: int) -> None:
-    policy = retry.ExecutionRetries.from_config(repeats)
-    published = policy.as_dict()
+    published = retry.ExecutionRetries.from_config(repeats).as_dict()
     assert published == {"repeats": repeats, "max_attempts": attempts, "disabled": repeats == 0}
     assert (retry.MIN_RETRIES, retry.MAX_RETRIES, retry.RETRYABLE_PHASES) == (0, 10, ("call",))
 
@@ -67,8 +66,7 @@ def test_max_attempts_counts_repeats_after_the_first(repeats: int, attempts: int
 def test_a_budget_outside_the_published_range_is_a_config_error(repeats: object) -> None:
     with pytest.raises(ConfigError) as raised:
         retry.ExecutionRetries.from_config(repeats)  # type: ignore[arg-type]
-    assert raised.value.key == retry.RETRIES_KEY
-    assert retry.RETRIES_RANGE_TEXT in str(raised.value)
+    assert raised.value.key == retry.RETRIES_KEY and retry.RETRIES_RANGE_TEXT in str(raised.value)
     assert retry.RETRIES_KEY in (raised.value.hint or "")
 
 
@@ -191,8 +189,7 @@ def test_the_stash_keys_are_typed_and_distinct_and_the_payload_round_trips() -> 
     state.write_properties(object(), _payload())
     record = AttemptRecord(number=2, outcome="failed", elapsed_ms=12.5, message="cart")
     wire = state.AttemptPayload.from_record(record)
-    assert wire.as_dict() == record.as_dict()
-    assert wire.to_record() == record
+    assert wire.as_dict() == record.as_dict() and wire.to_record() == record
     assert state.AttemptPayload.from_dict(json.loads(state.dumps(wire.as_dict()))) == wire
     assert state.AttemptPayload.from_dict({"outcome": "failed"}) is None
     assert state.AttemptPayload.from_dict({**wire.as_dict(), "number": 0}) is None

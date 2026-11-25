@@ -157,12 +157,12 @@ def _not_applied_rows(
 ) -> tuple[config_render.ConfigRow, ...]:
     """Return the rows of the separate ``not applied`` section of a deferred ``config show``.
 
-    :func:`foundry.config.render.rows` appends the deferred overrides after every resolved row and
-    labels each of them ``not-applied:<--option>``, so the section selects that tail, which keeps
-    one implementation of a row's shape and of its value redaction.
+    :func:`foundry.config.render.describe` appends the deferred overrides after every resolved row
+    and labels each of them ``not-applied:<--option>``, so the section selects that tail, which
+    keeps one implementation of a row's shape and of its value redaction.
     """
-    resolved_count = len(config_render.rows(config))
-    return config_render.rows(config, not_applied=deferred)[resolved_count:]
+    resolved_count = len(config_render.describe(config))
+    return config_render.describe(config, not_applied=deferred)[resolved_count:]
 
 
 @click.group(name="config", help="inspect and validate configuration")
@@ -222,7 +222,7 @@ def show_command(*, resolved: bool, output_format: str | None, **supplied: objec
         return exit_codes.SUCCESS
 
     redactor = config_render.redactor_for(config)
-    cli_render.render_config_table(config_render.rows(config), redactor=redactor)
+    cli_render.render_config_table(config_render.describe(config), redactor=redactor)
     if deferred is not None:
         cli_render.render_not_applied(_not_applied_rows(config, deferred), redactor=redactor)
     return exit_codes.SUCCESS

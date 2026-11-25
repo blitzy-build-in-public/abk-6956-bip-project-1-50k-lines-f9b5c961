@@ -161,10 +161,7 @@ def test_the_dumps_describe_the_exchange_and_mask_every_credential() -> None:
     sent = received[2].content.decode()
     assert min(len(sent.encode()), len(posted.text.encode())) > MAX_EXCERPT_BYTES
     dumped = [dump["body"], posted.response_dump()["body"]]
-    assert dumped == [
-        sent.replace(_SENTINEL, REDACTED),
-        posted.text.replace(_SENTINEL, REDACTED),
-    ]
+    assert dumped == [sent.replace(_SENTINEL, REDACTED), posted.text.replace(_SENTINEL, REDACTED)]
     for text_body in dumped:
         assert isinstance(text_body, str) and _LONG_VALUE in text_body
         assert _SENTINEL not in text_body and TRUNCATION_MARKER not in text_body
@@ -175,9 +172,8 @@ def test_the_dumps_describe_the_exchange_and_mask_every_credential() -> None:
         response = session.get(f"{_BASE}/echo")
     assert isinstance(response, FoundryResponse) and response.status_code == 200
     assert (response.text, response.json()) == (body.decode(), payload)
-    assert (
-        response.headers["content-type"] == response.headers["Content-Type"] == "application/json"
-    )
+    headers = response.headers
+    assert headers["content-type"] == headers["Content-Type"] == "application/json"
     assert isinstance(response.elapsed_ms, float) and response.elapsed_ms >= 0.0
     with _session(transport=_recorder(500, b"<html>boom</html>")[0]) as session:
         failed = session.get(f"{_BASE}/fail")
@@ -227,9 +223,8 @@ def test_a_failing_request_waits_the_ladder_and_reports_every_attempt() -> None:
         if not retried:
             continue
         rows = error.attempts
-        assert [(r.number, r.outcome, r.retry_on) for r in rows] == [
-            (number, "connect", "connect") for number in range(1, len(delays) + 2)
-        ]
+        fingerprints = [(number, "connect", "connect") for number in range(1, len(delays) + 2)]
+        assert [(r.number, r.outcome, r.retry_on) for r in rows] == fingerprints
         assert all(r.elapsed_ms >= 0.0 and "ConnectError" in (r.message or "") for r in rows)
 
 
@@ -333,5 +328,4 @@ def test_the_session_refuses_an_off_origin_target_even_when_the_join_is_bypassed
     with _session(settings, transport=transport) as session, pytest.raises(ConfigError) as raised:
         session.get(f"{_FOREIGN_BASE}/steal")
     assert raised.value.key == "http.base_url"
-    assert str(raised.value) == "request URL must share http.base_url's origin"
-    assert received == []
+    assert str(raised.value) == "request URL must share http.base_url's origin" and received == []

@@ -1,9 +1,8 @@
 """End-to-end proof that the distribution builds, installs offline and runs from a fresh venv.
 
 AAP 0.14.1 criterion 1: ``uv build`` yields the wheel and the sdist, and the wheel installed with
---no-index --find-links gives a console script printing ``foundry, version 0.1.0``, exiting 0. This
-is the only module that installs anything (AAP 0.14.3); its archive listings are the proof.
-"""
+``--no-index --find-links`` gives a console script printing ``foundry, version 0.1.0`` and exits 0.
+This is the only module that installs anything (AAP 0.14.3); its archive listings are the proof."""
 
 from __future__ import annotations
 
@@ -219,8 +218,13 @@ def test_the_install_used_offline_flags_and_the_closure_matches_the_manifest(
 ) -> None:
     audited = [entry for entry in fresh_venv.invocations if entry.kind != "venv"]
     assert {entry.kind for entry in audited} == {"build", "install"}, audited
+    # The build takes --offline alone: --no-index disables the index lookups uv build needs for
+    # its backend. Both offline flags are the install's contract (AAP 0.14.1 criterion 1, I1).
+    flags_by_kind = {"build": ("--offline",), "install": OFFLINE_FLAGS}
     for invocation in audited:
-        assert [flag for flag in OFFLINE_FLAGS if flag in invocation.argv], invocation.argv
+        required = flags_by_kind[invocation.kind]
+        missing = [flag for flag in required if flag not in invocation.argv]
+        assert missing == [], f"the {invocation.kind} ran without {missing}: {invocation.argv}"
     manifest = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
     direct = tuple(_requirement_name(spec) for spec in manifest["project"]["dependencies"])
     installed = _installed_requirements(fresh_venv.venv)

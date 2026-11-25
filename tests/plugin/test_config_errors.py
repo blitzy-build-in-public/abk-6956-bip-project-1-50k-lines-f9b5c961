@@ -1,7 +1,6 @@
 """The exit-2 contract of every configuration fault, observed through real child pytest runs: each
 fault names the key, variable or path an operator has to change, writes no report, and leaves the
-control test unrun. A valid configuration is the positive control.
-"""
+control test unrun. A valid configuration is the positive control."""
 
 from __future__ import annotations
 
@@ -163,19 +162,11 @@ def test_valid_configuration_still_runs(pytester: pytest.Pytester, clean_foundry
 
 @pytest.mark.parametrize(
     ("spelling", "value", "expected"),
-    [
-        (_TOPT, "abc", _NUMBER),
-        (_CAPTURE_LINES, "1.5", _INTEGER),
-        (_ALIAS, "abc", _NUMBER),
-    ],
+    [(_TOPT, "abc", _NUMBER), (_CAPTURE_LINES, "1.5", _INTEGER), (_ALIAS, "abc", _NUMBER)],
     ids=["float-generic-option", "int-generic-option", "float-named-alias"],
 )
 def test_unparseable_command_line_value_exits_2_with_the_expected_type(
-    pytester: pytest.Pytester,
-    clean_foundry_env: None,
-    spelling: str,
-    value: str,
-    expected: str,
+    pytester: pytest.Pytester, clean_foundry_env: None, spelling: str, value: str, expected: str
 ) -> None:
     directory = _prepare(pytester)
     result = pytester.runpytest_subprocess(f"{spelling}={value}")

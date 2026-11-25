@@ -1,7 +1,6 @@
 """``apply_timer`` and ``cancel_timer`` are per-item hookspec bodies, so a peer fault announced from
 either would warn twice per test per attempt; each distinct fault is latched once per run, and a
-cancel disarms the timer through the closure the peer stored on the item it armed.
-"""
+cancel disarms the timer through the closure the peer stored on the item it armed."""
 
 from __future__ import annotations
 

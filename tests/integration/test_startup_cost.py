@@ -142,12 +142,10 @@ def test_plugin_startup_stays_inside_the_budget(run_pytest: RunPytest, tmp_path:
             honest.append(pair)
         if len(honest) == SAMPLE_COUNT:
             break
-
     attempts = (*honest, *starved)
     for run in (run for pair in attempts for run in pair):
         assert run.exit_code == 0, f"{run.arm} exited {run.exit_code}: {run.stdout}{run.stderr}"
         assert run.nodeids == (COLLECTED_NODEID,), f"{run.arm} collected {run.nodeids!r}"
-
     # A host that never let up spends the retry budget, and the pairs it starved the least are then
     # measured, so a real regression still reaches the ceiling below.
     starved.sort(key=lambda pair: max(run.elapsed_ms - run.cpu_ms for run in pair))

@@ -2,8 +2,7 @@
 
 A document that reaches outside itself and a rendering fault outside ``jinja2.TemplateError`` both
 take the documented fallback -- no file, one ``WARNING`` on ``foundry`` -- while a renderable page
-inlines its two asset constants raw, escapes a record value and imports nothing undeclared.
-"""
+inlines its two asset constants raw, escapes a record value and imports nothing undeclared."""
 
 from __future__ import annotations
 

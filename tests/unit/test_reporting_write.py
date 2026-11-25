@@ -1,8 +1,7 @@
 """The set of report files one run writes, and the isolation of the write itself (AAP 0.4.5-0.4.7).
 
 The three documents are independent -- no switch suppresses another, and only the AAP 0.4.7
-fallback costs ``junit.xml`` too -- and a plumbing fault logs one ``WARNING`` and no document.
-"""
+fallback costs ``junit.xml`` too -- and a plumbing fault logs one ``WARNING`` and no document."""
 
 from __future__ import annotations
 

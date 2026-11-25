@@ -65,8 +65,7 @@ def test_each_channel_loses_the_secret(scrub: str, argument: object, expected: o
     assert _SENTINEL in json.dumps(subject), "the payload must carry the sentinel before the scrub"
     calls = subject if isinstance(subject, tuple) else (subject,)
     redacted = getattr(default_redactor(), scrub)(*calls)
-    assert redacted == _spliced(expected)
-    assert _SENTINEL not in json.dumps(redacted)
+    assert redacted == _spliced(expected) and _SENTINEL not in json.dumps(redacted)
 
 
 def test_a_pair_list_under_a_secret_name_loses_its_value_at_any_depth() -> None:
@@ -133,8 +132,7 @@ def _nested_body(levels: int) -> str:
 @pytest.mark.parametrize("levels", [1, 2, MAX_DEPTH + 2])
 def test_a_part_that_holds_another_multipart_body_loses_the_nested_value(levels: int) -> None:
     scrubbed = default_redactor().text(_nested_body(levels).replace("$s", _SENTINEL))
-    assert _SENTINEL not in scrubbed
-    assert REDACTED in scrubbed and "files" in scrubbed
+    assert _SENTINEL not in scrubbed and REDACTED in scrubbed and "files" in scrubbed
 
 
 # Ten times the text in twenty times the time leaves a linear scan a factor of two of slack.
@@ -161,8 +159,7 @@ def test_the_multipart_scan_costs_time_linear_in_the_length_of_the_text() -> Non
 @pytest.mark.parametrize("spelling", ["token=$s", "api_key=$s", "password=$s", "Bearer $s"])
 def test_an_echoed_credential_under_an_unlisted_name_is_masked(name: str, spelling: str) -> None:
     masked = default_redactor().header(name, spelling.replace("$s", _SENTINEL))
-    assert not default_redactor().redacts(name)
-    assert _SENTINEL not in masked and REDACTED in masked
+    assert not default_redactor().redacts(name) and _SENTINEL not in masked and REDACTED in masked
 
 
 @pytest.mark.parametrize(

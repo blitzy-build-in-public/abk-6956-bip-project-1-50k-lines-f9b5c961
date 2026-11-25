@@ -61,12 +61,10 @@ def test_a_blocked_root_disables_capture_once_and_every_record_reports_it(
     caplog.set_level(logging.WARNING, logger=obs_logging.LOGGER_NAME)
     assert (writer.ensure_run_dir(), writer.disabled) == (False, True)
     lines = _warnings(caplog)
-    assert len(lines) == 1
-    assert _DISABLED_MESSAGE in lines[0] and "component=artifacts" in lines[0]
+    assert len(lines) == 1 and _DISABLED_MESSAGE in lines[0] and "component=artifacts" in lines[0]
     # Nothing after the fault reports again: the verdict is the writer's shared fault state.
     assert not writer.dir_for(_NODEID).exists()
-    assert writer.write("request", None, '{"cart": []}') is None
-    assert _warnings(caplog) == lines
+    assert writer.write("request", None, '{"cart": []}') is None and _warnings(caplog) == lines
     caplog.clear()
     state = session.create_state(FoundryConfig(), invocation_dir=tmp_path)
     assert (state.artifacts_enabled, state.writer.disabled) == (False, True)

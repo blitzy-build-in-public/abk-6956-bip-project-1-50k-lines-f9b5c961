@@ -1,8 +1,7 @@
 """End-to-end absence proof: the configured secret reaches none of the six sinks a run produces.
 
 AAP 0.14.3: the token travels only through the variable ``http.auth.token_env`` names (I9); every
-sink -- results.json, junit.xml, report.html, the cassette, artifacts, the terminal -- is clean.
-"""
+sink -- results.json, junit.xml, report.html, the cassette, artifacts, the terminal -- is clean."""
 
 from __future__ import annotations
 

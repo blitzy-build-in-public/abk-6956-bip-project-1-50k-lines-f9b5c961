@@ -462,9 +462,10 @@ def build_context(
     is written into, which every artifact href is relative to (assumption A5).
     Determinism (criterion 14): records sort by node id, run errors by worker id and message, counts
     by outcome declaration order. Redaction (AAP 0.3.2): a run error's message is scrubbed here and
-    failure messages and log lines where the panels are built, while contract values are left alone
-    because redacting one would break ``foundry report compare``; every such text has its control
-    characters spelled out, so the page is plain text.
+    failure messages where the panels are built, while the log lines are rendered from the
+    ``log_tail.log`` artifact the write sink already scrubbed (AAP 0.4.8), and contract values are
+    left alone because redacting one would break ``foundry report compare``; every such text has its
+    control characters spelled out, so the page is plain text.
 
     Returns:
         The context, every collection sorted and every free-text value redacted and printable.

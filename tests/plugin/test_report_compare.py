@@ -1,7 +1,6 @@
 """``foundry report compare`` through a real ``main()`` call: the three labelled groups in their
 fixed order, the ``--json`` document, exit 1 on a regression and exit 2 on a document that cannot
-be read. The committed documents are copied into ``tmp_path`` and are only ever read.
-"""
+be read. The committed documents are copied into ``tmp_path`` and are only ever read."""
 
 from __future__ import annotations
 
@@ -142,9 +141,8 @@ def test_identical_documents_exit_0_and_list_the_standing_failures(
     base = str(copies["base"])
     result = _compare(base, base)
     assert result.exit_code == SUCCESS
-    assert result.stdout.splitlines() == _rendered(
-        {"newly_failing": (), "newly_passing": (), "still_failing": _STANDING}
-    )
+    expected = {"newly_failing": (), "newly_passing": (), "still_failing": _STANDING}
+    assert result.stdout.splitlines() == _rendered(expected)
     assert json.loads(_compare(base, base, "--json").stdout) == {
         "newly_failing": [],
         "newly_passing": [],
@@ -168,8 +166,6 @@ def test_run_error_elements_are_ignored(copies: dict[str, Path], tmp_path: Path)
     elements = [*_elements(copies["new"]), dict(_RUN_ERROR)]
     with_error.write_text(json.dumps(elements, indent=2) + "\n", encoding="utf-8")
     result = _compare(str(copies["base"]), str(with_error))
-    assert result.exit_code == FAILED
-    assert result.stdout.splitlines() == _rendered(_EXPECTED)
-    assert json.loads(_compare(str(copies["base"]), str(with_error), "--json").stdout) == {
-        key: list(value) for key, value in _EXPECTED.items()
-    }
+    assert result.exit_code == FAILED and result.stdout.splitlines() == _rendered(_EXPECTED)
+    expected = {key: list(value) for key, value in _EXPECTED.items()}
+    assert json.loads(_compare(str(copies["base"]), str(with_error), "--json").stdout) == expected

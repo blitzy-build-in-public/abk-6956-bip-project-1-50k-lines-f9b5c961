@@ -1,8 +1,7 @@
 """End-to-end proof that ``foundry init`` scaffolds a project which runs green offline.
 
-AAP 0.14.1 criterion 10: ``foundry init <dir> && cd <dir> && pytest`` exits 0 with one passing test,
-with nothing listening, and a non-empty directory without ``--force`` exits 2 creating nothing.
-"""
+AAP 0.14.1 criterion 10: ``foundry init <dir> && cd <dir> && pytest`` exits 0 with one passing test
+and nothing listening, and a non-empty directory without ``--force`` exits 2 creating nothing."""
 
 from __future__ import annotations
 
@@ -77,8 +76,7 @@ def _assert_cassette_shape(document: Any) -> None:
 
 @pytest.fixture(scope="module")
 def minimal_scaffold(
-    tmp_path_factory: pytest.TempPathFactory,
-    run_foundry: Callable[..., _Completed],
+    tmp_path_factory: pytest.TempPathFactory, run_foundry: Callable[..., _Completed]
 ) -> _Scaffold:
     root = tmp_path_factory.mktemp("minimal")
     project = root / "demo"
@@ -89,8 +87,7 @@ def minimal_scaffold(
 
 
 def test_minimal_scaffold_is_created_and_runs_green(
-    minimal_scaffold: _Scaffold,
-    run_pytest: Callable[..., _Completed],
+    minimal_scaffold: _Scaffold, run_pytest: Callable[..., _Completed]
 ) -> None:
     project = minimal_scaffold.project
     for relative in EXPECTED_MINIMAL_FILES:
@@ -105,8 +102,7 @@ def test_minimal_scaffold_is_created_and_runs_green(
     assert IGNORE_ENTRY in ignore, f".gitignore carries no {IGNORE_ENTRY} entry: {sorted(ignore)}"
     tomllib.loads((project / "foundry.toml").read_text(encoding="utf-8"))
     created = [*EXPECTED_MINIMAL_FILES, *(p.relative_to(project).as_posix() for p in testdata)]
-    printed = minimal_scaffold.printed
-    listed = [PurePosixPath(line).as_posix() for line in printed]
+    listed = [PurePosixPath(line).as_posix() for line in minimal_scaffold.printed]
     for relative in created:
         assert any(line.endswith(relative) for line in listed), f"never printed {relative}"
     run = run_pytest(cwd=project)
@@ -119,8 +115,7 @@ def test_minimal_scaffold_is_created_and_runs_green(
 
 
 def test_second_init_into_a_non_empty_directory_is_refused_then_forced(
-    minimal_scaffold: _Scaffold,
-    run_foundry: Callable[..., _Completed],
+    minimal_scaffold: _Scaffold, run_foundry: Callable[..., _Completed]
 ) -> None:
     project = minimal_scaffold.project
     before = _tree(project)
@@ -135,9 +130,7 @@ def test_second_init_into_a_non_empty_directory_is_refused_then_forced(
 
 
 def test_api_template_adds_a_replayable_http_test(
-    tmp_path: Path,
-    run_foundry: Callable[..., _Completed],
-    run_pytest: Callable[..., _Completed],
+    tmp_path: Path, run_foundry: Callable[..., _Completed], run_pytest: Callable[..., _Completed]
 ) -> None:
     project = tmp_path / "api-demo"
     result = run_foundry("init", str(project), "--template", "api", cwd=tmp_path)

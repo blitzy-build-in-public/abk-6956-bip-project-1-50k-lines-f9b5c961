@@ -73,9 +73,7 @@ def test_xfail_and_xpass_are_recorded_as_their_own_outcomes(
     pytester: pytest.Pytester, clean_foundry_env: None
 ) -> None:
     pytester.makepyfile(test_xfail=_XFAIL_AND_XPASS)
-
     result = pytester.runpytest()
-
     assert result.ret == 0, f"a non-strict xfail run stays green, but it exited {result.ret}"
     result.assert_outcomes(xfailed=1, xpassed=1)
     records = _results(pytester)
@@ -96,9 +94,7 @@ def test_lost_worker_names_its_items_not_run_beside_the_run_error(
         test_c_third=_healthy_source("test_gamma"),
         test_d_fourth=_healthy_source("test_delta"),
     )
-
     result = pytester.runpytest_subprocess("-n", "2", "--dist", "loadfile", _NO_RESTART)
-
     assert result.ret == 1, f"a lost worker fails the run (AAP 0.4.7), but it exited {result.ret}"
     records = _results(pytester)
     crashed = "test_b_crash.py::test_crashes_the_worker"

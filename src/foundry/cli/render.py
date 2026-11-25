@@ -95,8 +95,8 @@ class KeyValueSourceRow(Protocol):
     """The structure of one ``foundry config show`` row, satisfied by ``ConfigRow``.
 
     It is a protocol rather than a concrete type because this renderer owns layout and not data:
-    :func:`foundry.config.render.rows` produces the rows and this module only prints them, so the
-    two can be tested apart without either importing the other (AAP 0.4.8). Its members are
+    :func:`foundry.config.render.describe` produces the rows and this module only prints them, so
+    the two can be tested apart without either importing the other (AAP 0.4.8). Its members are
     read-only properties, which is what lets a frozen, slotted ``ConfigRow`` satisfy it.
     """
 

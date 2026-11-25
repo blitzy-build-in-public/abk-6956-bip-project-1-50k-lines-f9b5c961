@@ -4,8 +4,7 @@ lifecycle events, and the artifact writer with its per-test manifest, which writ
 0.4.6 publishes and disables capture with one ``WARNING`` and no exception (AAP 0.4.7). Redaction is
 asserted on the bytes written, because a writer that redacts nothing passes the object graph and
 leaks the file (AAP 0.3.2, 0.14.3, I4). Every input lives in ``tmp_path`` and log capture reads
-pytest's ``caplog``.
-"""
+pytest's ``caplog``."""
 
 from __future__ import annotations
 
@@ -144,8 +143,7 @@ def test_redaction_precedes_serialisation_of_the_written_artifact(tmp_path: Path
     assert reference is not None and reference.redacted is True
     written = (writer.run_dir / reference.path).read_text(encoding="utf-8")
     assert [s for s in (*_SECRET_SENTINELS, "bearer-credential", "cart-user") if s in written] == []
-    assert written.count(redaction.REDACTED) == 2
-    assert json.loads(written)["method"] == "POST"
+    assert written.count(redaction.REDACTED) == 2 and json.loads(written)["method"] == "POST"
     # A foundry-labelled line keeps its label; a host logger's leaves only the masked value.
     secret = _SECRET_SENTINELS[0]
     lines = [f"INFO foundry.qa.secrets: token={secret}", f"INFO mytool.auth: token={secret}"]
@@ -189,8 +187,7 @@ def test_every_emitter_stays_at_or_below_warning_and_sorts_its_fields(
     events.emit_report_written("html", "report.html")
     events.emit_plumbing_failure("artifacts", "cannot write the artifact directory")
     events.emit_html_fallback("the report template failed")
-    tree = obs_logging.LOGGER_NAME
-    levels = [record.levelno for record in caplog.records if record.name == tree]
+    levels = [record.levelno for record in caplog.records if record.name == obs_logging.LOGGER_NAME]
     # One INFO line for the run, two WARNING lines for the isolation paths, the rest DEBUG.
     assert (len(levels), levels.count(logging.INFO), levels.count(logging.WARNING)) == (8, 1, 2)
     assert max(levels) == events.MAX_EVENT_LEVEL == logging.WARNING
@@ -206,15 +203,8 @@ def test_every_emitter_stays_at_or_below_warning_and_sorts_its_fields(
 def test_the_manifest_publishes_its_fields_digests_and_refuses_an_escape() -> None:
     document = _document()
     assert (manifest.MANIFEST_SCHEMA_VERSION, manifest.MANIFEST_FILENAME) == (1, "manifest.json")
-    assert tuple(document.as_dict()) == (
-        "schema_version",
-        "run_id",
-        "nodeid",
-        "profile",
-        "created_at",
-        "artifacts_disabled",
-        "artifacts",
-    )
+    fields = "schema_version run_id nodeid profile created_at artifacts_disabled artifacts"
+    assert tuple(document.as_dict()) == tuple(fields.split())
     assert document.as_dict()["nodeid"] == _NODEID
     assert document.as_dict()["artifacts_disabled"] is False
     # One entry per artifact file: its size, and the lowercase digest of the bytes on disk.
@@ -238,8 +228,7 @@ def test_the_manifest_publishes_its_fields_digests_and_refuses_an_escape() -> No
 
 
 def test_every_artifact_kind_has_one_published_file_name() -> None:
-    assert len(ARTIFACT_KINDS) == 7
-    assert set(artifacts.ARTIFACT_FILENAMES) == set(ARTIFACT_KINDS)
+    assert len(ARTIFACT_KINDS) == 7 and set(artifacts.ARTIFACT_FILENAMES) == set(ARTIFACT_KINDS)
     assert artifacts.ARTIFACT_FILENAMES["log_tail"] == "log_tail.log"
     assert len(set(artifacts.ARTIFACT_FILENAMES.values())) == len(ARTIFACT_KINDS)
     assert frozenset({manifest.MANIFEST_FILENAME}) == artifacts.KEPT_WHEN_PASSED
@@ -286,10 +275,8 @@ def test_write_records_a_relative_reference_to_the_published_file_name(
     reference = writer.write_text(kind, payload)  # type: ignore[arg-type]
     assert reference is not None and reference.redacted is False
     assert (reference.kind, Path(reference.path).name) == (kind, expected)
-    assert (reference.bytes, reference.sha256) == (
-        len(payload.encode("utf-8")),
-        hashlib.sha256(payload.encode("utf-8")).hexdigest(),
-    )
+    digest = hashlib.sha256(payload.encode("utf-8"))
+    assert (reference.bytes, reference.sha256) == (len(payload.encode("utf-8")), digest.hexdigest())
     assert not Path(reference.path).is_absolute() and ".." not in Path(reference.path).parts
     assert (writer.run_dir / reference.path).read_text(encoding="utf-8") == payload
 
@@ -316,24 +303,19 @@ def test_the_manifest_lists_one_entry_per_written_file(tmp_path: Path) -> None:
     document = writer.write_manifest()
     assert document is not None and Path(document.path).name == manifest.MANIFEST_FILENAME
     payload = json.loads((writer.run_dir / document.path).read_text(encoding="utf-8"))
-    assert (payload["schema_version"], payload["nodeid"], payload["artifacts_disabled"]) == (
-        manifest.MANIFEST_SCHEMA_VERSION,
-        "test_secrets.py::test_alpha",
-        False,
-    )
+    assert payload["schema_version"] == manifest.MANIFEST_SCHEMA_VERSION
+    assert payload["nodeid"] == "test_secrets.py::test_alpha"
+    assert payload["artifacts_disabled"] is False
     assert [entry["file"] for entry in payload["artifacts"]] == sorted((request.path, stdout.path))
     for entry in payload["artifacts"]:
         written = writer.run_dir / entry["file"]
-        assert (entry["bytes"], entry["sha256"]) == (
-            written.stat().st_size,
-            hashlib.sha256(written.read_bytes()).hexdigest(),
-        )
+        digest = hashlib.sha256(written.read_bytes())
+        assert (entry["bytes"], entry["sha256"]) == (written.stat().st_size, digest.hexdigest())
     # Finishing a passing test prunes every artifact but the manifest it just wrote.
     kept = writer.finalize(passed=True)
     assert [Path(reference.path).name for reference in kept] == [manifest.MANIFEST_FILENAME]
-    assert [path.name for path in writer.dir_for("test_secrets.py::test_alpha").iterdir()] == [
-        manifest.MANIFEST_FILENAME
-    ]
+    listed = [path.name for path in writer.dir_for("test_secrets.py::test_alpha").iterdir()]
+    assert listed == [manifest.MANIFEST_FILENAME]
 
 
 def test_an_uncreatable_run_directory_disables_capture_with_one_warning(
@@ -350,11 +332,9 @@ def test_an_uncreatable_run_directory_disables_capture_with_one_warning(
     assert writer.write("request", None, '{"cart": []}') is None
     assert writer.write_json("response", {"status": 200}) is None
     assert writer.write_text("stdout", "out\n") is None
-    assert writer.write_log_tail(["INFO foundry: x"]) is None
-    assert writer.write_manifest() is None
+    assert writer.write_log_tail(["INFO foundry: x"]) is None and writer.write_manifest() is None
     warnings = _warnings(caplog)
-    assert len(warnings) == 1
-    assert "cannot create artifact directory" in warnings[0].getMessage()
+    assert len(warnings) == 1 and "cannot create artifact directory" in warnings[0].getMessage()
 
 
 def test_a_failed_write_disables_capture_and_the_manifest_records_it(
@@ -366,12 +346,10 @@ def test_a_failed_write_disables_capture_and_the_manifest_records_it(
     blocker = writer.run_dir / Path(request.path).parent / artifacts.ARTIFACT_FILENAMES["response"]
     blocker.mkdir()
     caplog.set_level(logging.WARNING, logger=obs_logging.LOGGER_NAME)
-    assert writer.write_json("response", {"status": 500}) is None
-    assert writer.disabled is True
+    assert writer.write_json("response", {"status": 500}) is None and writer.disabled is True
     document = writer.write_manifest()
     assert document is not None
     payload = json.loads((writer.run_dir / document.path).read_text(encoding="utf-8"))
     assert payload["artifacts_disabled"] is True
     assert [entry["kind"] for entry in payload["artifacts"]] == ["request"]
-    assert writer.write_text("stdout", "after the fault\n") is None
-    assert len(_warnings(caplog)) == 1
+    assert writer.write_text("stdout", "after the fault\n") is None and len(_warnings(caplog)) == 1

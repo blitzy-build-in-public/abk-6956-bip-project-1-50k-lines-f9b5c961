@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from click.testing import CliRunner
 
-from foundry.config import layers, merge, render
+from foundry.cli import config_cmd
+from foundry.config import cli_layer, layers, merge, render
 from foundry.config.models import FoundryConfig
 from foundry.config.sources import ConfigSource
 from foundry.core.exceptions import ConfigError
@@ -192,8 +194,7 @@ def test_a_url_or_header_value_the_http_layer_refuses_is_a_configuration_fault(
         _resolve(tmp_path)
     error = caught.value
     assert (error.key, error.layer) == (dotted, "file")
-    assert error.message == message
-    assert dotted in error.message
+    assert error.message == message and dotted in error.message
     rendered = f"{error.message}{error.hint or ''}{error!r}"
     assert not [value for value in credentials if value in rendered], rendered
     assert "\r" not in rendered and "\n" not in rendered, "a control character may not reach stderr"
@@ -228,8 +229,7 @@ def test_a_strategy_needs_every_companion_key_and_holds_no_secret(
     environment = {v: f"secret-{n}" for n, v in companions.items() if n.endswith("_env")}
     config = _resolve(tmp_path, environ=environment)
     assert config.http.auth.strategy.value == strategy
-    rendered = f"{config.leaf_values()!r}{config!r}"
-    assert not any(value in rendered for value in environment.values())
+    assert not any(value in f"{config.leaf_values()!r}{config!r}" for value in environment.values())
 
 
 def test_the_provenance_is_read_only_and_still_dumps_as_a_json_object(
@@ -243,3 +243,50 @@ def test_the_provenance_is_read_only_and_still_dumps_as_a_json_object(
         document = config.model_dump(mode="json")
     assert document["sources"]["http.timeout"] == {"layer": "default", "detail": ""}
     assert json.dumps(document)
+
+
+def test_describe_is_the_published_interface_and_returns_the_rows_table(
+    tmp_path: Path, clean_foundry_env: None
+) -> None:
+    config = _resolve(tmp_path)
+    described, spelled = render.describe(config), render.rows(config)
+    assert "describe" in render.__all__ and callable(render.describe) and described == spelled
+    assert len(described) == 28 and [row.source for row in described] == ["default"] * 28
+
+
+def test_describe_lists_a_deferred_override_after_every_resolved_row(
+    tmp_path: Path, clean_foundry_env: None
+) -> None:
+    config = _resolve(tmp_path)
+    deferred = cli_layer.from_mapping({"--foundry-http.timeout": 1.0})
+    resolved, described = render.describe(config), render.describe(config, not_applied=deferred)
+    assert described[: len(resolved)] == resolved and len(described) == len(resolved) + 1
+    tail = described[-1]
+    assert (tail.key, tail.value) == ("http.timeout", "1.0"), tail
+    assert tail.source == "not-applied:--foundry-http.timeout", tail
+    served = next(row for row in resolved if row.key == "http.timeout")
+    assert (served.value, served.source) == ("10.0", "default")
+
+
+def test_config_show_renders_the_table_describe_returns(
+    tmp_path: Path, clean_foundry_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COLUMNS", "400")
+    monkeypatch.chdir(tmp_path)
+    real = render.describe
+    calls: list[tuple[render.ConfigRow, ...]] = []
+
+    def counting(
+        config: FoundryConfig, *, not_applied: cli_layer.CliInput | None = None
+    ) -> tuple[render.ConfigRow, ...]:
+        table = real(config, not_applied=not_applied)
+        calls.append(table)
+        return table
+
+    monkeypatch.setattr(render, "describe", counting)
+    result = CliRunner().invoke(config_cmd.config_group, ["show"])
+    assert result.exit_code == 0, result.output
+    assert calls and len(calls[-1]) == 28
+    for row in calls[-1]:
+        line = next((text for text in result.output.splitlines() if row.key in text), "")
+        assert row.value in line and row.source in line, (row, line)

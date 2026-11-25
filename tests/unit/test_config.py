@@ -280,5 +280,4 @@ def test_a_section_header_is_checked_as_a_key_of_its_own(
         _resolve(tmp_path)
     error = caught.value
     assert error.key == key and error.message == f"unknown configuration key: {key}"
-    assert error.layer == layer
-    assert error.hint is not None and str(path.resolve()) in error.hint
+    assert error.layer == layer and error.hint is not None and str(path.resolve()) in error.hint

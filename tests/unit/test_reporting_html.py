@@ -2,8 +2,7 @@
 
 Every assertion reads the document a browser would open: nothing referencing an absolute scheme, a
 ``<link>`` or a ``src=``; the stylesheet inlined; every node id escaped; the rows sorted by node id;
-the Quarantined and Errors regions named landmarks.
-"""
+the Quarantined and Errors regions named landmarks."""
 
 from __future__ import annotations
 
@@ -141,8 +140,7 @@ def test_the_header_labels_an_unknown_finish_time_and_a_disabled_writer(
     document = _render([_run_error(worker) for worker in workers], **options)
     assert "finished_at=unknown" in document and "finished_at=</span>" not in document
     assert "no tests collected" in document and "<table" not in document
-    assert 'class="table-scroll"' not in document
-    assert ('class="banner"' in document) is banner
+    assert 'class="table-scroll"' not in document and ('class="banner"' in document) is banner
 
 
 def test_a_multi_line_failure_message_keeps_its_line_structure() -> None:
@@ -213,8 +211,7 @@ def test_the_header_counts_the_tests_and_only_the_run_errors_the_run_has(
     document = _render(elements)
     header = document[document.index('<header class="report-header">') : document.index("<main>")]
     assert counted in header and "1 tests" not in header
-    assert ("run error" in header) is (errors is not None)
-    assert errors is None or errors in header
+    assert ("run error" in header) is (errors is not None) and (errors is None or errors in header)
     assert document.count('<span class="count">') == 9
 
 

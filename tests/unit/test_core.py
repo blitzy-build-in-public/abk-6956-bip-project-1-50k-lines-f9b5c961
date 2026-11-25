@@ -81,13 +81,11 @@ def test_is_valid_run_id_rejects_malformed_values(value: str) -> None:
 @pytest.mark.parametrize("moment", [_FIXED_MOMENT, _OFFSET_MOMENT, _NAIVE_MOMENT])
 def test_to_iso8601_renders_every_input_as_utc_milliseconds(moment: datetime) -> None:
     text = ids.to_iso8601(moment)
-    assert text == _RENDERED and not text.endswith("Z")
-    assert ids.parse_iso8601(text) == _FIXED_MOMENT
+    assert text == _RENDERED and not text.endswith("Z") and ids.parse_iso8601(text) == _FIXED_MOMENT
 
 
 @pytest.mark.parametrize(
-    "text",
-    ["2025-01-02T03:04:05.678Z", "2025-01-02T05:04:05.678+02:00", "2025-01-02T03:04:05.678"],
+    "text", ["2025-01-02T03:04:05.678Z", "2025-01-02T05:04:05.678+02:00", "2025-01-02T03:04:05.678"]
 )
 def test_parse_iso8601_reads_every_published_form_as_utc(text: str) -> None:
     parsed = ids.parse_iso8601(text)
@@ -118,8 +116,7 @@ def test_case_id_for_matrix_sorts_axes_names_a_bare_matrix_and_refuses_odd_value
 def test_sanitize_nodeid_yields_one_safe_injective_component(nodeid: str) -> None:
     name = paths.sanitize_nodeid(nodeid)
     assert "/" not in name and "\\" not in name and "::" not in name
-    assert name not in {".", ".."}
-    assert unquote(name) == nodeid
+    assert name not in {".", ".."} and unquote(name) == nodeid
     names = [paths.sanitize_nodeid(other) for other in _SAMPLE_NODEIDS]
     assert len(set(names)) == len(names) == len(_SAMPLE_NODEIDS)
 
@@ -201,8 +198,7 @@ def test_retry_exhausted_error_extends_transport_error_and_copies_its_attempts()
     assert isinstance(error, exceptions.TransportError)
     assert (error.method, error.path, error.cause) == ("GET", "/cart", "timeout")
     attempts.append(types.AttemptRecord(number=2, outcome="failed", elapsed_ms=2.0))
-    assert error.attempts == [first]
-    assert "attempts=" in repr(error)
+    assert error.attempts == [first] and "attempts=" in repr(error)
 
 
 def test_the_shared_vocabulary_records_and_barrel_hold_their_published_shape() -> None:
@@ -219,8 +215,7 @@ def test_the_shared_vocabulary_records_and_barrel_hold_their_published_shape() -
     assert types.HttpResponseLike._is_protocol is True and types.ClockLike._is_protocol is True
     members = ("status_code", "headers", "text")
     assert all(isinstance(getattr(types.HttpResponseLike, name), property) for name in members)
-    assert callable(types.ClockLike.now)
-    assert get_origin(types.Sleep) is Callable
+    assert callable(types.ClockLike.now) and get_origin(types.Sleep) is Callable
     published = {n for m in (exceptions, ids, paths, types) for n in m.__all__}
     assert set(core.__all__) == published and list(core.__all__) == sorted(core.__all__)
     assert all(getattr(core, name) is not None for name in core.__all__)

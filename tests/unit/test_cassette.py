@@ -2,8 +2,7 @@
 keys, the match rule (method, path, decoded query pairs, body hash), the ``***`` marker, the typed
 miss and the committed fixture's round trip all pinned. A redacted query value never reaches the
 committed file in the clear: capture writes the marker, names the parameter in ``redacted_keys`` and
-replay matches on that same marker.
-"""
+replay matches on that same marker."""
 
 from __future__ import annotations
 
@@ -377,5 +376,4 @@ class TestQueryRedaction:
         finally:
             session.close()
         assert response.extensions[SOURCE_EXTENSION_KEY] == SOURCE_CASSETTE
-        assert response.text == _JSON_BODY
-        assert path.read_text(encoding="utf-8") == before
+        assert response.text == _JSON_BODY and path.read_text(encoding="utf-8") == before

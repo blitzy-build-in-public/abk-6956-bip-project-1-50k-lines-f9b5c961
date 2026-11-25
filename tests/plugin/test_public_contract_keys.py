@@ -10,8 +10,7 @@ client types -- is the sibling module ``tests.plugin.test_public_contract``. Thi
 module because AAP 0.14.2 caps every counted file at 700 lines.
 
 Nothing here sleeps, reads a clock or opens a socket (AAP 0.14.3): the command writes its document
-to a buffer and the directory it runs in is ``tmp_path``.
-"""
+to a buffer and the directory it runs in is ``tmp_path``."""
 
 from __future__ import annotations
 
@@ -62,8 +61,7 @@ def _flatten(document: Mapping[str, Any], *, prefix: str = "") -> dict[str, Any]
     """Return ``document`` as dotted leaves, treating a documented key's own mapping as one leaf.
 
     The key set says where a document stops nesting: the empty ``http.headers`` table is one leaf,
-    and a group no key declares keeps nesting, so the comparison bites in both directions.
-    """
+    and a group no key declares keeps nesting, so the comparison bites in both directions."""
     leaves: dict[str, Any] = {}
     for name, value in document.items():
         dotted = f"{prefix}{name}"
@@ -81,8 +79,7 @@ def test_configuration_key_set_matches_the_documented_table(
 
     The command runs in an empty directory with no ``FOUNDRY_*`` variable, so it prints the field
     defaults. A missing key and an undocumented key each fail, and the provenance document covers
-    the same leaf set, because AAP 0.4.5 promises a source per key.
-    """
+    the same leaf set, because AAP 0.4.5 promises a source per key."""
     monkeypatch.chdir(tmp_path)
     cli = foundry.cli.main.build_group()
     result = CliRunner().invoke(cli, ["config", "show", "--format", "json"])

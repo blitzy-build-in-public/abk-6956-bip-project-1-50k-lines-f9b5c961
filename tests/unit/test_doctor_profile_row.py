@@ -32,8 +32,7 @@ def test_the_probe_and_the_report_pass_a_plain_string_profile(tmp_path: Path) ->
     shadowed = _shadowed()
     assert type(shadowed.profile) is str and not hasattr(shadowed.profile, "value")
     row = checks.check_configuration(shadowed)
-    assert row.status is ProbeStatus.PASS
-    assert row.detail == errors.success_message(_PROFILE)
+    assert row.status is ProbeStatus.PASS and row.detail == errors.success_message(_PROFILE)
     reported = {row.name: row for row in checks.run_checks(config=shadowed, cwd=tmp_path).checks}
     assert reported[checks.PROBE_CONFIGURATION].status is ProbeStatus.PASS
     assert reported[checks.PROBE_CONFIGURATION].detail == errors.success_message(_PROFILE)

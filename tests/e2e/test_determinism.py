@@ -1,8 +1,7 @@
 """Acceptance criterion 14: two consecutive example runs normalise to one document.
 
-``run_id``, ``started_at``, ``finished_at`` and every per-record ``duration_ms`` are normalised;
-every other value must match, so a divergence the product emits is reported rather than absorbed.
-"""
+``run_id``, ``started_at``, ``finished_at`` and every per-record ``duration_ms`` are normalised, so
+a divergence the product emits is reported rather than absorbed."""
 
 from __future__ import annotations
 

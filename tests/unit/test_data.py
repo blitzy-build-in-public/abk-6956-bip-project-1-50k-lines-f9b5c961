@@ -81,9 +81,8 @@ def test_a_string_path_loads_what_a_path_loads(
     name: str, read: Callable[[str | Path], data.CaseSet | data.Matrix], fixtures_dir: Path
 ) -> None:
     from_path, from_string = read(fixtures_dir / name), read(str(fixtures_dir / name))
-    assert from_string == from_path and [c.id for c in from_string.cases] == [
-        c.id for c in from_path.cases
-    ]
+    assert from_string == from_path
+    assert [case.id for case in from_string.cases] == [case.id for case in from_path.cases]
 
 
 @pytest.mark.parametrize(
@@ -115,8 +114,7 @@ def test_a_case_carries_its_location_its_values_and_cannot_be_mutated(fixtures_d
     case = data.load_cases(fixtures_dir / "cases.csv").cases[0]
     assert isinstance(case, data.Case)
     assert (case.id, case.name, case.row_index) == ("cases-0", "cases-0", 0)
-    assert case.source_file == fixtures_dir / "cases.csv"
-    assert dict(case.values) == dict(_ROW_VALUES)
+    assert case.source_file == fixtures_dir / "cases.csv" and dict(case.values) == dict(_ROW_VALUES)
     with pytest.raises(dataclasses.FrozenInstanceError):
         case.id = "renamed"
     with pytest.raises(TypeError):
@@ -185,8 +183,7 @@ def test_the_sidecar_schema_is_found_beside_the_data_and_never_outside_it(
     escaped = _table(tmp_path / "outside", "escaped", f"{_CSV_HEADER}\n{_VALID_ROW}\n", schema)
     with pytest.raises(ContractError) as excinfo:
         data.load_row_schema(Path("outside") / escaped.name, base_dir=Path("inside"))
-    assert "outside the schema directory" in str(excinfo.value)
-    assert excinfo.value.json_path == "$"
+    assert "outside the schema directory" in str(excinfo.value) and excinfo.value.json_path == "$"
     (tmp_path / "malf" / "malf.csv").write_text("a,b\n1,2\n", encoding="utf-8")
     sidecar = tmp_path / "malf" / "malf.schema.json"
     sidecar.write_text('{"type": 42}', encoding="utf-8")
@@ -234,8 +231,7 @@ def test_both_binding_entry_points_take_the_documented_argument(fixtures_dir: Pa
     assert [parameter.id for parameter in skipped.parameters] == ["header_only-no-cases"]
     rows = _Recorder()
     data.parametrize(rows, data.load_cases(fixtures_dir / "cases.csv"), argname="row")
-    assert rows.argnames == ["row"]
-    assert [parameter.id for parameter in rows.parameters] == CASE_IDS
+    assert rows.argnames == ["row"] and [parameter.id for parameter in rows.parameters] == CASE_IDS
     for kwargs, argname in (({}, "case"), ({"argname": "row"}, "row")):
         recorder = _Recorder()
         marker = _data_marker("cases.csv", **kwargs)

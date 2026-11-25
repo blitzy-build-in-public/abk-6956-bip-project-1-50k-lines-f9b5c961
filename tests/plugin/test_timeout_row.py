@@ -1,7 +1,6 @@
 """AAP 0.4.7's ``execution.timeout`` row as a session shows it: exit 1, outcome ``failed``,
 phase ``call``, the limit in the message, partial stdout and the log tail attached. The body
-logs before printing, and its second of work is a ``time.monotonic()`` loop rather than a sleep.
-"""
+logs before printing, and its second of work is a ``time.monotonic()`` loop rather than a sleep."""
 
 from __future__ import annotations
 
@@ -90,7 +89,6 @@ def test_a_test_over_the_limit_fails_in_the_call_phase_with_the_timeout_message(
     pytester: pytest.Pytester, clean_foundry_env: None
 ) -> None:
     record = _run(pytester)
-
     assert record["outcome"] == "failed", record
     failure = _failure(record)
     assert failure.get("phase") == "call", failure
@@ -104,7 +102,6 @@ def test_the_timed_out_record_attaches_partial_stdout_and_the_log_tail(
 ) -> None:
     record = _run(pytester)
     files = _artifact_files(pytester, record)
-
     assert {"stdout", "log_tail", "traceback"} <= set(files), sorted(files)
     assert _PRINTED_MARKER in files["stdout"].read_text(encoding="utf-8")
     assert _LOGGED_MARKER in files["log_tail"].read_text(encoding="utf-8")

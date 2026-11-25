@@ -1,6 +1,5 @@
 """The data-collection states of AAP 0.14.1 criterion 5 through ``pytester``: an unsupported
-extension, a short row located by file, line and column, and a header-only skip.
-"""
+extension, a short row located by file, line and column, and a header-only skip."""
 
 from __future__ import annotations
 
@@ -106,8 +105,7 @@ def test_missing_column_reports_file_line_and_column(
     result = pytester.runpytest("-q")
     assert result.ret == 2
     output = result.stdout.str()
-    assert f"{_MISSING_COL}:3:" in output
-    assert "(column 'expected_total')" in output
+    assert f"{_MISSING_COL}:3:" in output and "(column 'expected_total')" in output
     assert "row 1 has 5 values but the header declares 6 columns" in output
 
 

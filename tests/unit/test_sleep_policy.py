@@ -1,6 +1,5 @@
 """Both time policies: the 100 ms sleep cap over tests/ and examples/ (AAP 0.14.2), and no raw
-wall-clock read over src/foundry outside the eight reviewed producers (AAP 0.14.3).
-"""
+wall-clock read over src/foundry outside the eight reviewed producers (AAP 0.14.3)."""
 
 from __future__ import annotations
 
@@ -187,8 +186,7 @@ def _sleep_argument(call: ast.Call, functions: tuple[str, ...]) -> str | None:
     delay = _delay_seconds(arguments[0])
     if delay is not None:
         return None if delay <= _SLEEP_CAP_SECONDS else ast.unparse(arguments[0])
-    source = ast.unparse(arguments[0])
-    return source if computed or isinstance(arguments[0], ast.Constant) else None
+    return ast.unparse(arguments[0]) if computed or isinstance(arguments[0], ast.Constant) else None
 
 
 def _scan_sleep_source(source: str, display: str) -> tuple[SleepHit, ...]:

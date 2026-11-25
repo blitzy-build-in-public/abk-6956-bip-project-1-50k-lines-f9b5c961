@@ -3,8 +3,7 @@
 Holds the top-level ``pytest_plugins`` declaration, the session environment pinning (``TZ``,
 ``LC_ALL``, ``LANG``, ``PYTEST_ADDOPTS``, ``locale``, ``PYTEST_DEBUG_TEMPROOT``/``TMPDIR``), the
 shared fixtures, and the loopback-only socket guard of AAP 0.14.3, which refuses every non-loopback
-target before the syscall.
-"""
+target before the syscall."""
 
 from __future__ import annotations
 
@@ -64,8 +63,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
     A given basetemp is used directly, so ``_pytest.tmpdir`` never enters the ``pytest-of-<user>``
     branch this mitigation avoids; the hook runs first because that plugin reads the option in its
-    own configure hook.
-    """
+    own configure hook."""
     if _PRIVATE_TEMPROOT is not None and config.option.basetemp is None:
         config.option.basetemp = str(_PRIVATE_TEMPROOT / "basetemp")
 
@@ -75,8 +73,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Remove the private root after a clean run, and keep it after a failing one to inspect.
 
     A failing run's tree is evidence, so it survives and the controlling process names it; a worker
-    stays quiet, because the controller's line is the one a reader can act on.
-    """
+    stays quiet, because the controller's line is the one a reader can act on."""
     if _PRIVATE_TEMPROOT is None:
         return
     if exitstatus == 0:
@@ -106,8 +103,7 @@ class SocketGuardState:
 
     Process-global, so one ``-n auto`` worker owns them and the offline proof measures a delta.
     ``foundry.diagnostics.socket_guard`` recognises a guard by ``FOUNDRY_SOCKET_GUARD`` and
-    ``FOUNDRY_NON_LOOPBACK_ATTEMPTS``, which :meth:`__getattr__` serves live.
-    """
+    ``FOUNDRY_NON_LOOPBACK_ATTEMPTS``, which :meth:`__getattr__` serves live."""
 
     installed: bool = True
     loopback_attempts: int = 0
@@ -154,8 +150,7 @@ def _refused_target(family: int, address: object) -> tuple[str, object] | None:
     """Return the ``(host, port)`` to refuse, or ``None`` when the target may proceed.
 
     Only ``AF_INET``/``AF_INET6`` are policed, and a name is refused *before* the resolver runs,
-    because resolving it would open the very socket being refused.
-    """
+    because resolving it would open the very socket being refused."""
     if family not in _INET_FAMILIES:
         return None
     pair = address if isinstance(address, tuple) and len(address) >= 2 else ()
@@ -177,12 +172,7 @@ def _refuse(host: str, port: object) -> Never:
 
 
 def _guarded_getaddrinfo(
-    host: object,
-    port: object,
-    family: int = 0,
-    type: int = 0,
-    proto: int = 0,
-    flags: int = 0,
+    host: object, port: object, family: int = 0, type: int = 0, proto: int = 0, flags: int = 0
 ) -> Any:
     """Resolve a local name only; refuse any other name before the resolver runs."""
     name = _host_text(host)
@@ -192,45 +182,36 @@ def _guarded_getaddrinfo(
     return _ORIGINAL_GETADDRINFO(host, port, family, type, proto, flags)
 
 
-def _guarded_connect(self: socket.socket, address: object) -> None:
-    """Connect to a loopback target only, counting the permitted attempt and refusing the rest."""
+def _admit(self: socket.socket, address: object) -> None:
+    """Refuse a non-loopback target, or count the loopback attempt that is about to proceed."""
     refused = _refused_target(self.family, address)
     if refused is not None:
         _refuse(*refused)
     if self.family in _INET_FAMILIES:
         SOCKET_GUARD.loopback_attempts += 1
+
+
+def _guarded_connect(self: socket.socket, address: object) -> None:
+    """Connect to a loopback target only, counting the permitted attempt and refusing the rest."""
+    _admit(self, address)
     _ORIGINAL_CONNECT(self, address)
 
 
 def _guarded_connect_ex(self: socket.socket, address: object) -> int:
     """Behave as :meth:`socket.socket.connect_ex` for a local target, and refuse any other."""
-    refused = _refused_target(self.family, address)
-    if refused is not None:
-        _refuse(*refused)
-    if self.family in _INET_FAMILIES:
-        SOCKET_GUARD.loopback_attempts += 1
+    _admit(self, address)
     return int(_ORIGINAL_CONNECT_EX(self, address))
 
 
 def _guarded_sendto(self: socket.socket, *args: object) -> int:
     """Send a datagram to a loopback target only, refusing the rest before the syscall."""
-    address = args[-1] if args else None
-    refused = _refused_target(self.family, address)
-    if refused is not None:
-        _refuse(*refused)
-    if self.family in _INET_FAMILIES:
-        SOCKET_GUARD.loopback_attempts += 1
+    _admit(self, args[-1] if args else None)
     return int(_ORIGINAL_SENDTO(self, *args))
 
 
 def _guarded_sendmsg(self: socket.socket, *args: object) -> int:
     """Send one message to a loopback target only; a connected socket names no target."""
-    address = args[-1] if args else None
-    refused = _refused_target(self.family, address)
-    if refused is not None:
-        _refuse(*refused)
-    if self.family in _INET_FAMILIES:
-        SOCKET_GUARD.loopback_attempts += 1
+    _admit(self, args[-1] if args else None)
     return int(_ORIGINAL_SENDMSG(self, *args))
 
 
@@ -251,20 +232,16 @@ def _install_guard() -> None:
     """Patch :mod:`socket` once per process; a second import adopts :data:`_GUARD_MARK`'s state."""
     if getattr(socket.socket.connect, _GUARD_MARK, None) is SOCKET_GUARD:
         return
-    wrappers = (
-        _guarded_getaddrinfo,
-        _guarded_connect,
-        _guarded_connect_ex,
-        _guarded_sendto,
-        _guarded_sendmsg,
+    patches = (
+        (socket, "getaddrinfo", _guarded_getaddrinfo),
+        (socket.socket, "connect", _guarded_connect),
+        (socket.socket, "connect_ex", _guarded_connect_ex),
+        (socket.socket, "sendto", _guarded_sendto),
+        (socket.socket, "sendmsg", _guarded_sendmsg),
     )
-    for wrapper in wrappers:
+    for owner, name, wrapper in patches:
         setattr(wrapper, _GUARD_MARK, SOCKET_GUARD)
-    socket.getaddrinfo = _guarded_getaddrinfo
-    socket.socket.connect = _guarded_connect
-    socket.socket.connect_ex = _guarded_connect_ex
-    socket.socket.sendto = _guarded_sendto
-    socket.socket.sendmsg = _guarded_sendmsg
+        setattr(owner, name, wrapper)
 
 
 _install_guard()
@@ -306,12 +283,9 @@ def foundry_script() -> pathlib.Path:
     return script
 
 
-_STRIPPED_VARIABLES: Final[tuple[str, ...]] = (
-    "PYTEST_ADDOPTS",
-    "PYTEST_XDIST_WORKER",
-    "PYTEST_XDIST_WORKER_COUNT",
-    "PYTEST_CURRENT_TEST",
-    "PYTEST_PLUGINS",
+_STRIPPED_VARIABLES: Final[str] = (
+    "PYTEST_ADDOPTS PYTEST_XDIST_WORKER PYTEST_XDIST_WORKER_COUNT PYTEST_CURRENT_TEST "
+    "PYTEST_PLUGINS"
 )
 """Outer-run variables a child process must not inherit."""
 
@@ -321,24 +295,17 @@ _STRIPPED_PREFIXES: Final[tuple[str, ...]] = ("FOUNDRY_", "COV_CORE_", "COVERAGE
 
 @pytest.fixture(scope="session")
 def subprocess_env() -> Callable[..., dict[str, str]]:
-    """Session scope: a child-environment builder that drops this run's pytest, xdist, Foundry and
-    coverage state while keeping ``PATH`` and ``PYTHONPATH``.
-    """
+    """Session scope: a child-environment builder dropping this run's pytest, xdist, Foundry and
+    coverage state while keeping ``PATH`` and ``PYTHONPATH``."""
 
     def build(extra: Mapping[str, str] | None = None) -> dict[str, str]:
         env = dict(os.environ)
-        for name in _STRIPPED_VARIABLES:
+        for name in _STRIPPED_VARIABLES.split():
             env.pop(name, None)
         for name in [key for key in env if key.startswith(_STRIPPED_PREFIXES)]:
             del env[name]
         env.update(
-            {
-                "TZ": "UTC",
-                "LC_ALL": "C",
-                "LANG": "C",
-                "PYTHONIOENCODING": "utf-8",
-                "PYTHONDONTWRITEBYTECODE": "1",
-            }
+            TZ="UTC", LC_ALL="C", LANG="C", PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1"
         )
         if extra:
             env.update(extra)
@@ -348,11 +315,7 @@ def subprocess_env() -> Callable[..., dict[str, str]]:
 
 
 def _capture(
-    command: list[str],
-    *,
-    cwd: pathlib.Path,
-    env: Mapping[str, str],
-    timeout: float,
+    command: list[str], *, cwd: pathlib.Path, env: Mapping[str, str], timeout: float
 ) -> subprocess.CompletedProcess[str]:
     """Run ``command`` in a child process with its output captured and its status unraised."""
     return subprocess.run(
@@ -373,10 +336,7 @@ def run_pytest(
     """Session scope: run ``python -m pytest`` in a child built from ``subprocess_env``'s output."""
 
     def run(
-        *args: str,
-        cwd: pathlib.Path,
-        env: Mapping[str, str] | None = None,
-        timeout: float = 300.0,
+        *args: str, cwd: pathlib.Path, env: Mapping[str, str] | None = None, timeout: float = 300.0
     ) -> subprocess.CompletedProcess[str]:
         return _capture(
             [sys.executable, "-m", "pytest", *args],
@@ -390,16 +350,12 @@ def run_pytest(
 
 @pytest.fixture(scope="session")
 def run_foundry(
-    foundry_script: pathlib.Path,
-    subprocess_env: Callable[..., dict[str, str]],
+    foundry_script: pathlib.Path, subprocess_env: Callable[..., dict[str, str]]
 ) -> Callable[..., subprocess.CompletedProcess[str]]:
     """Session scope: run the installed console script, the real entry point of AAP 0.14.5."""
 
     def run(
-        *args: str,
-        cwd: pathlib.Path,
-        env: Mapping[str, str] | None = None,
-        timeout: float = 300.0,
+        *args: str, cwd: pathlib.Path, env: Mapping[str, str] | None = None, timeout: float = 300.0
     ) -> subprocess.CompletedProcess[str]:
         return _capture(
             [str(foundry_script), *args], cwd=cwd, env=subprocess_env(env), timeout=timeout
@@ -422,10 +378,8 @@ def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
     """Function scope: write a throwaway project into a test-owned directory and return it.
 
     Every file is UTF-8 with LF newlines and a trailing newline, ``pyproject.toml`` is written only
-    when a caller passes it (which keeps a zero-configuration directory genuinely configuration
-    free), and containment is enforced so ``examples/checkout`` can never be mutated.
-    """
-
+    when a caller passes it (so a zero-configuration directory stays configuration free), and
+    containment is enforced so ``examples/checkout`` can never be mutated."""
     base = tmp_path.parent.resolve()
 
     def write(

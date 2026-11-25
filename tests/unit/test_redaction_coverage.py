@@ -1,6 +1,5 @@
 """Redaction's coverage floor: every credential shape loses its value wherever it stands, while a
-location, a node id and a deny-list read as written under the pass that must keep them.
-"""
+location, a node id and a deny-list read as written under the pass that must keep them."""
 
 from __future__ import annotations
 
@@ -110,5 +109,4 @@ def test_a_configuration_diagnostic_reads_through_the_diagnostic_pass(shape: str
 def test_the_diagnostic_pass_still_masks_every_value(shape: str) -> None:
     text = shape.replace("$s", _SECRET)
     scrubbed = default_redactor().text(text)
-    assert default_redactor().diagnostic(text) == scrubbed
-    assert _SECRET not in scrubbed
+    assert default_redactor().diagnostic(text) == scrubbed and _SECRET not in scrubbed

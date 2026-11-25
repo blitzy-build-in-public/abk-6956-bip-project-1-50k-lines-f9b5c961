@@ -1,7 +1,6 @@
 """The result-set comparison behind ``foundry report compare``, over the committed fixture pair.
 AAP 0.14.1 makes the three sets an acceptance observation; ``has_new_failures`` is the predicate the
-command's exit code follows, and the CLI surface itself belongs to ``tests/unit/test_cli.py``.
-"""
+command's exit code follows, and the CLI surface itself belongs to ``tests/unit/test_cli.py``."""
 
 from __future__ import annotations
 
@@ -101,8 +100,7 @@ def test_the_committed_pair_reports_the_documented_set(
     pair: ComparisonDiff, name: str, expected: tuple[str, ...]
 ) -> None:
     node_ids: tuple[str, ...] = getattr(pair, name)
-    assert node_ids == expected
-    assert node_ids == tuple(sorted(set(node_ids)))
+    assert node_ids == expected and node_ids == tuple(sorted(set(node_ids)))
 
 
 @pytest.mark.parametrize(("left", "right"), tuple(combinations(SET_NAMES, 2)))
@@ -115,8 +113,7 @@ def test_the_committed_pair_matches_the_transitions_its_documents_show(
 ) -> None:
     base, new = _failing(documents / RESULTS_BASE), _failing(documents / RESULTS_NEW)
     assert set(pair.newly_failing) == new - base
-    assert set(pair.newly_passing) == base - new
-    assert set(pair.still_failing) == base & new
+    assert set(pair.newly_passing) == base - new and set(pair.still_failing) == base & new
 
 
 def test_the_classification_table_covers_every_outcome() -> None:
@@ -135,8 +132,7 @@ def test_each_outcome_is_classified_as_documented(
 
 def test_a_document_compared_with_itself_reports_no_regression_or_recovery(documents: Path) -> None:
     same = diff_files(documents / RESULTS_BASE, documents / RESULTS_BASE)
-    assert same.newly_failing == ()
-    assert same.newly_passing == ()
+    assert same.newly_failing == () and same.newly_passing == ()
     assert same.still_failing == (
         "tests/test_cart.py::test_two_items",
         "tests/test_checkout.py::test_payment_declined",
@@ -147,8 +143,7 @@ def test_a_document_compared_with_itself_reports_no_regression_or_recovery(docum
 def test_a_failure_free_pair_reports_nothing_at_all(tmp_path: Path) -> None:
     nodeid = f"{MODULE_PATH}::ok"
     result = _compare(tmp_path, [_record(nodeid, "passed")], [_record(nodeid, "passed")])
-    assert result.is_empty is True
-    assert result.has_new_failures is False
+    assert result.is_empty is True and result.has_new_failures is False
     assert result.as_dict() == {"newly_failing": [], "newly_passing": [], "still_failing": []}
     assert result.counts() == {"newly_failing": 0, "newly_passing": 0, "still_failing": 0}
 
@@ -173,8 +168,7 @@ def test_a_nodeid_in_only_one_document_follows_the_documented_rule(tmp_path: Pat
         [_record(shared, "failed"), _record(vanished, "failed")],
         [_record(shared, "failed"), _record(appeared, "error")],
     )
-    assert result.newly_failing == (appeared,)
-    assert result.still_failing == (shared,)
+    assert result.newly_failing == (appeared,) and result.still_failing == (shared,)
     # AAP 0.4.4 reads newly_passing as baseline-failing minus newer-failing.
     assert result.newly_passing == (vanished,)
 
@@ -186,8 +180,7 @@ def test_an_unreadable_document_raises_data_error_naming_its_path(documents: Pat
     with pytest.raises(DataError) as raised:
         diff_files(documents / RESULTS_BASE, unreadable)
     assert isinstance(raised.value, FoundryError)
-    assert raised.value.file == unreadable
-    assert str(unreadable) in str(raised.value)
+    assert raised.value.file == unreadable and str(unreadable) in str(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -206,5 +199,4 @@ def test_a_parsed_document_that_is_not_a_result_document_raises_data_error(
     with pytest.raises(DataError) as raised:
         diff_files(documents / RESULTS_BASE, target)
     assert isinstance(raised.value, FoundryError)
-    assert raised.value.file == target
-    assert str(target) in str(raised.value)
+    assert raised.value.file == target and str(target) in str(raised.value)

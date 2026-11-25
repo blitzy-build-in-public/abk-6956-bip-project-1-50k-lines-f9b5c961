@@ -208,8 +208,7 @@ def test_run_hands_pytest_the_builder_argv_and_never_starts_it_on_a_fault(
 
     monkeypatch.setattr("pytest.main", interrupting)
     interrupted = _run_cli(capsys, "run", "-q")
-    assert interrupted.code == INTERRUPT
-    assert "aborted" in interrupted.stderr
+    assert interrupted.code == INTERRUPT and "aborted" in interrupted.stderr
 
 
 def test_the_argv_orders_the_registry_then_the_specials_then_the_pytest_arguments() -> None:

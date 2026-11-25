@@ -222,11 +222,7 @@ def test_run_hands_back_pass_fail_and_configuration_exit_codes(
 
 @pytest.mark.parametrize("case", _PYTEST_CODE_CASES, ids=[case[0] for case in _PYTEST_CODE_CASES])
 def test_run_preserves_pytest_exit_codes(
-    tmp_path: Path,
-    write_project: _Project,
-    run_foundry: _Run,
-    run_pytest: _Run,
-    case: _CodeCase,
+    tmp_path: Path, write_project: _Project, run_foundry: _Run, run_pytest: _Run, case: _CodeCase
 ) -> None:
     identifier, code, argv, files, conftest = case
     project = write_project(tmp_path / identifier, files=files, conftest=conftest)

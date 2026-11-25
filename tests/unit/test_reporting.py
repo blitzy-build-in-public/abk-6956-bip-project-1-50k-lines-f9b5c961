@@ -210,8 +210,7 @@ def test_the_suite_carries_the_run_identity_and_a_testcase_its_attributes() -> N
     assert errored.find("testcase/error") is not None and errored.get("errors") == "1"
     # AAP 0.4.6: the case carries its module, its name and its duration; the artifact properties
     # are the subject of the cases below.
-    case = ElementTree.fromstring(junit.render([_record_for("a", attempts=3)]))
-    el = case.find("testcase")
+    el = ElementTree.fromstring(junit.render([_record_for("a", attempts=3)])).find("testcase")
     assert el is not None and (el.get("classname"), el.get("name")) == ("tests.test_cart", "a")
     assert el.get("time") == "0.013"
 
@@ -300,16 +299,14 @@ def test_the_characters_xml_allows_survive_unchanged(label: str, legal: str) -> 
 
 
 def test_the_documented_properties_and_artifact_references_are_unchanged() -> None:
-    verdict = QuarantineRecord(state="none")
     chosen = {"outcome": Outcome.PASSED, "attempts": 3, "artifacts": _ARTIFACTS}
-    record = _record_for(quarantine=verdict, **chosen)
+    record = _record_for(quarantine=QuarantineRecord(state="none"), **chosen)
     testcase = ElementTree.fromstring(junit.render([record])).find("testcase")
     assert testcase is not None and _property_pairs(testcase) == _EXPECTED_PROPERTIES
 
 
 def test_a_markup_node_id_is_still_escaped() -> None:
-    nodeid = f"{_MODULE}::test_<script>alert(1)</script>"
-    document = junit.render([_failed_record(nodeid=nodeid)])
+    document = junit.render([_failed_record(nodeid=f"{_MODULE}::test_<script>alert(1)</script>")])
     assert "&lt;script&gt;" in document and "<script" not in document
     testcase = ElementTree.fromstring(document).find("testcase")
     assert testcase is not None and testcase.get("name") == "test_<script>alert(1)</script>"

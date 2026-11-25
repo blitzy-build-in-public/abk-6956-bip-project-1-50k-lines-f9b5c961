@@ -133,9 +133,8 @@ def test_activation_runs_green_and_reports_the_defaults(
     report = (pytester.path / "report.html").read_text(encoding="utf-8")
     assert report.strip() and run_id in report
     facts = json.loads((pytester.path / "artifacts.json").read_text(encoding="utf-8"))
-    assert (
-        isinstance(facts, dict) and facts["nodeid"] == f"{_MODULE}.py::test_zero_config_artifacts"
-    )
+    expected_nodeid = f"{_MODULE}.py::test_zero_config_artifacts"
+    assert isinstance(facts, dict) and facts["nodeid"] == expected_nodeid
     artifact_run_id = facts["run_id"]
     assert isinstance(artifact_run_id, str) and _RUN_ID.fullmatch(artifact_run_id) is not None
     run_dir = pytester.path / "artifacts" / artifact_run_id
@@ -152,10 +151,8 @@ def test_activation_runs_green_and_reports_the_defaults(
 
 def test_option_group_is_registered(pytester: pytest.Pytester, clean_foundry_env: None) -> None:
     result = pytester.runpytest("--help")
-    assert result.ret == 0
-    assert not (pytester.path / "foundry.toml").exists()
-    listed = result.stdout.str()
-    missing = [name for name in _OPTIONS if name not in listed]
+    assert result.ret == 0 and not (pytester.path / "foundry.toml").exists()
+    missing = [name for name in _OPTIONS if name not in result.stdout.str()]
     assert missing == [], f"--help does not list {missing}"
 
 

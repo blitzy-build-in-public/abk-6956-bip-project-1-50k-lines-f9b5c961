@@ -9,8 +9,7 @@ one ``WARNING``, that one file and nothing else.
 The phase reports a case hands the capture path are stand-ins for the three reports pytest builds
 for one item, so no case here drives pytest machinery, sleeps, reads the wall clock or opens a
 socket (AAP 0.14.3). The fixed run id, profile and node id are imported from
-``tests.unit.test_execution`` rather than restated, so the suite describes one run and not two.
-"""
+``tests.unit.test_execution`` rather than restated, so the suite describes one run and not two."""
 
 from __future__ import annotations
 
@@ -37,8 +36,7 @@ class _PhaseReport:
 
     ``sections`` is the accumulated ``(title, content)`` list pytest re-sends on every phase's
     report and ``longrepr`` is what a traceback is rendered from; the stand-in keeps both without a
-    runtest protocol behind it.
-    """
+    runtest protocol behind it."""
 
     def __init__(
         self,
@@ -79,8 +77,7 @@ def _phase_reports(
     pytest appends a non-empty ``(when, key, content)`` triple as each phase runs and re-sends the
     whole accumulated list on that phase's report, so the setup report carries the setup sections,
     the call report the setup and call sections, and the teardown report all of them. Only the call
-    report fails, and ``longrepr`` is what it fails with.
-    """
+    report fails, and ``longrepr`` is what it fails with."""
     accumulated: list[tuple[str, str]] = []
     reports: list[_PhaseReport] = []
     for when in _PHASES:
@@ -110,8 +107,7 @@ def _capture_streams(
 
     The writer is a real one rooted in ``tmp_path`` and bound to :data:`_NODEID`, the log ring is
     a real :class:`foundry.obs.capture.LogRing`, and the stash is a plain dict, so the capture path
-    runs as it does for an item with no runtest protocol behind it.
-    """
+    runs as it does for an item with no runtest protocol behind it."""
     writer = artifacts.ArtifactWriter(
         tmp_path, run_id=_RUN_ID, profile=_PROFILE, redactor=default_redactor(), nodeid=_NODEID
     )
@@ -134,10 +130,7 @@ def _capture_streams(
             id="every-phase-once-in-order",
         ),
         pytest.param(
-            (("call", "stdout", "one call line\n"),),
-            "one call line\n",
-            "",
-            id="call-phase-only",
+            (("call", "stdout", "one call line\n"),), "one call line\n", "", id="call-phase-only"
         ),
         pytest.param(
             (
@@ -172,7 +165,6 @@ def test_an_unrenderable_traceback_is_one_warning_and_costs_only_that_file(
     directory = _capture_streams(
         tmp_path, (("call", "stdout", "call line\n"),), longrepr=_Unrenderable()
     )
-
     assert not (directory / "traceback.txt").exists(), "an unrenderable traceback left a file"
     assert (directory / "stdout.log").read_text(encoding="utf-8") == "call line\n"
     assert (directory / "manifest.json").is_file(), "the fault skipped the manifest as well"
@@ -181,5 +173,4 @@ def test_an_unrenderable_traceback_is_one_warning_and_costs_only_that_file(
     ]
     assert len(warnings) == 1, warnings
     assert "plumbing_failure" in warnings[0]
-    assert "component=execution.coordinator" in warnings[0]
-    assert "error=RuntimeError" in warnings[0]
+    assert "component=execution.coordinator" in warnings[0] and "error=RuntimeError" in warnings[0]

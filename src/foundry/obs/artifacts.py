@@ -289,7 +289,11 @@ class ArtifactWriter:
         return self._store(kind, name, _one_newline(scrubbed), redacted=scrubbed != text)
 
     def write_log_tail(self, lines: Sequence[str]) -> ArtifactRef | None:
-        """Write the captured log tail as ``log_tail.log``; an empty sequence writes nothing."""
+        """Write the captured log tail as ``log_tail.log``; an empty sequence writes nothing.
+
+        This is the single scrub of those lines: ``foundry.reporting.panels`` renders the written
+        bytes as they stand, so no earlier pass may be dropped from here.
+        """
         if not lines:
             return None
         scrubbed = [_scrub_log_line(line, self._redactor) for line in lines]

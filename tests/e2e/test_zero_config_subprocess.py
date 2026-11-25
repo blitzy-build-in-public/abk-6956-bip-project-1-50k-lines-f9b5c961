@@ -122,8 +122,7 @@ def test_ambient_environment_does_not_leak(
 ) -> None:
     monkeypatch.setenv("PYTEST_ADDOPTS", PROBE_ADDOPTS)
     monkeypatch.setenv("FOUNDRY_HTTP__TIMEOUT", PROBE_TIMEOUT)
-    project = _write_project(tmp_path / "proj_leak")
-    result = run_pytest("-q", cwd=project)
+    result = run_pytest("-q", cwd=_write_project(tmp_path / "proj_leak"))
     output = f"{result.stdout}\n{result.stderr}"
     assert result.returncode == 0, f"the child inherited the outer process's environment:\n{output}"
     assert "1 passed" in output, output

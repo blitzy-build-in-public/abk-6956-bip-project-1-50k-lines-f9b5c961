@@ -124,7 +124,6 @@ def test_the_credential_never_travels_to_a_host_outside_the_base_origin(
         assert foreign.received == []
         # The session stays usable: the configured peer still answers, with the credential.
         accepted = session.get(OK_PATH)
-    assert accepted.status_code == 200
-    assert accepted.json() == {"ok": True}
+    assert accepted.status_code == 200 and accepted.json() == {"ok": True}
     assert base.received == [{"path": OK_PATH, "authorization": f"Bearer {TOKEN_SENTINEL}"}]
     assert foreign.received == []

@@ -8,8 +8,7 @@ how many marked failures the run itself counts, and the marker vocabulary the re
 Nothing here drives pytest machinery, sleeps, reads the wall clock or opens a socket (AAP 0.14.3):
 every verdict is decided from a registry and an outcome the run already recorded. The coordinator's
 per-test capture has its own module, ``tests.unit.test_execution_capture``, and the retry budget,
-sharding, timeout and wire payloads stay in ``tests.unit.test_execution``.
-"""
+sharding, timeout and wire payloads stay in ``tests.unit.test_execution``."""
 
 from __future__ import annotations
 
@@ -45,10 +44,8 @@ def test_decide_follows_the_published_table(
     """Every row of AAP 0.4.7's table, with the state, the outcome and the exit-code verdict."""
     registry = quarantine.QuarantineRegistry(mode=mode)
     decision = registry.decide(quarantined=quarantined, outcome=outcome)
-    assert decision.state == expected_state
-    assert decision.outcome == expected_outcome
-    assert decision.fails_run is fails_run
-    assert decision.listed is (expected_state != "none")
+    assert decision.state == expected_state and decision.outcome == expected_outcome
+    assert decision.fails_run is fails_run and decision.listed is (expected_state != "none")
     assert decision.as_payload() == state.QuarantinePayload(state=expected_state)
 
 
@@ -61,8 +58,7 @@ def test_report_mode_keeps_the_run_green_where_strict_mode_fails_it() -> None:
         quarantined=True, outcome="failed"
     )
     assert report.outcome == strict.outcome == "quarantined_failed"
-    assert report.fails_run is False
-    assert strict.fails_run is True
+    assert report.fails_run is False and strict.fails_run is True
     assert quarantine.QuarantineRegistry(mode="report").run_failed([report]) is False
     assert quarantine.QuarantineRegistry(mode="strict").run_failed([strict]) is True
 
@@ -70,12 +66,10 @@ def test_report_mode_keeps_the_run_green_where_strict_mode_fails_it() -> None:
 def test_a_quarantined_pass_is_a_success_carrying_the_removal_note() -> None:
     """Assumption A11: a green marked test succeeds, and the note asks for the marker's removal."""
     decision = quarantine.QuarantineRegistry().decide(quarantined=True, outcome="passed")
-    assert decision.outcome == "quarantine_passed"
-    assert decision.fails_run is False
+    assert decision.outcome == "quarantine_passed" and decision.fails_run is False
     assert quarantine.QuarantineRegistry().run_failed([decision]) is False
     assert decision.note == quarantine.QUARANTINE_PASSED_NOTE
-    assert decision.note is not None
-    assert "remove the foundry_quarantine marker" in decision.note
+    assert decision.note is not None and "remove the foundry_quarantine marker" in decision.note
     assert decision.as_dict()["listed"] is True
 
 

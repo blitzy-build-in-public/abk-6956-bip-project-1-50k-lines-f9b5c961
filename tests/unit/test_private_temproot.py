@@ -4,8 +4,7 @@ pytest at the release AAP 0.5.1 fixes builds the predictable ``<tempdir>/pytest-
 GHSA-6w46-j5rx-g56g concerns, so ``tests/conftest.py`` pins an unpredictable root instead and gives
 the session a base directory inside it. These tests assert the pin through the session running them,
 which is the observation AAP 0.14.5 accepts. A caller that names ``PYTEST_DEBUG_TEMPROOT`` or passes
-``--basetemp`` keeps its own base directory, so only the properties that still hold are asserted.
-"""
+``--basetemp`` keeps its own base directory, so only the properties that still hold are asserted."""
 
 from __future__ import annotations
 

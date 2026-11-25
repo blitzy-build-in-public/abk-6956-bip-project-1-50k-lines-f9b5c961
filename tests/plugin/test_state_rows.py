@@ -1,7 +1,6 @@
 """AAP 0.4.7's fixture-fault and interrupt rows as a session shows them: the halves the constructor
 seam in test_http.py and the exit-code seam in test_cli.py cannot see. The interrupt case needs a
-child process, because pytester's in-process runner re-raises an inner session's interrupt.
-"""
+child process, because pytester's in-process runner re-raises an inner session's interrupt."""
 
 from __future__ import annotations
 
@@ -80,9 +79,7 @@ def test_a_fixture_without_a_base_url_errors_one_test_and_the_session_runs_on(
     pytester: pytest.Pytester, clean_foundry_env: None
 ) -> None:
     pytester.makepyfile(**{_API_MODULE: _API_WITHOUT_BASE_URL})
-
     result = pytester.runpytest("-q")
-
     assert result.ret == 1, (
         f"the run exited {result.ret}, not 1: a fixture that cannot be built errors the one test "
         f"that requested it rather than ending the session\n{result.stdout.str()}"
@@ -111,9 +108,7 @@ def test_an_interrupt_flushes_partial_results_and_writes_the_report(
     pytester: pytest.Pytester, clean_foundry_env: None
 ) -> None:
     pytester.makepyfile(**{_INTERRUPT_MODULE: _INTERRUPT_IN_CALL})
-
     result = pytester.runpytest_subprocess("-q", timeout=_CHILD_TIMEOUT_SECONDS)
-
     assert result.ret == 2, (
         f"the interrupted run exited {result.ret}, not 2: pytest's interrupt code is preserved, "
         f"not remapped\n{result.stdout.str()}{result.stderr.str()}"

@@ -187,9 +187,8 @@ def _may_import(unit: str) -> frozenset[str]:
 
 def _sanctioned(target: str) -> bool:
     # An ancestor package of an allowed root is a PEP 562 lazy table, so reaching it costs nothing.
-    return _under(target, PLUGIN_MODULE_SCOPE_ROOTS) or any(
-        root.startswith(f"{target}.") for root in PLUGIN_MODULE_SCOPE_ROOTS
-    )
+    roots = PLUGIN_MODULE_SCOPE_ROOTS
+    return _under(target, roots) or any(root.startswith(f"{target}.") for root in roots)
 
 
 def _module_scope_offenders(sites: Iterable[Site]) -> tuple[Site, ...]:
@@ -224,8 +223,7 @@ EDGE_RULES: Final[Mapping[str, Callable[[Site], bool]]] = MappingProxyType(
 
 @pytest.mark.parametrize("heading", list(EDGE_RULES))
 def test_no_edge_breaks_a_rule_of_the_plan(repo_root: Path, heading: str) -> None:
-    edges = _edges(_scan_tree(repo_root))
-    offenders = tuple(edge for edge in edges if EDGE_RULES[heading](edge))
+    offenders = tuple(edge for edge in _edges(_scan_tree(repo_root)) if EDGE_RULES[heading](edge))
     assert offenders == (), _report(offenders, heading)
 
 

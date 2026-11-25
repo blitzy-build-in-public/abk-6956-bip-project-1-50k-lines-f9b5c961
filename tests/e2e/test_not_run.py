@@ -1,6 +1,5 @@
 """AAP 0.4.6's ninth outcome as real runs produce it: a worker that kills itself under ``-n 2``, and
-a serial session stopped by ``pytest.exit``. Only a real process produces ``not_run`` (A12).
-"""
+a serial session stopped by ``pytest.exit``. Only a real process produces ``not_run`` (A12)."""
 
 from __future__ import annotations
 
@@ -105,7 +104,6 @@ def test_a_lost_worker_leaves_its_item_not_run(
     project, out = _project(tmp_path, "worker_loss", "test_crash.py", _CRASH_MODULE)
     result = _run_project(run_pytest, project, out, "-n", "2")
     output = _output(result)
-
     assert result.returncode == 1, f"a lost worker fails the run (AAP 0.4.7){output}"
     records = _records(out)
     results = _of(records, "result")
@@ -134,7 +132,6 @@ def test_a_stopped_serial_session_names_the_rest_not_run(
     project, out = _project(tmp_path, "stopped", "test_stop.py", _STOP_MODULE)
     result = _run_project(run_pytest, project, out)
     output = _output(result)
-
     assert result.returncode == 1, f"the stopping test named returncode=1{output}"
     records = _records(out)
     results = _of(records, "result")

@@ -1,7 +1,6 @@
 """``--foundry-retries 2`` on real runs: two failed attempts and a passing third end as one
 ``passed`` record with ``attempts: 3``, the default retries nothing, and the budget is bounded.
-Each generated test counts its attempts in a file, so no run depends on process memory.
-"""
+Each generated test counts its attempts in a file, so no run depends on process memory."""
 
 from __future__ import annotations
 
@@ -91,9 +90,7 @@ def _ledger_entries(ledger: Path) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    ("foundry_toml", "argv"),
-    [(None, ("--foundry-retries", "2")), (_TOML, ())],
-    ids=["cli", "file"],
+    ("foundry_toml", "argv"), [(None, ("--foundry-retries", "2")), (_TOML, ())], ids=["cli", "file"]
 )
 def test_two_failures_and_a_pass_end_as_three_attempts(
     pytester: pytest.Pytester,

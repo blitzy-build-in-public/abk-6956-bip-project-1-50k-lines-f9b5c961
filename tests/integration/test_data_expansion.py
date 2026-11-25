@@ -143,8 +143,7 @@ def test_tabular_file_expands_to_twelve_located_cases(
         for index, case_id in enumerate(CASE_IDS)
     ]
     parameter_ids = [getattr(parameter, "id", None) for parameter in build_parameters(case_set)]
-    assert parameter_ids == list(CASE_IDS)
-    assert sorted(case_set.columns) == sorted(_COLUMNS)
+    assert parameter_ids == list(CASE_IDS) and sorted(case_set.columns) == sorted(_COLUMNS)
     reference = {
         case.id: dict(case.values) for case in load_cases(data_dir / TABULAR_FIXTURES[0]).cases
     }
@@ -204,8 +203,7 @@ def test_missing_column_fails_collection_naming_file_line_and_column(
     combined = f"{result.stdout}\n{result.stderr}"
     assert result.returncode == 2, combined
     assert f"{data_file.resolve()}:3:" in combined
-    assert "(column 'expected_total')" in combined
-    assert _nodeids(result.stdout, module) == []
+    assert "(column 'expected_total')" in combined and _nodeids(result.stdout, module) == []
 
 
 def test_the_marker_collects_one_item_per_case_and_passes_strict_markers(
@@ -216,8 +214,7 @@ def test_the_marker_collects_one_item_per_case_and_passes_strict_markers(
     result = _clean(marker_project, run_pytest, "-q", "--strict-markers", "test_cases.py")
     assert f"{CASES_PER_FILE} passed" in result.stdout
     assert _outcomes(marker_project) == ["passed"] * CASES_PER_FILE
-    listed = _clean(marker_project, run_pytest, "--markers")
-    assert f"@pytest.mark.{ACCEPTED_FORM}" in listed.stdout
+    assert f"@pytest.mark.{ACCEPTED_FORM}" in _clean(marker_project, run_pytest, "--markers").stdout
     empty = _clean(marker_project, run_pytest, "-q", "-rs", "test_empty.py")
     resolved = (marker_project / "testdata" / "header_only.csv").resolve()
     assert f"no cases in {resolved}" in empty.stdout and "1 skipped" in empty.stdout
@@ -245,5 +242,4 @@ def test_a_malformed_marker_is_a_usage_error_naming_the_accepted_form(
 def test_an_unmarked_run_never_imports_the_data_engine(
     marker_project: Path, run_pytest: RunPytest
 ) -> None:
-    result = _clean(marker_project, run_pytest, "-q", "test_plain.py")
-    assert "1 passed" in result.stdout
+    assert "1 passed" in _clean(marker_project, run_pytest, "-q", "test_plain.py").stdout

@@ -1,4 +1,18 @@
-"""AAP 0.14.1 criterion 13: no public surface entry rests on a unit test alone."""
+"""AAP 0.14.1 criterion 13: no public surface entry rests on a unit test alone.
+
+Each module's module-level ``REACHES`` tuple declares the public-surface entries its own tests drive
+through a real entry point -- a pytester inner run, a CliRunner invocation or a subprocess -- never
+a direct in-process import of the unit under test. The vocabulary is closed, an entry spelling
+``<kind>:<name>`` over fixture, command, loader and format, and an entry is backed by its own
+module's text: fixture:<name> by a parameter a test or fixture function declares, or by a
+usefixtures, getfixturevalue or indirect argument; command:<name> by a call's string argument, a
+CliRunner invocation or a subprocess argv; loader:<name> by the suffix of a data-file path the
+module names, a ".csv" path backing loader:csv; format:<name> by a report document whose suffix
+matches and whose stem is the format's own or begins with it plus an underscore, results_base.json
+backing format:results.json. Prose, a comment and an ordinary string back no entry, and an entry
+outside this vocabulary or one the scan cannot read backs nothing, so the check fails closed. This
+module is left out of its own scan: its required-surface table names every entry, so scanning it
+would pass trivially."""
 
 from __future__ import annotations
 
@@ -51,6 +65,10 @@ _EXPECTED_SIBLINGS: Final[frozenset[str]] = frozenset(_SIBLINGS.split())
 _HELP_COMMAND: Final[re.Pattern[str]] = re.compile(
     r"^ {2}(?P<name>[a-z][a-z0-9-]*) {2,}\S", re.MULTILINE
 )
+# A dynamic dispatch is invisible to an AST scan: the loop target feeding an f-string carries no
+# literal name, so the swept-table idiom is expanded by synthesising a request line per swept
+# name, not by reading one. tests/plugin/test_public_contract.py builds NAMES from a
+# space-separated string and evaluates getfixturevalue(f"foundry_{name}") in a loop.
 _SWEPT: Final[re.Pattern[str]] = re.compile(
     r'"([a-z_ ]+)"\.split\(\).*?getfixturevalue\(f"([a-z_]+)\{name\}"\)', re.DOTALL
 )
@@ -149,6 +167,7 @@ def evidence(repo_root: pathlib.Path) -> _Evidence:
         for path in sorted((repo_root / folder).glob("test_*.py")):
             text = path.read_text(encoding="utf-8")
             if hit := _SWEPT.search(text):
+                # Synthesised because a dynamic dispatch leaves no literal name for a scan to read.
                 text += "".join(f'\nrequest.getfixturevalue("{hit[2]}{s}")' for s in hit[1].split())
             if path.name != SELF_MODULE:
                 found.setdefault(path.name, []).append(Evidence.of(text))

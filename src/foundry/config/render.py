@@ -30,6 +30,7 @@ __all__: Final[tuple[str, ...]] = (
     "RESOLVED_SECTION",
     "SHOW_COLUMNS",
     "SOURCES_TABLE",
+    "describe",
     "not_applied_values",
     "redactor_for",
     "render_value",
@@ -156,9 +157,14 @@ def render_value(spec: keys.KeySpec, value: object, redactor: Redactor) -> str:
     return redactor.text(_text_of(value))
 
 
-def rows(config: FoundryConfig, *, not_applied: CliInput | None = None) -> tuple[ConfigRow, ...]:
-    """Return the table ``foundry config show`` prints: one row per key, in sorted key order.
+def describe(
+    config: FoundryConfig, *, not_applied: CliInput | None = None
+) -> tuple[ConfigRow, ...]:
+    """Return the source table ``foundry config show`` prints, one row per key.
 
+    The configuration component's ``describe()`` interface (AAP 0.7.1): it renders the source table
+    ``foundry config show`` prints, and :func:`rows` returns that same table under the earlier
+    spelling, retained for the callers written against it.
     The rows are derived from :func:`foundry.config.keys.leaf_keys`, so a key the published surface
     does not declare has no row even if the settings model holds a value for it, and each Source
     cell is :meth:`foundry.config.sources.ConfigSource.label`.
@@ -191,6 +197,20 @@ def rows(config: FoundryConfig, *, not_applied: CliInput | None = None) -> tuple
                 )
             )
     return tuple(rendered)
+
+
+def rows(config: FoundryConfig, *, not_applied: CliInput | None = None) -> tuple[ConfigRow, ...]:
+    """Return the table :func:`describe` returns, under the spelling the first callers were given.
+
+    The earlier name of :func:`describe`, kept so a caller written against it keeps working: this
+    module adds ``describe`` beside it rather than renaming one into the other, so both spellings
+    stay published and neither can drift from the other. It is equivalent to :func:`describe` for
+    every argument, the ``not_applied`` tail included, and it holds no derivation of its own.
+
+    Returns:
+        The same rows :func:`describe` returns for the same configuration and overrides.
+    """
+    return describe(config, not_applied=not_applied)
 
 
 def not_applied_values(cli: CliInput, *, redactor: Redactor | None = None) -> dict[str, str]:

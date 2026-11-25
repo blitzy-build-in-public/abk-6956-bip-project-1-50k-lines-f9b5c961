@@ -1,8 +1,7 @@
 """The rendered artefacts of a real run: results.json, report.html and junit.xml (AAP 0.14.1 c9).
 
 Criterion 9 and I10: the rendered document is scanned for an asset a browser would fetch; four
-child runs -- main, pass-only, empty, blocked -- assert the AAP 0.4.6/0.4.7/0.7.4 layout.
-"""
+child runs -- main, pass-only, empty, blocked -- assert the AAP 0.4.6/0.4.7/0.7.4 layout."""
 
 from __future__ import annotations
 

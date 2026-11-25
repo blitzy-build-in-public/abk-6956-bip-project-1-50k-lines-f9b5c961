@@ -163,7 +163,6 @@ def test_twenty_resolutions_stay_inside_the_fifty_millisecond_budget(
     assert first.source_of("http.base_url") == file_source
     repeat = [config.leaf_values() == first.leaf_values() for config in measurement.configurations]
     assert all(repeat), f"{repeat.count(False)} of {SAMPLE_COUNT} resolutions differ from the first"
-
     median = measurement.median_ms
     samples = [round(sample, 3) for sample in sorted(measurement.samples)]
     throttled = [measurement.throttled] if measurement.throttled is not None else []

@@ -1,8 +1,8 @@
 """The per-failure panels of Foundry's self-contained HTML report.
 
 :class:`FailurePanel` is one failing phase of one test as data -- message, artifact hrefs, the
-bounded and redacted log tail -- and :func:`build_panels` orders the panels by node id, phase and
-message so two runs render identically. AAP 0.3.2, 0.4.6, 0.4.8, 0.7.4, 0.14.3.
+bounded log tail the write sink already scrubbed -- and :func:`build_panels` orders the panels by
+node id, phase and message so two runs render identically. AAP 0.3.2, 0.4.6, 0.4.8, 0.7.4, 0.14.3.
 """
 
 from __future__ import annotations
@@ -136,8 +136,9 @@ def _panel_sort_key(panel: FailurePanel) -> tuple[str, int, str]:
 class FailurePanel:
     """Everything one failure panel carries, ready for the template to render.
 
-    Every link is a href relative to the report's directory and every piece of free text has already
-    been through the redaction engine; the frozen view model keeps two runs rendering one page.
+    Every link is a href relative to the report's directory and every piece of free text has been
+    through the redaction engine -- the message here, the log lines where capture wrote them; the
+    frozen view model keeps two runs rendering one page.
 
     Attributes:
         nodeid: The test's pytest node id, unsanitised, as ``results.json`` records it.
@@ -149,8 +150,8 @@ class FailurePanel:
         response_path: Href of the recorded response dump, or ``None`` on the same conditions.
         traceback_path: Href of the traceback artifact, or ``None`` on the same conditions. The
             panel links to the file and never inlines it.
-        log_lines: The captured log tail, newest last, redacted and width-truncated. Empty when
-            capture held no lines or the tail could not be read.
+        log_lines: The captured log tail, newest last, as the artifact writer scrubbed and stored
+            it and width-truncated. Empty when capture held no lines or the tail could not be read.
         log_available: Whether capture produced a tail: ``True`` for a tail with lines and for one
             that was captured but held none, ``False`` only when the tail is unavailable.
     """
@@ -324,31 +325,37 @@ def _read_tail_text(path: Path, *, max_bytes: int = MAX_LOG_TAIL_BYTES) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _prepare_line(line: str, redactor: Redactor) -> str:
-    """Redact one captured log line, spell its control characters and cut it to the width limit.
+def _prepare_line(line: str) -> str:
+    """Spell one captured log line's control characters and cut it to the width limit.
 
-    Redaction and the control-character escapes both run before the cut: a cut taken first could
-    leave the leading characters of a secret in the report, and the width is measured against the
-    text a reader actually sees rather than against the raw line.
+    The text read here is the ``log_tail.log`` the artifact writer already scrubbed, so neither the
+    escape nor the cut can expose a secret: the value was scrubbed before it was stored, and the
+    report renders the stored bytes as they stand (AAP 0.4.8). The cut still comes last, because the
+    width is measured against the text a reader actually sees rather than against the raw line. A
+    redaction pass per rendered line is what put a 500-record render with full tails over its 2 s
+    row, so the engine runs at the sink and not here (AAP 0.14.2).
 
     Returns:
-        The line, redacted and at most :data:`MAX_LOG_LINE_CHARS` characters wide, terminated with
+        The line, at most :data:`MAX_LOG_LINE_CHARS` characters wide, terminated with
         :data:`_TRUNCATION_SUFFIX` when it was cut.
     """
-    scrubbed = visible_control_characters(redactor.text(line))
-    if len(scrubbed) <= MAX_LOG_LINE_CHARS:
-        return scrubbed
-    return scrubbed[: MAX_LOG_LINE_CHARS - 1] + _TRUNCATION_SUFFIX
+    escaped = visible_control_characters(line)
+    if len(escaped) <= MAX_LOG_LINE_CHARS:
+        return escaped
+    return escaped[: MAX_LOG_LINE_CHARS - 1] + _TRUNCATION_SUFFIX
 
 
 def read_log_tail(
     path: Path,
     *,
     limit: int,
-    redactor: Redactor,
     run_dir: Path | None = None,
 ) -> tuple[tuple[str, ...], bool]:
-    """Read, redact and truncate the last ``limit`` lines of a captured log tail.
+    """Read and truncate the last ``limit`` lines of a captured log tail.
+
+    ``log_tail.log`` is the artifact writer's own output, scrubbed by the single redaction engine
+    before it was stored (AAP 0.14.3), so the lines are rendered as they stand and no second pass
+    runs over them (AAP 0.4.8). Only their control characters and width are adjusted here.
 
     Total by design (AAP 0.14.3): nothing here raises into a test, changes an outcome or changes an
     exit code. A ``limit`` of ``0`` reads nothing, reports nothing and yields ``((), False)``, and
@@ -359,7 +366,6 @@ def read_log_tail(
     Args:
         path: The tail file, resolved against ``run_dir`` before it is opened.
         limit: How many of the newest lines to keep; ``0`` reads nothing and logs nothing.
-        redactor: The redaction engine every line passes through.
         run_dir: The directory ``path`` must stay inside; ``None`` uses the path as given.
 
     Returns:
@@ -388,14 +394,13 @@ def read_log_tail(
         return (), False
 
     lines = text.splitlines()[-wanted:]
-    return tuple(_prepare_line(line, redactor) for line in lines), True
+    return tuple(_prepare_line(line) for line in lines), True
 
 
 def _log_tail_for(
     record: ResultRecord,
     *,
     run_dir: Path | None,
-    redactor: Redactor,
     limit: int,
 ) -> tuple[tuple[str, ...], bool]:
     """Return the log tail one record's panels share, and whether capture produced one.
@@ -416,9 +421,7 @@ def _log_tail_for(
     artifact = _artifact_of(record, _LOG_TAIL_KIND)
     if artifact is None:
         return (), True
-    return read_log_tail(
-        Path(run_dir) / artifact.path, limit=limit, redactor=redactor, run_dir=Path(run_dir)
-    )
+    return read_log_tail(Path(run_dir) / artifact.path, limit=limit, run_dir=Path(run_dir))
 
 
 # --- Building the panels ----------------------------------------------------
@@ -441,9 +444,7 @@ def _panels_for_record(
     request_path = _link_for(record, _REQUEST_KIND, run_dir=run_dir, report_dir=report_dir)
     response_path = _link_for(record, _RESPONSE_KIND, run_dir=run_dir, report_dir=report_dir)
     traceback_path = _link_for(record, _TRACEBACK_KIND, run_dir=run_dir, report_dir=report_dir)
-    log_lines, log_available = _log_tail_for(
-        record, run_dir=run_dir, redactor=redactor, limit=limit
-    )
+    log_lines, log_available = _log_tail_for(record, run_dir=run_dir, limit=limit)
 
     panels: list[FailurePanel] = []
     for failure in record.failures:
@@ -485,9 +486,11 @@ def build_panels(
     :class:`foundry.core.exceptions.ElementTypeError` (AAP 0.14.3).
 
     The panels are sorted by :func:`_panel_sort_key`, which makes the section byte-identical between
-    two runs of the same suite (criterion 14). Every message and log line is redacted before its
-    panel is constructed, and every artifact read is isolated, so a missing or escaping artifact
-    leaves that section out and logs one ``WARNING`` instead of failing the report (AAP 0.14.3).
+    two runs of the same suite (criterion 14). Every message is redacted before its panel is built,
+    and every log line comes from the ``log_tail.log`` the artifact writer already scrubbed
+    (AAP 0.4.8), so the render never runs the engine over the tail a second time. Every artifact
+    read is isolated, so a missing or escaping artifact leaves that section out and logs one
+    ``WARNING`` instead of failing the report (AAP 0.14.3).
     ``report_dir`` is the directory the document will be written into, and every artifact href is
     relative to it; omitted, the link base is the process working directory (assumption A5).
 

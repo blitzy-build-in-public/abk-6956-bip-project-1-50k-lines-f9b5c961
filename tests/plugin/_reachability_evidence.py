@@ -1,7 +1,6 @@
 """What a ``REACHES`` declaration (AAP 0.14.1) is read against: one module's own code, as text.
 ``Evidence.of`` returns the fixtures, call arguments and files a module traces, and a docstring is
-prose: nothing here imports, executes or clocks a scanned module.
-"""
+prose: nothing here imports, executes or clocks a scanned module."""
 
 from __future__ import annotations
 

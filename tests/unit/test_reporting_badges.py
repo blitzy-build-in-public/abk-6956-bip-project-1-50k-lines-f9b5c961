@@ -1,8 +1,7 @@
 """The badge class one quarantined record shares across the report's two badge sites (AAP 0.4.6).
 
 Keep both badges reading ``QuarantinedRow.css_class``: a modifier composed inside the template would
-let a change to ``Outcome``'s string form unstyle the Quarantined section alone.
-"""
+let a change to ``Outcome``'s string form unstyle the Quarantined section alone."""
 
 from __future__ import annotations
 
@@ -42,6 +41,5 @@ def test_a_quarantined_badge_takes_its_class_from_the_context(
     )
     assert html.build_context([record]).quarantined[0].css_class == f"outcome-{outcome.value}"
     document = html.render([record])
-    assert document is not None
-    assert document.count(f'class="outcome outcome-{outcome.value}"') == 2
+    assert document is not None and document.count(f'class="outcome outcome-{outcome.value}"') == 2
     assert 'class="outcome {{ q.css_class }}"' in html.template_path().read_text(encoding="utf-8")

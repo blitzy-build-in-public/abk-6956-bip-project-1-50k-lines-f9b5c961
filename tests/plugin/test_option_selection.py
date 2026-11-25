@@ -76,8 +76,7 @@ def test_no_option_changes_what_the_project_collects(
     value = literal or str(tmp_path / "option-value")
     actual = _record(pytester, *((f"{spelling}={value}",) if inline else (spelling, value)))
     assert (expected.args, expected.nodeids) == (("tests",), tuple(_NODEIDS.split()))
-    assert actual.rest == expected.rest
-    assert str(pytester.path / "src") in actual.pythonpath
+    assert actual.rest == expected.rest and str(pytester.path / "src") in actual.pythonpath
 
 
 def test_the_artifacts_option_still_names_the_directory_the_run_writes_to(

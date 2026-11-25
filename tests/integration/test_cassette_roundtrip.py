@@ -220,8 +220,7 @@ def test_record_then_replay_answers_from_the_cassette_and_a_miss_names_it(
     # Criterion 8: the failure names type, method, path and cassette, in the request's call phase.
     message = str(failures[0]["message"])
     named = ("CassetteMissError", f"GET {MISSING_PATH}", str(expected))
-    assert [name for name in named if name not in message] == []
-    assert failures[0]["phase"] == "call"
+    assert [name for name in named if name not in message] == [] and failures[0]["phase"] == "call"
     # AAP 0.14.3: every path the three runs produced stays inside this test's own directory.
     produced = (project, replay_project, miss_project, cassette_dir)
     assert [path for path in produced if root not in path.resolve().parents] == []

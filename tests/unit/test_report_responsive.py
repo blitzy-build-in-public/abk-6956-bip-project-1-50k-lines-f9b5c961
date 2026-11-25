@@ -110,8 +110,7 @@ def test_the_summary_and_the_artifact_links_reach_the_forty_four_pixel_target() 
 
 
 def test_the_caption_text_is_pinned_inside_the_narrow_scroll_box() -> None:
-    document = _render([_RECORD])
-    assert document.count('<span class="caption-text">') == 1
+    assert _render([_RECORD]).count('<span class="caption-text">') == 1
     block = _narrow()
     assert "position: sticky" in _rule(block, "table.results .caption-text")
     assert "background-attachment: local, local, scroll, scroll" in block

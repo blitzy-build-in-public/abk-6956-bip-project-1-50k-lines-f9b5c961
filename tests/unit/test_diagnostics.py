@@ -3,8 +3,7 @@
 AAP 0.4.4 fixes the exit mapping (0 when every required probe passes, 2 when one fails, unchanged
 for a warning), AAP 0.7.1/0.7.3 fix the rows and their words, and the socket-guard row is optional;
 the live plugin row is proven through ``tests/plugin/test_cli_surface.py`` and the profile row
-through ``tests/unit/test_doctor_profile_row.py``.
-"""
+through ``tests/unit/test_doctor_profile_row.py``."""
 
 from __future__ import annotations
 
@@ -101,8 +100,7 @@ def test_run_checks_isolates_a_probe_that_raises(
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert [record.name for record in warnings] == ["foundry"]
     message = warnings[0].getMessage()
-    assert PROBE_CASSETTES in message and "FoundryError" in message
-    assert report.ok is False
+    assert PROBE_CASSETTES in message and "FoundryError" in message and report.ok is False
 
 
 def test_a_warning_never_clears_the_verdict_and_a_required_failure_does() -> None:
@@ -241,9 +239,8 @@ def test_check_cassette_dir_reports_its_state_and_contents(tmp_path: Path) -> No
     assert (row.status, row.detail) == (ProbeStatus.FAIL, f"{blocked.resolve()} is not a directory")
     # With no configuration and no path neither probe fails: both warn that they could not run.
     unchecked = [check_artifacts_dir(), check_cassette_dir()]
-    assert [(row.status, row.detail, row.required) for row in unchecked] == [
-        (ProbeStatus.WARN, _UNCHECKED, True)
-    ] * 2
+    expected = [(ProbeStatus.WARN, _UNCHECKED, True)]
+    assert [(row.status, row.detail, row.required) for row in unchecked] == expected * 2
 
 
 def test_the_socket_guard_probe_reads_the_state_the_suite_publishes(socket_guard: object) -> None:
@@ -260,9 +257,8 @@ def test_a_guard_publishes_its_count_separately_from_its_announcement() -> None:
     # The two halves of the convention are separate: announcing a guard is not measuring it.
     assert detect_socket_guard({}) == SocketGuardState.absent()
     on_module = SimpleNamespace(FOUNDRY_SOCKET_GUARD=True, FOUNDRY_NON_LOOPBACK_ATTEMPTS=2)
-    assert detect_socket_guard({"a_guard": on_module}) == SocketGuardState(
-        installed=True, non_loopback_attempts=2, source="a_guard"
-    )
+    expected = SocketGuardState(installed=True, non_loopback_attempts=2, source="a_guard")
+    assert detect_socket_guard({"a_guard": on_module}) == expected
     guard = SimpleNamespace(FOUNDRY_NON_LOOPBACK_ATTEMPTS=4)
     on_object = detect_socket_guard({"b_guard": SimpleNamespace(FOUNDRY_SOCKET_GUARD=guard)})
     assert (on_object.non_loopback_attempts, on_object.source) == (4, "b_guard")
@@ -307,8 +303,7 @@ def test_the_report_document_holds_the_published_members(
     assert [entry["name"] for entry in checks] == [*REQUIRED_PROBES, PROBE_NAME]
     for entry in checks:
         assert set(entry) == {"name", "status", "detail"} and entry["status"] in _STATUS_WORDS
-    assert document["ok"] is report.ok
-    assert json.loads(json.dumps(document)) == document
+    assert document["ok"] is report.ok and json.loads(json.dumps(document)) == document
     again = run_checks(config=config, cwd=tmp_path).as_document()
     assert json.dumps(again, sort_keys=True) == json.dumps(document, sort_keys=True)
     # A guard state handed in reaches the row, and a non-required failure leaves the verdict alone.
