@@ -97,7 +97,17 @@ class YamlLoader:
             if isinstance(problem, str) and problem.strip():
                 detail = problem.strip()
             else:
-                detail = str(exc).strip() or "unknown error"
+                # The exception's string form is the parser's formatted diagnostic: it quotes
+                # the offending document line, the internal stream name and the character
+                # offsets, so a malformed data file would read its own values back on the
+                # operator's terminal. The fixed reason a subclass carries holds no document
+                # text, and a fixed phrase covers a subclass that carries neither (AAP 0.14.3).
+                reason: object = getattr(exc, "reason", None)
+                if isinstance(reason, str) and reason.strip():
+                    # A reason may wrap in the source; a message stays on one line.
+                    detail = " ".join(reason.split())
+                else:
+                    detail = "the parser reported no detail"
             if line is not None and offset is not None:
                 message = f"invalid YAML at line {line} column {offset}: {detail}"
             elif line is not None:

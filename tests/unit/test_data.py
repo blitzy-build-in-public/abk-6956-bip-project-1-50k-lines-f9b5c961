@@ -86,6 +86,31 @@ def test_a_string_path_loads_what_a_path_loads(
     ]
 
 
+@pytest.mark.parametrize(
+    ("body", "line"),
+    [
+        pytest.param(
+            "orders:\n  - id: 1\n    amount: sentinel-value\n   discount: 5\n", 4, id="marked"
+        ),
+        pytest.param(
+            "orders:\n  - id: 1\n\x00 amount: sentinel-value\n", None, id="control-character"
+        ),
+    ],
+)
+def test_a_yaml_fault_locates_itself_without_quoting_the_document(
+    body: str, line: int | None, tmp_path: Path
+) -> None:
+    path = tmp_path / "orders.yaml"
+    path.write_bytes(body.encode("utf-8"))
+    with pytest.raises(DataError) as excinfo:
+        data.load_document(path)
+    error, message = excinfo.value, str(excinfo.value)
+    assert (error.file, error.line) == (path, line)
+    assert message.startswith(f"{path}:") and len(message.splitlines()) == 1
+    assert "sentinel-value" not in message and "<unicode string>" not in message
+    assert message.split("invalid YAML", 1)[1].strip(": ")
+
+
 def test_a_case_carries_its_location_its_values_and_cannot_be_mutated(fixtures_dir: Path) -> None:
     case = data.load_cases(fixtures_dir / "cases.csv").cases[0]
     assert isinstance(case, data.Case)
