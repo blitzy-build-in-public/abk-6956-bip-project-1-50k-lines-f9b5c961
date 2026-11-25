@@ -1,20 +1,23 @@
 """``foundry init``: scaffold a project that runs green with no network.
 
 The command exits ``0`` when the scaffold is written and ``2`` when the target or a destination is
-refused. The layout it writes is a ``foundry.toml`` holding every setting as a commented default, a
-``tests/test_smoke.py`` that requests ``foundry_config`` and passes, ``testdata/`` with one CSV and
-the JSON Schema of a row of it, an ``artifacts/`` directory with its ignore entry, and a
-``README.md`` naming the commands to run. ``--template api`` adds ``tests/test_api.py`` and a
-``cassettes/`` directory, with a ``foundry.toml`` that selects ``replay`` so the first HTTP test
-opens no socket. Both scaffolds must run green offline, which is why the minimal smoke test touches
-nothing but the configuration fixture and the api template ships the recorded interaction its test
-looks up.
+refused. The layout it writes is a ``foundry.toml`` holding the settings a starting project needs as
+commented defaults, a ``tests/test_smoke.py`` that requests ``foundry_config`` and passes,
+``testdata/`` with one CSV and the JSON Schema of a row of it, an ``artifacts/`` directory with its
+ignore entry, and a ``README.md`` naming the commands to run. ``--template api`` adds
+``tests/test_api.py`` and a ``cassettes/`` directory, with a ``foundry.toml`` that selects
+``replay`` so the first HTTP test opens no socket. Both scaffolds must run green offline, which is
+why the minimal smoke test touches nothing but the configuration fixture and the api template ships
+the recorded interaction its test looks up.
 
-Two rules hold whatever goes wrong. A refusal creates nothing: the target is checked, and every
-destination is resolved through :func:`foundry.core.paths.resolve_under`, before the first byte is
-written, so a path that is not a directory, a directory that is not empty without ``--force``, or a
-destination that would escape the target leaves the filesystem as it was. And ``init`` resolves no
-project configuration, so it takes none of the ``--foundry-*`` options the other commands do.
+Two rules hold for every refusal. The target is checked, and every destination is resolved through
+:func:`foundry.core.paths.resolve_under`, before the first byte is written, so a path that is not a
+directory, a directory that is not empty without ``--force``, or a destination that would escape the
+target leaves the filesystem as it was. A fault raised inside the write loop is not a refusal: a
+scaffold source the installation cannot serve, or a destination it cannot write, ends the command
+with the same exit code ``2`` and leaves the files written before it in place (see
+:func:`_write_file`). And ``init`` resolves no project configuration, so it takes none of the
+``--foundry-*`` options the other commands do.
 
 The scaffold sources are package data read through :mod:`importlib.resources`, so they resolve
 identically from a source checkout and from an installed wheel, and copied as bytes so no template's
@@ -454,8 +457,9 @@ def init(path: Path, *, template: str = _MINIMAL, force: bool = False) -> int:
     :func:`scaffold_plan` fixes and are read from the template each entry names, so the api scaffold
     inherits the minimal rows it does not override from the minimal folder rather than looking for
     them in its own; the directories come from :func:`scaffold_dirs`. Every destination is resolved
-    under ``path`` before the first byte is written, so a refusal leaves the target exactly as it
-    was.
+    under ``path`` before the first byte is written, so a refusal raised by the pre-checks leaves
+    the target exactly as it was; a fault raised while writing leaves the files written before it
+    in place, as :func:`_write_file` documents.
 
     The created files print one per line, in plan order and spelled with the directory the operator
     named, so the command's output is the list a reader can check the layout against (AAP 0.7.4).

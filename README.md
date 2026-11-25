@@ -18,9 +18,9 @@ Distribution name `pytest-foundry`, import package `foundry`, version `0.1.0`, M
 | Requirement | Value |
 |---|---|
 | Interpreter | CPython 3.11, 3.12 or 3.13 — `requires-python = ">=3.11,<3.14"` |
-| Linux | supported and tested |
-| macOS | supported and tested |
-| Windows | **not supported**; Foundry 0.1.0 declares and tests POSIX platforms only |
+| Linux | supported; this release is developed and exercised on Linux |
+| macOS | supported target platform; the repository ships no CI matrix, so macOS is declared rather than exercised |
+| Windows | **not supported**; the classifiers declare POSIX platforms only |
 | HTTP | synchronous only, through `httpx` |
 | Test functions | synchronous only; a coroutine test is outside this release |
 | Database | sqlite, in memory, one engine per test |
@@ -28,15 +28,18 @@ Distribution name `pytest-foundry`, import package `foundry`, version `0.1.0`, M
 
 ## Installation
 
+Version `0.1.0` is not published on a package index yet, so install it from the wheel `uv build`
+writes, or from a local wheelhouse holding that wheel:
+
 ```bash
-uv add --dev pytest-foundry   # with uv
-pip install pytest-foundry    # or with pip
+pip install dist/pytest_foundry-0.1.0-py3-none-any.whl                  # built by `uv build`
+pip install --no-index --find-links /path/to/wheelhouse pytest-foundry   # offline, no index
 ```
 
-Either command installs version `0.1.0`. Every runtime dependency is declared with an upper bound in
+Once the release is published, `uv add --dev pytest-foundry` and `pip install pytest-foundry`
+install the same version from an index. Every runtime dependency is declared with an upper bound in
 `pyproject.toml` and carries a permissive licence; [docs/verification.md](docs/verification.md) records a
-provenance row per package. An offline install from a local wheelhouse is the same distribution with
-the index disabled: `pip install --no-index --find-links <wheelhouse> pytest-foundry`.
+provenance row per package.
 
 ## Activation: nothing to configure
 
@@ -102,7 +105,7 @@ it is a single file with inline styling and scripting, so it renders with no net
 
 `foundry init` writes a project a team can extend immediately:
 
-- `foundry.toml`, with every setting present as a commented default;
+- `foundry.toml`, with the settings a starting project needs present as commented defaults;
 - `tests/test_smoke.py`, one passing test that asks for `foundry_config`;
 - `testdata/`, one small CSV and the JSON Schema of one of its rows;
 - `artifacts/`, plus its entry in `.gitignore`;
@@ -175,9 +178,9 @@ The prefix is `FOUNDRY_`, nesting is written with `__`, names are case-insensiti
 comma-separated:
 
 ```bash
-FOUNDRY_HTTP__TIMEOUT=3.5
-FOUNDRY_HTTP__RETRIES__RETRY_ON=timeout,status_429
-FOUNDRY_CASSETTE__MODE=replay
+export FOUNDRY_HTTP__TIMEOUT=3.5
+export FOUNDRY_HTTP__RETRIES__RETRY_ON=timeout,status_429
+export FOUNDRY_CASSETTE__MODE=replay
 ```
 
 `FOUNDRY_CONFIG` is the one exception: it selects a configuration file and is not a key. A value that
@@ -327,6 +330,9 @@ overrun fails in the `call` phase with the partial stdout and the log tail attac
 Mark a known-flaky test with the quarantine marker:
 
 ```python
+import pytest
+
+
 @pytest.mark.foundry_quarantine
 def test_legacy_export() -> None: ...
 ```
