@@ -314,7 +314,7 @@ with warnings.catch_warnings():
         html: bool = True
         """Whether the self-contained ``report.html`` is written."""
 
-        json: bool = True  # type: ignore[assignment]
+        json: bool = True  # type: ignore[assignment]  # shadows BaseModel.json (AAP 0.4.5)
         """Whether the machine-readable ``results.json`` is written."""
 
 

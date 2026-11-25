@@ -305,7 +305,7 @@ def iter_violations(
         #
         # jsonschema types the instance as JSON, but a validator accepts any object and reports a
         # non-JSON value as a violation instead of rejecting it, so the public ``object`` passes.
-        errors = list(validator.iter_errors(instance))  # type: ignore[arg-type]
+        errors = list(validator.iter_errors(instance))  # type: ignore[arg-type]  # takes any object
     except Unresolvable as exc:
         raise _reference_fault(exc) from exc
     except RecursionError as exc:
