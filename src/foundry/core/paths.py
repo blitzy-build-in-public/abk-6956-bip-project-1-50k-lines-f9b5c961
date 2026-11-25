@@ -87,8 +87,8 @@ def artifact_dir_for(run_dir: Path, nodeid: str) -> Path:
     """Return the per-test artifact directory for ``nodeid``: ``artifacts/<run_id>/<name>/``.
 
     One directory per collected item, so parallel workers never contend for the same file; creating
-    it belongs to the artifact writer. That writer renders a node id through the redaction engine
-    first, so a caller rebuilding a live test's directory must pass the same scrubbed node id.
+    it belongs to the artifact writer. A node id is percent-encoded here and never redacted, so a
+    caller rebuilding a live test's directory passes the node id pytest reported.
 
     Raises:
         FoundryError: ``nodeid`` is empty or whitespace-only.

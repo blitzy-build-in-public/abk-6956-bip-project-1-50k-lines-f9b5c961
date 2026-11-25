@@ -6,7 +6,9 @@ comparison and the ``run_error`` a lost worker leaves, pytest-timeout's derived 
 typed stash keys with the ``user_properties`` codec (implicit requirement I3).
 
 No test here drives pytest machinery, sleeps, reads the wall clock or opens a socket (AAP 0.14.3),
-and the one subprocess proves ``foundry.execution.state`` pulls in no heavy dependency (I5).
+and the one subprocess proves ``foundry.execution.state`` pulls in no heavy dependency (I5). The
+coordinator's per-test capture of the two streams (AAP 0.4.6) has its own module,
+``tests.unit.test_execution_capture``.
 """
 
 from __future__ import annotations

@@ -250,7 +250,7 @@ def test_zero_config_activation_reports_default_profile(
 
 
 def test_run_id_and_artifact_root(pytester: pytest.Pytester, clean_foundry_env: None) -> None:
-    """The session id has its published shape and names the directory its artifacts live under."""
+    """The fixture reports the session's own run id, which names the run's one artifact root."""
     pytester.makepyfile(**{_ARTIFACT_MODULE: _ARTIFACT_MODULE_SOURCE})
     result = pytester.runpytest()
     assert result.ret == 0
@@ -261,11 +261,33 @@ def test_run_id_and_artifact_root(pytester: pytest.Pytester, clean_foundry_env: 
     assert isinstance(run_id, str)
     assert _RUN_ID_PATTERN.fullmatch(run_id) is not None
     assert recorded["nodeid"] == f"{_ARTIFACT_MODULE}.py::test_zero_config_artifacts"
-    run_dir = pytester.path / "artifacts" / run_id
-    assert run_dir.is_dir()
+
+    # Four independent reports of one identity: the fixture's value, the record ``results.json``
+    # carries, the ``artifacts/<run_id>/`` directory, and the terminal banner (AAP 0.4.3 requires
+    # the run id to be "also the artifact directory name"; AAP 0.4.6 fixes one root per run). A
+    # fixture that minted an id of its own would agree with none of the other three.
+    records = _read_json(pytester.path / "results.json")
+    assert isinstance(records, list)
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, dict)
+    assert record["nodeid"] == recorded["nodeid"]
+    assert record["run_id"] == run_id, (
+        f"the record names {record['run_id']!r}, the fixture {run_id!r}"
+    )
+
+    root = pytester.path / "artifacts"
+    run_dir = root / run_id
+    assert run_dir.is_dir(), f"{run_dir} is missing"
     directory = Path(recorded["dir"])
     assert directory.is_dir()
-    assert directory.parent == run_dir
+    assert directory.parent == run_dir, f"{directory.parent} is not the run root {run_dir}"
+    roots = sorted(entry.name for entry in root.iterdir() if entry.is_dir())
+    assert roots == [run_id], f"one run left {len(roots)} artifact roots: {roots}"
+
+    banner = re.findall(r"foundry: run (\S+) artifacts at", result.stdout.str())
+    assert banner == [run_id], f"the banner names {banner} for a run the fixture calls {run_id!r}"
+
     names = sorted(entry.name for entry in run_dir.iterdir())
     assert directory.name in names
     for name in names:

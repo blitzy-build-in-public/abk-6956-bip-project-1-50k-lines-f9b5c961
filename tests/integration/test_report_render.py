@@ -178,6 +178,9 @@ MARKUP_NODEID: Final[str] = f"test_ids.py::test_ids_case[{MARKUP_ID}]"
 LOG_RECORDS: Final[int] = 250
 """Records the failing test logs, five times the size of the ring AAP 0.14.2 budgets at 200."""
 
+STDOUT_LINE: Final[str] = "a stdout line the report records as an artifact"
+"""The line ``test_api_fails`` prints: ``stdout.log`` carries it once, ``stderr.log`` nothing."""
+
 CAPTURE_LINES: Final[int] = 200
 """``logging.capture_lines``: the default and the number of lines a panel must show."""
 
@@ -355,6 +358,16 @@ class RunOutput:
         """
         return self.artifacts_dir / str(record["run_id"]) / relative_path
 
+    def file_of_kind(self, record: Mapping[str, object], kind: str) -> Path:
+        """Return the file ``record``'s artifact of ``kind`` names, failing when it lists none."""
+        for artifact in self.artifacts_of(record):
+            if artifact["kind"] == kind:
+                return self.file_of(record, str(artifact["path"]))
+        raise AssertionError(
+            f"{record['nodeid']} lists no {kind} artifact: "
+            f"{[artifact['kind'] for artifact in self.artifacts_of(record)]}"
+        )
+
 
 def _run(
     run_pytest: Callable[..., CompletedProcess[str]],
@@ -442,19 +455,43 @@ def _assert_failure_record(run: RunOutput) -> None:
 def _assert_records_carry_their_artifacts(run: RunOutput) -> None:
     """AAP 0.4.6: the failing test captured the exchange, both streams and the bounded tail.
 
-    ``artifacts.keep_passed`` is ``false``, so a passing test keeps only its manifest, and every
+    ``stdout.log`` and ``stderr.log`` are written for every record that is not a pass, whether or
+    not the test wrote to that stream, because the layout publishes both file names and
+    ``junit.xml`` references them as ``foundry.artifact.stdout`` and ``foundry.artifact.stderr``.
+    The failing test prints exactly one line and writes nothing to stderr, so its ``stdout.log`` is
+    that line once and its ``stderr.log`` is the empty file the reference needs.
+    ``artifacts.keep_passed`` is ``false``, so a passing record is pruned to its manifest, and every
     file a record names exists under ``artifacts/<run_id>/<sanitized-nodeid>/``.
     """
     record = run.record_for(API_NODEID)
     kinds = {str(artifact["kind"]) for artifact in run.artifacts_of(record)}
-    assert kinds == {"log_tail", "manifest", "request", "response", "stdout", "traceback"}, kinds
+    assert kinds == {
+        "log_tail",
+        "manifest",
+        "request",
+        "response",
+        "stderr",
+        "stdout",
+        "traceback",
+    }, kinds
     for artifact in run.artifacts_of(record):
         path = run.file_of(record, str(artifact["path"]))
         assert path.is_file(), f"the record names {path} but the run wrote no such file"
+    stdout = run.file_of_kind(record, "stdout").read_text(encoding="utf-8")
+    assert stdout == f"{STDOUT_LINE}\n", f"stdout.log holds {stdout!r}, not the one printed line"
+    stderr = run.file_of_kind(record, "stderr").read_text(encoding="utf-8")
+    assert stderr == "", f"stderr.log holds {stderr!r} although the test wrote nothing to stderr"
     for other in run.records:
-        if other["nodeid"] != API_NODEID:
-            kinds_here = {str(artifact["kind"]) for artifact in run.artifacts_of(other)}
-            assert kinds_here <= {"manifest", "traceback"}, f"{other['nodeid']}: {kinds_here}"
+        if other["nodeid"] == API_NODEID:
+            continue
+        kinds_here = {str(artifact["kind"]) for artifact in run.artifacts_of(other)}
+        if other["outcome"] == "passed":
+            assert kinds_here == {"manifest"}, f"{other['nodeid']} kept {kinds_here}"
+        else:
+            # A record that did not pass may carry the streams and the traceback as well.
+            assert kinds_here <= {"manifest", "stdout", "stderr", "traceback"}, (
+                f"{other['nodeid']}: {kinds_here}"
+            )
 
 
 def _assert_no_external_asset(run: RunOutput) -> None:

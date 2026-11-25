@@ -1,9 +1,10 @@
 """Per-test artifact capture: the layout, the redaction and the module's one filesystem write.
 
-A run records what each test produced under ``artifacts/<run_id>/<sanitized-nodeid>/`` (AAP 0.4.6)
-through :class:`ArtifactWriter`, the only write site here: payloads and the node id pass through
-:class:`foundry.obs.redaction.Redactor` before any byte reaches the disk (AAP 0.3.2), and a failing
-write disables capture at ``WARNING`` (AAP 0.4.7). Importing it defines names only (AAP 0.4.8).
+A run records each test's artifacts under ``artifacts/<run_id>/<sanitized-nodeid>/`` (AAP 0.4.6)
+through :class:`ArtifactWriter`, the only write site here: node ids are percent-encoded and
+never redacted, and payload text passes through :class:`foundry.obs.redaction.Redactor` (AAP
+0.3.2), with a failed write disabling capture at ``WARNING`` (AAP 0.4.7). Importing it binds
+names only (AAP 0.4.8).
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Final
+
+import pytest
 
 from foundry.core.exceptions import ArtifactError
 from foundry.core.paths import artifact_dir_for, relative_artifact_path, resolve_under
@@ -35,6 +38,7 @@ __all__: Final[tuple[str, ...]] = (
     "ArtifactRef",
     "ArtifactWriter",
     "KEPT_WHEN_PASSED",
+    "SESSION_RUN_ID",
     "active_writer",
     "node_dir",
     "set_active_writer",
@@ -61,11 +65,7 @@ _ENCODING: Final[str] = "utf-8"
 
 
 def node_dir(run_dir: str | Path, nodeid: str) -> Path:
-    """Return the artifact directory one test writes into, without creating it (AAP 0.4.6).
-
-    The pure half of :meth:`ArtifactWriter.dir_for`; node-id encoding stays in
-    :func:`foundry.core.paths.sanitize_nodeid`, so scrub a raw node id before calling it.
-    """
+    """Return one test's artifact directory from its percent-encoded node id (AAP 0.4.6)."""
     return artifact_dir_for(Path(run_dir), nodeid)
 
 
@@ -80,10 +80,7 @@ class ArtifactRef:
     redacted: bool
 
     def as_manifest_entry(self) -> ManifestEntry:
-        """Return this artifact as the ``manifest.json`` entry describing it.
-
-        The writer hashed the bytes it wrote, so :func:`foundry.obs.manifest.entry_for` is not used.
-        """
+        """Return this artifact as its ``manifest.json`` entry, hashed from the bytes it wrote."""
         return ManifestEntry(
             kind=self.kind,
             file=self.path,
@@ -104,8 +101,8 @@ class _WriterState:
 class ArtifactWriter:
     """Write, redact and account for one run's per-test artifacts (AAP 0.7.1).
 
-    Every writing method is total: a failing write disables capture and returns ``None``
-    (AAP 0.4.7), ``ArtifactError`` being the one exception raised.
+    Every writing method is total: a failing write disables capture and returns ``None`` (AAP
+    0.4.7), ``ArtifactError`` being the one exception raised.
     """
 
     def __init__(
@@ -177,7 +174,7 @@ class ArtifactWriter:
 
     def dir_for(self, nodeid: str) -> Path:
         """Return, and create, the artifact directory of one test; raises ``ArtifactError``."""
-        directory = node_dir(self._run_dir, self._redactor.text(nodeid))
+        directory = node_dir(self._run_dir, nodeid)
         if self._state.disabled:
             return directory
         try:
@@ -236,13 +233,12 @@ class ArtifactWriter:
         """Write the captured log tail as ``log_tail.log``; an empty sequence writes nothing."""
         if not lines:
             return None
-        return self.write_text("log_tail", "\n".join(lines))
+        scrubbed = [_scrub_log_line(line, self._redactor) for line in lines]
+        text = _one_newline("\n".join(scrubbed))
+        return self._store("log_tail", None, text, redacted=scrubbed != list(lines))
 
     def write_manifest(self) -> ArtifactRef | None:
-        """Build and write this test's ``manifest.json``.
-
-        The document carries the AAP 0.4.6 fields and every artifact but the manifest itself.
-        """
+        """Build and write this test's JSON ``manifest.json``, never redacted (AAP 0.4.6)."""
         document = build_document(
             run_id=self._run_id,
             nodeid=self._bound_nodeid(),
@@ -253,7 +249,7 @@ class ArtifactWriter:
                 ref.as_manifest_entry() for ref in self._refs.values() if ref.kind != "manifest"
             ],
         )
-        return self.write("manifest", None, render(document))
+        return self._store("manifest", None, render(document), redacted=False)
 
     def finalize(self, *, passed: bool) -> tuple[ArtifactRef, ...]:
         """Finish one test's artifacts: prune a passing test, then write the manifest.
@@ -375,6 +371,21 @@ class ArtifactWriter:
         emit_plumbing_failure("artifacts", message, exc=exc)
 
 
+# --- The run this process's artifacts belong to -----------------------------
+
+SESSION_RUN_ID: Final[pytest.StashKey[str]] = pytest.StashKey[str]()
+"""The run id the plugin bootstrapped for this session, published for the fixtures that report it.
+
+Declared here rather than beside the session state in :mod:`foundry.execution.state` because AAP
+0.4.8 forbids ``foundry.fixtures`` importing ``foundry.execution``, and ``foundry.obs`` is the
+lowest package both sides may reach: the module that names the run directory declares the one
+session value a public fixture reads. The value keeps its AAP 0.4.8 home in ``config.stash``,
+one declaration only because two would be two different keys, and ``stash_session`` stores it
+beside the session state in every process, the xdist worker included, so one run publishes one
+id and one ``artifacts/<run_id>/`` root (AAP 0.4.3, AAP 0.4.6).
+"""
+
+
 # --- The test whose artifacts a request may record into ---------------------
 
 _ACTIVE_WRITER: Final[ContextVar[ArtifactWriter | None]] = ContextVar(
@@ -383,20 +394,18 @@ _ACTIVE_WRITER: Final[ContextVar[ArtifactWriter | None]] = ContextVar(
 """The writer of the test currently executing, for a caller that holds no item (AAP 0.4.8).
 
 A :class:`~contextvars.ContextVar` rather than a module global: it is per execution context, so two
-worker processes and any later threaded runner keep their own, it needs no lock, and there is no
-import-time state to reset. The value is the *bound* writer of the test in flight, so a requesting
-module writes into that test's directory without knowing its node id.
+worker processes or a later threaded runner keep their own, it needs no lock and there is no
+import-time state to reset; the value is the *bound* writer of the test in flight.
 """
 
 
 def set_active_writer(writer: ArtifactWriter | None) -> None:
     """Make ``writer`` the writer of the test in flight, or unbind with ``None``.
 
-    Called by the driver that runs one item (``foundry.execution.coordinator``) before its first
-    attempt and with ``None`` once its attempts are done, so nothing another test writes can land in
-    this test's directory. Overwriting rather than resetting a token is deliberate: the driver runs
-    the items of one process one after another, and a writer bound for a test that never finished
-    would be worse than losing the token stack.
+    ``foundry.execution.coordinator`` binds it before an item's first attempt and unbinds it once
+    the attempts are done, so nothing another test writes lands in this test's directory.
+    Overwriting rather than resetting a token is deliberate: a writer bound for a test that never
+    finished would be worse.
     """
     _ACTIVE_WRITER.set(writer)
 
@@ -422,6 +431,15 @@ def _one_newline(text: str) -> str:
     if not text:
         return ""
     return text.rstrip("\r\n") + "\n"
+
+
+def _scrub_log_line(line: str, redactor: Redactor) -> str:
+    """Scrub a log line, keeping a Foundry record's ``<LEVELNAME> <logger>: `` label in place."""
+    head, sep, message = line.partition(": ")
+    level, _, logger = head.partition(" ")
+    if sep and level.isupper() and level.isalpha() and logger.split(".")[0] == "foundry":
+        return f"{redactor.text(head)}{sep}{redactor.text(message)}"
+    return redactor.text(line)
 
 
 def _dump(value: object, redactor: Redactor) -> str:

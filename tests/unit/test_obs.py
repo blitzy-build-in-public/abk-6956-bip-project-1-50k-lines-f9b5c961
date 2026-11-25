@@ -462,6 +462,26 @@ def test_dir_for_sanitises_the_node_id_into_one_path_component(tmp_path: Path) -
         assert separator not in directory.name
 
 
+@pytest.mark.parametrize(
+    "nodeid",
+    [
+        "test_auth.py::test_login",
+        "test_secrets.py::test_alpha",
+        "tests/test_api_key_flow.py::test_login",
+    ],
+)
+def test_a_secret_shaped_node_id_names_its_own_directory(tmp_path: Path, nodeid: str) -> None:
+    """A node id is an identifier: percent-encoded as pytest reports it, and never redacted."""
+    writer = _writer(tmp_path)
+    sibling = nodeid.replace("::test_", "::test_second_")
+
+    directory = writer.dir_for(nodeid)
+
+    assert directory == artifacts.node_dir(writer.run_dir, nodeid)
+    assert "%2A" not in directory.name
+    assert writer.dir_for(sibling).name != directory.name
+
+
 def test_write_records_a_reference_to_the_bytes_on_disk(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
     payload = '{"cart": []}\n'
@@ -485,6 +505,18 @@ def test_write_records_a_reference_to_the_bytes_on_disk(tmp_path: Path) -> None:
     assert writer.write_log_tail([]) is None
 
 
+def test_the_log_tail_keeps_a_foundry_records_label(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    secret = _SECRET_SENTINELS[0]
+    lines = [f"INFO foundry.qa.secrets: token={secret}", f"INFO mytool.auth: token={secret}"]
+
+    tail = writer.write_log_tail(lines)
+
+    assert tail is not None
+    written = (writer.run_dir / tail.path).read_text(encoding="utf-8")
+    assert written.splitlines() == ["INFO foundry.qa.secrets: token=***", "INFO mytool.auth: ***"]
+
+
 @pytest.mark.parametrize(
     ("kind", "expected"),
     [
@@ -505,6 +537,19 @@ def test_write_uses_the_published_file_name_of_each_kind(
     assert reference is not None
     assert Path(reference.path).name == expected
     assert (writer.run_dir / reference.path).read_text(encoding="utf-8") == "payload\n"
+
+
+@pytest.mark.parametrize("nodeid", ["test_auth.py::test_login", "test_secret.py::test_alpha"])
+def test_a_secret_shaped_node_id_writes_a_valid_manifest(tmp_path: Path, nodeid: str) -> None:
+    writer = _writer(tmp_path, nodeid=nodeid)
+    writer.write("request", None, '{"cart": []}')
+
+    document = writer.write_manifest()
+
+    assert document is not None
+    payload = json.loads((writer.run_dir / document.path).read_text(encoding="utf-8"))
+    assert payload["nodeid"] == nodeid
+    assert all((writer.run_dir / entry["file"]).is_file() for entry in payload["artifacts"])
 
 
 def test_the_manifest_lists_one_entry_per_written_file(tmp_path: Path) -> None:

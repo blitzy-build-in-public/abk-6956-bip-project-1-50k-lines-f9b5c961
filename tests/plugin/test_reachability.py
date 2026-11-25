@@ -19,6 +19,18 @@ tuple, or declares nothing at all -- but an entry outside a ``REACHES`` tuple ne
 comment and an ordinary string are all invisible to this scan, which is the property
 :func:`test_scanner_self_test` pins.
 
+**What backs an entry.** An entry is a claim that a test in the declaring module drives the name
+through a real entry point, so the claim is read against that module's own code rather than
+accepted on its word: a fixture as the parameter a ``test_`` function or a fixture declares (or a
+name handed to ``usefixtures``, ``getfixturevalue`` or ``indirect``), a subcommand as a string
+handed to a call, a data loader as a data file the module names, and a report format as the
+document the module names for it. ``tests/plugin/_reachability_evidence.py`` holds that scan and
+:func:`test_every_declaration_is_backed_by_its_own_module` reports every entry it cannot trace, so
+a name listed beside a test that never uses it fails here instead of passing the ledger silently
+(AAP 0.14.1, 0.14.3). A module that drives pytest by writing a project backs its entries from the
+child source it hands to ``makepyfile``, which is its code as much as the string around it; a
+docstring is prose and backs nothing.
+
 **Why the modules are parsed and never imported.** Every candidate module is read as text and
 resolved through :mod:`ast`, so a scanned module is not executed inside this test and a sibling's
 import cost, side effects or failures cannot change the verdict. Only the string literals of a
@@ -43,6 +55,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import pytest
+from _reachability_evidence import Evidence
 
 # --- The declared surface (AAP 0.4.3, 0.4.4, 0.7.1, 0.4.6) -------------------
 
@@ -308,6 +321,23 @@ def declarations(
     )
 
 
+@pytest.fixture(scope="module")
+def evidence(repo_root: pathlib.Path) -> dict[str, tuple[Evidence, ...]]:
+    """Module scope: what each scanned module's own code traces, keyed by file name.
+
+    A tuple per name, because the same file name occurs in both folders and an entry has to be
+    backed by the module of that name in either one. This file is left out for the same reason the
+    declaration scan leaves it out: the verifier is not a provider.
+    """
+    sources: dict[str, list[Evidence]] = defaultdict(list)
+    for folder in (_PLUGIN_FOLDER, _E2E_FOLDER):
+        for path in sorted((repo_root / folder).glob("test_*.py")):
+            if path.name == SELF_MODULE:
+                continue
+            sources[path.name].append(Evidence.of(path.read_text(encoding="utf-8")))
+    return {name: tuple(items) for name, items in sorted(sources.items())}
+
+
 # --- The documented surface, transcribed a second time -----------------------
 
 _DOCUMENTED_SURFACE: Final[Mapping[str, tuple[str, ...]]] = {
@@ -358,6 +388,18 @@ def _missing_report(missing: Sequence[str]) -> str:
     lines.append(
         "Drive each entry through an inner pytest session, a CliRunner invocation or a subprocess, "
         f"then list it in the declaring module's {_DECLARATION_NAME} tuple (AAP 0.14.1, 0.14.3)."
+    )
+    return "\n".join(lines)
+
+
+def _unbacked_report(unbacked: Sequence[Declaration]) -> str:
+    """Return the message for ``unbacked``, one ``<module>: <entry>`` a line."""
+    lines = [f"{len(unbacked)} declarations no scanned module backs with its own code:"]
+    lines.extend(f"  {declaration.module}: {declaration.entry}" for declaration in unbacked)
+    lines.append(
+        "Give each entry a test in its own module that requests the fixture as a parameter, hands "
+        "the subcommand to the entry point, names the data file the loader reads or names the "
+        "report document the run writes, then keep the entry (AAP 0.14.1, 0.14.3)."
     )
     return "\n".join(lines)
 
@@ -563,6 +605,29 @@ def test_declared_fixture_and_command_names_exist_in_reality(
     assert not missing, (
         f"declared subcommands foundry --help does not list: {missing}; listed: {list(listed)}"
     )
+
+
+def test_every_declaration_is_backed_by_its_own_module(
+    declarations: Sequence[Declaration],
+    evidence: Mapping[str, tuple[Evidence, ...]],
+) -> None:
+    """Every declared entry is traced by the declaring module's own code, not only spelled in it.
+
+    The union check proves the surface is covered somewhere and the reality check proves a name
+    exists; neither proves that the module claiming an entry has a test touching it. Here the claim
+    is held against that module's own text -- and, for a module that drives pytest by writing a
+    project, against the child source it embeds -- so a name listed beside a test that never uses it
+    fails instead of satisfying AAP 0.14.1 criterion 13 in silence.
+    """
+    unbacked = [
+        declaration
+        for declaration in declarations
+        if not any(
+            item.backs(declaration.kind, declaration.name)
+            for item in evidence.get(declaration.module, ())
+        )
+    ]
+    assert not unbacked, _unbacked_report(unbacked)
 
 
 def test_the_ten_modules_of_this_folder_are_scanned(

@@ -1,9 +1,10 @@
 """Observability for Foundry: the logger, the log ring, the redactor, the artifact writer.
 
-The barrel over ``logging``, ``capture``, ``redaction``, ``artifacts``, ``manifest`` and ``events``
-(AAP 0.4.8): one logger, one bounded log ring, the single redaction engine every sink calls before
-it writes, the artifact writer with its manifest, and the lifecycle lines a run emits. Importing it
-defines names only and pulls in no third-party distribution (AAP 0.14.2).
+The barrel over ``logging``, ``capture``, ``redaction``, ``artifacts``, ``manifest`` and
+``events`` (AAP 0.4.8): one logger, one bounded log ring, the single redaction engine every sink
+calls before it writes, the artifact writer with its manifest, and a run's lifecycle lines.
+Importing it binds names only and performs no I/O; ``pytest``, imported by ``artifacts`` for the
+``StashKey`` that publishes the run id, is the one third-party module on the path.
 """
 
 from .artifacts import ARTIFACT_FILENAMES as ARTIFACT_FILENAMES

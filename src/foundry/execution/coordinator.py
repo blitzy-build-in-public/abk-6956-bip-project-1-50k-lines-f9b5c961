@@ -1,23 +1,18 @@
 """The in-framework retry driver: how often an item runs, and what each attempt left behind.
 
-``plugin.py`` is the only module that implements a pytest hookspec, so the ``firstresult``
-``pytest_runtest_protocol`` delegation lives there and this module is the plain Python it calls.
-:func:`run_attempts` drives pytest's own ``_pytest.runner.runtestprotocol`` once per attempt, so
-every attempt runs setup, call and teardown. ``execution.retries`` counts the *repeats* after the
-first attempt (AAP 0.4.5, assumption A2), so ``--foundry-retries 2`` allows three attempts.
+``plugin.py`` holds the only pytest hookspec implementation, so the ``firstresult``
+``pytest_runtest_protocol`` delegation lives there and this is the plain Python it calls:
+:func:`run_attempts` drives ``_pytest.runner.runtestprotocol`` once per attempt, so every
+attempt runs setup, call and teardown, and ``execution.retries`` counts the *repeats* after the
+first attempt (AAP 0.4.5, assumption A2): ``--foundry-retries 2`` allows three attempts.
 
-Exactly one set of reports reaches the log: each attempt runs with ``log=False`` and only the final
-attempt's reports are re-emitted, while ``call_and_report`` still fires the ``makereport`` hook
-first, so every attempt is stamped with Foundry's ``user_properties``. No delay is inserted between
-attempts, because backoff belongs to :mod:`foundry.http.retries`, so this module never sleeps,
-starts a thread or opens a socket (AAP 0.14.3). An interrupted run stays interrupted, because
-``KeyboardInterrupt`` and pytest's ``Exit`` are never caught here (AAP 0.4.7). The bookkeeping
-around each attempt is isolated one call site at a time, so a plumbing fault logs one ``WARNING``
-and leaves the outcome and the exit code alone (AAP 0.1.2).
-
-Elapsed time comes from :func:`time.monotonic` alone, and the clock enters through
-:func:`foundry.core.ids.utc_now` and nowhere else. Importing this module defines names only
-(AAP 0.4.8).
+Exactly one set of reports reaches the log: each attempt runs with ``log=False`` and only the
+final one re-emits, while ``call_and_report`` still fires the ``makereport`` hook first, so
+every attempt is stamped with Foundry's ``user_properties``. No delay is inserted between
+attempts -- backoff belongs to :mod:`foundry.http.retries` -- so this module never sleeps,
+starts a thread or opens a socket, and it catches neither ``KeyboardInterrupt`` nor pytest's
+``Exit`` (AAP 0.4.7, AAP 0.14.3). A plumbing fault is one ``WARNING`` that changes no outcome,
+and importing the module binds names only.
 """
 
 from __future__ import annotations
@@ -117,6 +112,11 @@ _MESSAGE_FAULT: Final[str] = (
 )
 """Logged when scrubbing a failure message raised; the attempt is still recorded (AAP 0.1.2)."""
 
+_TRACEBACK_MESSAGE: Final[str] = (
+    "the failing test's traceback could not be rendered, so this test has no traceback.txt"
+)
+"""Logged when a failing report's long representation raised; the record keeps its outcome."""
+
 _KeyT = TypeVar("_KeyT")
 
 
@@ -124,9 +124,9 @@ _KeyT = TypeVar("_KeyT")
 class AttemptLedger:
     """One item's attempts, oldest first: the only place attempt history lives (AAP 0.4.8).
 
-    Frozen because the report hook, the ``user_properties`` mirror and the summed ``duration_ms``
-    all read one value that none of them may alter, and :meth:`add` returns a new ledger. The stash
-    holds the plain ``list`` of records that crosses the worker boundary.
+    Frozen because the report hook, the ``user_properties`` mirror and the summed
+    ``duration_ms`` all read one value none of them may alter, and :meth:`add` returns a new
+    ledger; the stash keeps the plain ``list`` that crosses the worker boundary.
     """
 
     records: tuple[AttemptRecord, ...] = ()
@@ -179,9 +179,8 @@ EMPTY_LEDGER: Final[AttemptLedger] = AttemptLedger()
 def ledger_of(item: pytest.Item) -> AttemptLedger:
     """Return the attempts recorded for ``item`` so far, oldest first, or :data:`EMPTY_LEDGER`.
 
-    ``item.stash[ITEM_ATTEMPTS]`` is the single home of attempt history (AAP 0.4.8), and it holds
-    only the attempts that have already *finished*, so the report hook in ``plugin.py`` derives the
-    current attempt's number as ``ledger.attempts + 1``.
+    ``item.stash[ITEM_ATTEMPTS]`` is the single home of attempt history (AAP 0.4.8) and holds
+    only finished attempts, so ``plugin.py`` derives the current number from ``ledger.attempts``.
     """
     records = item.stash.get(ITEM_ATTEMPTS, None)
     return EMPTY_LEDGER if records is None else AttemptLedger.of(records)
@@ -221,9 +220,9 @@ def final_outcome(reports: Sequence[pytest.TestReport]) -> OutcomeValue:
     """Return the outcome one attempt's reports describe, before any quarantine verdict.
 
     A setup failure is an ``error``, and so is a teardown failure after a passing call (AAP 0.4.6);
-    a failing call is ``failed``; ``wasxfail`` on the call report separates an xfail or xpass from a
-    skip or pass; an attempt with no report is ``not_run``. The precedence is the one
-    :func:`foundry.execution.session.assemble_payload` applies.
+    a failing call is ``failed``; ``wasxfail`` splits xfail or xpass from skip or pass; an
+    attempt with no report is ``not_run``; :func:`foundry.execution.session.assemble_payload`
+    applies the same precedence.
     """
     if not reports:
         return _NOT_RUN
@@ -269,10 +268,10 @@ def first_failure_message(reports: Sequence[pytest.TestReport], redactor: Redact
 def _failure_message(reports: Sequence[pytest.TestReport], redactor: Redactor) -> str | None:
     """Return the first failure's redacted message, isolating a redaction fault to one warning.
 
-    :func:`first_failure_message` scrubs before the excerpt is kept, so a scrubber that raises would
-    otherwise end the run rather than cost one attempt its label. The message is dropped rather than
-    kept unscrubbed: a redaction fault must never become the leak the scrubber exists to prevent
-    (AAP 0.1.2, 0.14.3).
+    :func:`first_failure_message` scrubs before the excerpt is kept, so a scrubber that raises
+    would otherwise end the run rather than cost one attempt its label. The message is dropped
+    rather than kept unscrubbed: a redaction fault must never become the leak the scrubber
+    prevents (AAP 0.14.3).
     """
     try:
         return first_failure_message(reports, redactor)
@@ -285,13 +284,10 @@ def _failure_message(reports: Sequence[pytest.TestReport], redactor: Redactor) -
 def run_attempts(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
     """Run ``item`` up to ``execution.retries`` times; the ``firstresult`` hook's whole body.
 
-    What ``plugin.py``'s ``pytest_runtest_protocol`` delegation calls. It runs pytest's own protocol
-    once per attempt, records every attempt in the item's ledger, takes the quarantine verdict from
-    the final attempt's outcome and emits exactly one set of reports, the final one.
-
-    ``KeyboardInterrupt`` and pytest's ``Exit`` propagate untouched (AAP 0.4.7), and a fault in
-    Foundry's own plumbing is one ``WARNING`` that changes neither the outcome nor the exit code
-    (AAP 0.1.2). Returning ``True`` stops the ``firstresult`` chain.
+    What ``plugin.py``'s ``pytest_runtest_protocol`` delegation calls: pytest's own protocol runs
+    once per attempt, every attempt lands in the item's ledger, the quarantine verdict comes from
+    the final attempt's outcome, and one set of reports -- the final one -- is emitted. A plumbing
+    fault costs one ``WARNING`` (AAP 0.1.2), and ``True`` stops the ``firstresult`` chain.
     """
     state = _read_state(item)
     if state is None:
@@ -323,10 +319,10 @@ def _attempt_loop(
 ) -> list[pytest.TestReport]:
     """Repeat the runtest protocol until the item passes, cannot be retried, or spends its budget.
 
-    A fault raised out of the protocol is reported once and ends the loop with no reports, which is
-    the caller's cue to run the item once, unretried (AAP 0.1.2). pytest's control flow is not a
-    fault and is re-raised: ``Exit`` must reach pytest (AAP 0.4.7), and ``KeyboardInterrupt`` is a
-    ``BaseException`` no handler here catches.
+    A fault raised out of the protocol is reported once and ends the loop with no reports, which
+    is the caller's cue to run the item once, unretried (AAP 0.1.2). pytest's control flow is
+    not a fault and is re-raised: ``Exit`` must reach pytest (AAP 0.4.7), and
+    ``KeyboardInterrupt`` is a ``BaseException``.
     """
     # Imported here rather than at module scope: the runner is what the hook delegation enters
     # anyway, and AAP 0.4.8 keeps pytest off this module's runtime import surface.
@@ -413,14 +409,11 @@ def _start_capture(item: pytest.Item, state: SessionState) -> None:
     """Bind this item's artifact writer and its bounded log ring before the first attempt.
 
     AAP 0.4.6 gives every collected test one directory under ``artifacts/<run_id>/`` and AAP 0.14.2
-    bounds its log tail at ``logging.capture_lines``, so both are created here, once per item, and
-    published on the typed item stash :func:`capture_artifacts` reads. The ring is attached for the
-    whole protocol -- setup, every attempt and teardown -- which makes the tail a complete answer
-    to "what did this test log", and the writer is also made the process's active one so the HTTP
-    layer records the exchange the test made (AAP 0.4.6, requirement I5).
-
-    A fault is one ``WARNING`` and leaves the test with no artifacts rather than a new outcome; a
-    run whose artifact directory could not be created binds no writer at all (AAP 0.4.7).
+    bounds its log tail at ``logging.capture_lines``, so both are created here and published on the
+    typed item stash :func:`capture_artifacts` reads. The ring stays attached for the whole
+    protocol -- setup, every attempt and teardown -- so the tail answers "what did this test log",
+    and the writer is the process's active one, so the HTTP layer records the exchange made
+    (requirement I5), with a fault costing the test its artifacts rather than a new outcome (0.4.7).
     """
     try:
         from foundry.obs.artifacts import set_active_writer
@@ -441,9 +434,9 @@ def _start_capture(item: pytest.Item, state: SessionState) -> None:
 def _stop_capture(item: pytest.Item) -> None:
     """Detach the log ring and unbind the writer once the item's attempts are over.
 
-    Detaching matters as much as attaching: a ring left on the ``foundry`` logger would collect the
-    next test's records into this test's tail, and a writer left bound would let any later request
-    land in this test's directory (AAP 0.4.8).
+    Detaching matters as much as attaching: a ring left on the ``foundry`` logger would collect
+    the next test's records into this test's tail, and a writer left bound would let a later
+    request land in this test's directory (AAP 0.4.8).
     """
     try:
         from foundry.obs.artifacts import set_active_writer
@@ -463,20 +456,15 @@ def capture_artifacts(
     *,
     final: bool,
 ) -> tuple[tuple[ArtifactRef, ...], tuple[str, ...]]:
-    """Write one test's artifacts on its last phase and return its manifest and log tail.
+    """Write one test's artifacts on its last phase, returning its manifest and its log tail.
 
-    ``plugin.py`` stamps every phase's report and the teardown phase is the one whose payload the
-    controller keeps, so the files are written there: ``stdout.log`` and ``stderr.log`` from the
-    sections pytest captured, ``traceback.txt`` from the first failing phase, ``log_tail.log`` from
-    the bounded ring, then ``manifest.json`` through
-    :meth:`foundry.obs.artifacts.ArtifactWriter.finalize`, which also leaves a passing test with
-    only its manifest (AAP 0.4.5, AAP 0.4.6). The request and response dumps are written by the HTTP
-    layer as the test makes its request, so a panel links the exchange the test itself produced.
-
-    Returns:
-        ``(artifacts, log_tail)``: the manifest as the record lists it, and the newest captured log
-        lines -- the same lines the report's panel reads back from ``log_tail.log``. Both are empty
-        for a phase that is not the last one, and for a test that captured nothing.
+    ``plugin.py`` stamps every phase's report and the controller keeps the teardown phase's
+    payload, so the files are written there: both captured streams, ``traceback.txt`` from the
+    first failing phase, ``log_tail.log`` from the bounded ring, then ``manifest.json`` through
+    :meth:`foundry.obs.artifacts.ArtifactWriter.finalize`, which leaves a passing test with only
+    its manifest (AAP 0.4.5, AAP 0.4.6). The HTTP layer writes the request and response dumps
+    itself, as the test makes its request. Both answers are empty for a phase that is not the
+    last one and for a test that captured nothing.
     """
     ring = item.stash.get(ITEM_LOG_RING, None)
     log_tail = () if ring is None else ring.tail()
@@ -496,17 +484,17 @@ def capture_artifacts(
 def _write_captured(
     reports: Sequence[pytest.TestReport], writer: ArtifactWriter, log_tail: Sequence[str]
 ) -> None:
-    """Write the four captured artifacts of one test and finalise its manifest.
+    """Write one test's captured streams, traceback and log tail, then finalise its manifest.
 
-    An empty stream writes no file rather than an empty one, so the record lists only the artifacts
-    the test really produced and the panel links only what a reader can open (AAP 0.4.7).
+    ``stdout.log`` and ``stderr.log`` are written for every test whether or not it wrote to that
+    stream: AAP 0.4.6 publishes both names in the artifact layout and ``junit.xml`` references
+    them as ``foundry.artifact.stdout`` and ``foundry.artifact.stderr``, so a stream the test
+    never wrote is a zero-byte file rather than a missing one. A passing test still loses both
+    to the prune its manifest triggers (AAP 0.4.5), and ``traceback.txt`` and ``log_tail.log``
+    stay conditional, because an empty one would claim content the test never produced (0.4.7).
     """
-    stdout = _captured_stream(reports, "stdout")
-    stderr = _captured_stream(reports, "stderr")
-    if stdout:
-        writer.write_text("stdout", stdout)
-    if stderr:
-        writer.write_text("stderr", stderr)
+    writer.write_text("stdout", _captured_stream(reports, "stdout"))
+    writer.write_text("stderr", _captured_stream(reports, "stderr"))
     failure = _first_failure(reports)
     if failure is not None:
         rendered = _rendered_traceback(failure)
@@ -517,30 +505,36 @@ def _write_captured(
 
 
 def _captured_stream(reports: Sequence[pytest.TestReport], stream: str) -> str:
-    """Return the text pytest captured on ``stream`` across the phases of one attempt.
+    """Return the text pytest captured on ``stream`` for one item, each section once, in order.
 
-    pytest 8 carries captured output as per-phase sections rather than as a ``capstdout`` attribute,
-    and each report holds only its own phase's section, so the phases of one attempt are joined in
-    setup-call-teardown order without repeating a section.
+    pytest keeps one section list per item: ``Item.add_report_section`` appends every non-empty
+    ``(when, key, content)`` triple as the phases run, and each phase's report re-sends the
+    accumulated list under ``Captured <key> <when>`` titles rather than only its own phase's
+    section. Only the last report is read here, because the teardown report every attempt
+    produces already holds each phase of each attempt exactly once, in append order (AAP 0.4.6).
     """
+    if not reports:
+        return ""
     prefix = f"Captured {stream}"
-    return "".join(
-        content
-        for report in reports
-        for title, content in report.sections
-        if title.startswith(prefix)
-    )
+    sections = reports[-1].sections
+    return "".join(content for title, content in sections if title.startswith(prefix))
 
 
 def _rendered_traceback(report: pytest.TestReport) -> str:
-    """Return a failing report's whole rendered traceback, or ``""`` when it cannot be rendered."""
+    """Return a failing report's whole rendered traceback, or ``""`` when it cannot be rendered.
+
+    A long representation that raises is one ``WARNING`` and no ``traceback.txt``: the file is
+    evidence for the result, never a reason to change its outcome or the run's exit code (AAP
+    0.1.2).
+    """
     longrepr: object = report.longrepr
     if longrepr is None:
         return ""
     try:
         return str(longrepr)
-    except Exception:
-        # Failure-isolation rule: an unrenderable traceback yields no file, never an exception.
+    except Exception as error:
+        # Failure-isolation rule: an unrenderable traceback costs the file, never the outcome.
+        events.emit_plumbing_failure(_COMPONENT, _TRACEBACK_MESSAGE, exc=error)
         return ""
 
 
@@ -562,8 +556,8 @@ def _stamp_quarantine(
 def _plain_pass(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
     """Run the item once, as pytest's own protocol would, and return ``True``.
 
-    The fallback for a run whose state could not be read, so the outcome reaches the terminal and
-    the exit code as it would with Foundry out of the chain.
+    The fallback for a run whose state could not be read, so the outcome and the exit code reach the
+    terminal as they would with Foundry out of the chain.
     """
     ihook = item.ihook
     ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
