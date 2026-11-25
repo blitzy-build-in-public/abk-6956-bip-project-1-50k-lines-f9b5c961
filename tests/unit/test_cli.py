@@ -74,6 +74,15 @@ _OVERRIDE_PREFIX = "--foundry-"
 _OVERRIDE_COUNT = 28
 """Options in the set: one per scalar key, the named aliases, and ``--foundry-config``."""
 
+_RUN_ONLY_OPTIONS: frozenset[str] = frozenset(
+    {"--foundry-json-report", "--foundry-record", "--foundry-replay"}
+)
+"""The three ``foundry run`` options of AAP 0.4.4 that configure no key and only ``run`` declares.
+
+They are the difference between the command that executes a suite and the two that inspect the
+configuration, so the shared override set is their common subset rather than an equality.
+"""
+
 
 def _cli_module_names() -> tuple[str, ...]:
     """Return the name of every module the ``foundry.cli`` package holds.
@@ -615,11 +624,15 @@ def test_override_options_has_a_single_owner() -> None:
 
 
 def test_config_commands_register_the_same_override_set() -> None:
-    """``run``, ``config show`` and ``config validate`` publish one identical option set."""
+    """``run``, ``config show`` and ``config validate`` share one override set, plus run's switches.
+
+    AAP 0.4.4 gives ``run`` the record, replay and report-path options as well, so the shared set is
+    the subset the three commands have in common rather than an equality with the two inspectors.
+    """
     run_set = _override_spellings(run_module.run)
     show_set = _override_spellings(config_cmd.config_group.commands["show"])
     validate_set = _override_spellings(config_cmd.config_group.commands["validate"])
 
-    assert run_set == show_set
+    assert run_set == show_set | _RUN_ONLY_OPTIONS
     assert show_set == validate_set
-    assert len(run_set) == _OVERRIDE_COUNT
+    assert len(show_set) == _OVERRIDE_COUNT

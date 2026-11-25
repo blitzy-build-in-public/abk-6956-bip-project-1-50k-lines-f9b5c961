@@ -19,8 +19,16 @@ The server is a stdlib ``ThreadingHTTPServer`` on ``127.0.0.1:0`` serving five r
 thread, started in ``pytest_configure`` and stopped in ``pytest_unconfigure``. A replay run starts
 none, because replay has to prove it opens no socket (AAP 0.4.7). The example ships no configuration
 file (A9), so the same-name override of the public ``foundry_config`` fixture (AAP 0.4.3) supplies
-``http.base_url``, ``data.dir``, ``cassette.dir`` and ``execution.retries``, while
-``artifacts.dir`` keeps its default. The terminal summary carries exactly one line from this file,
+``http.base_url``, ``data.dir`` and ``cassette.dir``, while ``artifacts.dir`` keeps its default.
+
+The retry budget is the one setting that override cannot supply. The plugin resolves the run's
+configuration once, in ``pytest_configure``, and builds the retry driver's budget from it
+(AAP 0.14.2), whereas a fixture does not exist until an item is collected: so ``execution.retries``
+is stated in the environment layer at import time, before that hook runs, which is what makes the
+first attempt of ``test_retries_quarantine.py::test_retry_until_pass`` really be repeated in the
+documented flag-free run (AAP 0.14.1 criterion 3, assumption A2).
+
+The terminal summary carries exactly one line from this file,
 ``checkout: socket-guard non-loopback=<n> loopback=<n>``, which is how the end-to-end test observes
 that no non-loopback connection was attempted.
 """
@@ -71,7 +79,17 @@ _ECHO_HOST: Final[str] = "127.0.0.1"
 _SHUTDOWN_TIMEOUT: Final[float] = 5.0
 _ORDERS_PATH: Final[str] = "/orders/"
 _RETRIES: Final[int] = 1
+"""Repeats the retry test earns after its first attempt: one repeat is two attempts (A2)."""
+_RETRIES_ENV: Final[str] = "FOUNDRY_EXECUTION__RETRIES"
+"""The environment spelling of ``execution.retries``: ``FOUNDRY_`` prefix, ``__`` nesting."""
 _HEALTH: Final[dict[str, str]] = {"service": "checkout", "status": "ok", "version": "0.1.0"}
+
+# Stated here, at import, because this is the last moment a layer can reach the run's retry budget:
+# the plugin resolves the configuration in ``pytest_configure`` and the driver reads the budget from
+# that one resolution, so a fixture -- the ``foundry_config`` override below included -- comes too
+# late (AAP 0.14.2). Deliberately not ``setdefault``: the documented, flag-free run has to show the
+# repeat whatever the operator's shell carries, or the example's outcome would depend on it.
+os.environ[_RETRIES_ENV] = str(_RETRIES)
 
 # --- The loopback-only guard -------------------------------------------------
 
@@ -354,33 +372,34 @@ def _offline_guard() -> Iterator[None]:
 
 @pytest.fixture(scope="session")
 def foundry_config(foundry_config: FoundryConfig, checkout_base_url: str) -> FoundryConfig:
-    """Return the run's configuration with this example's base URL, directories and retries in it.
+    """Return the run's configuration with this example's base URL and directories in it.
 
     Pytest's documented same-name override (AAP 0.4.3): the parameter of that name is the public
-    session fixture, one level up. ``http.base_url`` becomes the echo server's URL, ``data.dir`` and
-    ``cassette.dir`` become this example's absolute directories, and ``execution.retries`` becomes
-    one repeat, which exercises the retry driver in the documented run (A2). ``artifacts.dir`` keeps
-    its default so ``artifacts/<run_id>/`` lands in the invocation directory, and every other key
-    -- ``cassette.mode``, ``reporting.*``, ``logging.*``, ``secrets.*`` and ``profile`` -- stays the
-    parent's. The parent's nested models are copied, never mutated, because it is shared.
+    session fixture, one level up. ``http.base_url`` becomes the echo server's URL, and ``data.dir``
+    and ``cassette.dir`` become this example's absolute directories. ``artifacts.dir`` keeps its
+    default so ``artifacts/<run_id>/`` lands in the invocation directory, and every other key --
+    ``execution.*`` (the retry budget this file states at import), ``cassette.mode``,
+    ``reporting.*``, ``logging.*``, ``secrets.*`` and ``profile`` -- stays the parent's. The
+    parent's nested models are copied, never mutated, because the parent is shared.
 
     Foundry's five layers are the only supported provenance, and a fixture override is none of them,
-    so the four injected keys are attributed to the ``file`` layer naming this conftest: the project
-    file that supplied them, rather than the field defaults the parent recorded.
+    so the three injected keys are attributed to the ``file`` layer naming this conftest: the
+    project file that supplied them, rather than the field defaults the parent recorded.
+    ``execution.retries`` is not among them: the environment layer supplied it, and the parent's own
+    provenance already says so.
     """
     from foundry.config.layers import ConfigLayer
     from foundry.config.sources import ConfigSource
 
     origin = ConfigSource(layer=ConfigLayer.FILE, detail=str(Path(__file__).resolve()))
     sources = dict(foundry_config.sources)
-    for key in ("cassette.dir", "data.dir", "execution.retries", "http.base_url"):
+    for key in ("cassette.dir", "data.dir", "http.base_url"):
         sources[key] = origin
     updated = foundry_config.model_copy(
         update={
             "http": foundry_config.http.model_copy(update={"base_url": checkout_base_url}),
             "data": foundry_config.data.model_copy(update={"dir": TESTDATA_DIR}),
             "cassette": foundry_config.cassette.model_copy(update={"dir": CASSETTE_DIR}),
-            "execution": foundry_config.execution.model_copy(update={"retries": _RETRIES}),
         }
     )
     return updated.with_sources(sources)

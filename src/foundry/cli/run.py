@@ -108,6 +108,30 @@ def build_pytest_argv(
 )
 @click.argument("pytest_args", nargs=-1, type=click.UNPROCESSED)
 @override_options
+# The three documented options AAP 0.4.4 lists for this command that configure no key: the shared
+# override set carries the file selector only, so these are declared here, where they are also what
+# `run --help` lists (AAP 0.7.4). Each dest is the one foundry.config.cli_layer.alias_dest defines,
+# which is the spelling _supplied_options maps back to and build_pytest_argv emits; a switch left
+# unsupplied stays None so it never enters the argument list at all.
+@click.option(
+    "--foundry-json-report",
+    cli_layer.alias_dest("--foundry-json-report"),
+    type=str,
+    default=None,
+    help="write results.json to this path, with junit.xml and report.html beside it",
+)
+@click.option(
+    "--foundry-record",
+    is_flag=True,
+    default=None,
+    help="record every request as a cassette for later replay",
+)
+@click.option(
+    "--foundry-replay",
+    is_flag=True,
+    default=None,
+    help="serve requests from recorded cassettes, opening no socket",
+)
 def run(pytest_args: tuple[str, ...], **foundry_options: object) -> int:
     """Run the suite under pytest and return pytest's own exit code.
 
