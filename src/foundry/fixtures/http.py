@@ -1,9 +1,8 @@
 """The ``foundry_http`` and ``foundry_api`` fixtures: the two HTTP sessions a test can hold.
 
-The ``foundry_http`` and ``foundry_api`` fixtures: the two HTTP sessions a test can hold. Both are
-function scoped, because a session is one test's object: built when that test asks for it, carrying
-that test's cassette when the run records, closed in teardown, so nothing outlives the test that
-opened it. ``foundry_http`` returns a :class:`foundry.http.FoundrySession` built from the run's
+Both are function scoped, because a session is one test's object: built when that test asks for it,
+carrying that test's cassette when the run records, closed in teardown, so nothing outlives the test
+that opened it. ``foundry_http`` returns a :class:`foundry.http.FoundrySession` built from the run's
 ``http.retries.*`` policy and ``http.timeout``, with ``http.headers`` applied and no credential
 attached. It holds no base URL, so a caller passes absolute URLs, which is what makes it the
 login-flow fixture where a test drives the sign-in request itself. ``foundry_api`` returns a session

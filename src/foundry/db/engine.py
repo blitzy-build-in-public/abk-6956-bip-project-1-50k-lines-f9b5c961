@@ -1,9 +1,8 @@
 """Engine construction and deterministic disposal for the in-memory sqlite fixture.
 
-Engine construction and deterministic disposal for the in-memory sqlite fixture. ``foundry_db`` (AAP
-0.4.3) promises a transactional session on "a fresh in-memory sqlite schema built from the models
-the test registers", rolled back at teardown. This module is the engine half -- the connection that
-owns the database, the pool holding it and the disposal that ends it -- while
+``foundry_db`` (AAP 0.4.3) promises a transactional session on "a fresh in-memory sqlite schema
+built from the models the test registers", rolled back at teardown. This module is the engine half
+-- the connection that owns the database, the pool holding it and the disposal that ends it -- while
 :mod:`foundry.db.session` owns the transaction half. ``foundry_db`` calls :func:`create_engine`
 during setup and :func:`dispose_engine` during teardown whatever happened in between, both calls
 living in the session module, so a teardown after a failed setup still closes the connection setup

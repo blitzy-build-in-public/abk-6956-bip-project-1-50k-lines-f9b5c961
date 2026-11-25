@@ -7,7 +7,8 @@ a usable environment. The probes belong to :mod:`foundry.diagnostics`, which own
 isolates a probe that raises into a ``fail`` row and guarantees that the table and the document list
 the same rows in the same sequence. This module is a presenter and nothing else: it turns the
 override options into a :class:`~foundry.config.cli_layer.CliInput`, picks a rendering and maps
-``ok`` onto a code. Resolution. :func:`foundry.diagnostics.checks.run_checks` takes a resolved
+``ok`` onto a code. Resolution happens here rather than inside the checks:
+:func:`foundry.diagnostics.checks.run_checks` takes a resolved
 :class:`~foundry.config.models.FoundryConfig` rather than a ``CliInput``, so this command resolves
 the four configuration layers itself, exactly once, with ``merge.resolve(cli_overrides=<this
 command's CliInput>)``, and hands the model to ``run_checks``. Resolving here is what makes the
