@@ -7,8 +7,10 @@ five-step file discovery order and the sentence a missing explicit path reports,
 precedence ladder with its ``source_of`` attribution (implicit requirement I2), the profile merge,
 the ``difflib`` closest-key suggestion, the pydantic-free import of ``foundry.config.keys``
 (implicit requirement I5), and the ``resolved``/``sources`` documents ``foundry config show``
-writes (AAP 0.7.3). The model's own surface is proved in ``tests/unit/test_config_model.py`` and
-the file faults in ``tests/unit/test_config_files.py``.
+writes (AAP 0.7.3), and the fold that keeps an option's separately typed value out of pytest's
+collection arguments before the option group is registered (AAP 0.2.1). The model's own surface is
+proved in ``tests/unit/test_config_model.py`` and the file faults in
+``tests/unit/test_config_files.py``.
 
 Everything is driven through the package's own calls -- ``foundry.config.merge.resolve``,
 ``foundry.config.env.read_env`` and ``foundry.config.render.to_json_document`` -- because AAP 0.14.5
@@ -483,3 +485,58 @@ def test_a_source_layer_is_a_config_layer_carrying_its_published_spelling() -> N
 
     members = [str(member) for member in layers.ConfigLayer]
     assert members == ["default", "file", "profile", "env", "cli"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["--foundry-artifacts.dir", "/tmp/artifacts"], ["--foundry-artifacts.dir=/tmp/artifacts"]),
+        (["--foundry-profile", "ci"], ["--foundry-profile=ci"]),
+        (
+            ["-k", "case", "--foundry-config", "foundry.toml"],
+            ["-k", "case", "--foundry-config=foundry.toml"],
+        ),
+        (["--foundry-artifacts.dir=/tmp/artifacts"], None),
+        (["--foundry-record"], None),
+        (["--foundry-record", "tests"], None),
+        (["--foundry-artifacts.dir"], None),
+        (["--foundry-artifacts.dir", "--foundry-record"], None),
+        (["tests", "-x"], None),
+        ([], None),
+    ],
+)
+def test_a_value_typed_as_its_own_token_is_folded_onto_its_option(
+    argv: list[str], expected: list[str] | None
+) -> None:
+    """Only a Foundry value option and the token after it fold; a switch keeps its argument."""
+    assert cli_layer.fold_option_values(argv) == expected
+
+
+class _UnreadableConfig:
+    """A ``pytest.Config`` stand-in whose pre-parse state cannot be read a second time."""
+
+    rootpath = Path("/nowhere")
+    inipath: Path | None = None
+    _inicache: dict[str, object] = {}
+
+    def getini(self, name: str) -> list[str]:
+        """Answer the two ini reads the repair makes before it touches pytest's internals."""
+        return []
+
+    def _initini(self, args: list[str]) -> None:
+        """Stand in for the private step a later pytest is free to have changed."""
+        raise AttributeError("_initini")
+
+
+def test_a_repair_that_cannot_run_warns_once_and_changes_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AAP 0.1.2: Foundry's own fault is one ``WARNING``, and nothing else about the run moves."""
+    config = _UnreadableConfig()
+    with caplog.at_level(logging.WARNING, logger="foundry"):
+        repaired = cli_layer.restore_preparse_state(config, ["--foundry-artifacts.dir", "/tmp/x"])
+
+    assert repaired is False
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "config.cli_layer" in warnings[0].getMessage()

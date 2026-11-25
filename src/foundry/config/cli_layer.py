@@ -7,8 +7,9 @@ and the option spelling that supplied it, which ``foundry config show --resolved
 
 from __future__ import annotations
 
+import sys
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, TypeVar
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeVar
 from foundry.config import errors, keys, validation
 from foundry.config.enums import CassetteMode
 from foundry.core.exceptions import ConfigError
+from foundry.obs import events
 
 if TYPE_CHECKING:
     import pytest
@@ -28,8 +30,10 @@ __all__: Final[tuple[str, ...]] = (
     "SpecialOption",
     "alias_dest",
     "collect_from_pytest",
+    "fold_option_values",
     "from_mapping",
     "register_unregistered_options",
+    "restore_preparse_state",
     "unregistered_spellings",
 )
 
@@ -73,6 +77,18 @@ _FLAG_OFF_WORDS: Final[frozenset[str]] = frozenset({"", "false", "0", "no", "off
 
 A caller building a mapping by hand may write ``"false"``, which must not turn recording on.
 """
+
+_OPTION_DASH: Final[str] = "-"
+"""The character that marks a token as an option, and so never as a collection argument."""
+
+_VALUELESS_SPECIAL_KINDS: Final[frozenset[str]] = frozenset({"record-flag", "replay-flag"})
+"""The two switches: no token after one of them belongs to the option (AAP 0.4.4)."""
+
+_REPAIR_FAULT: Final[str] = (
+    "could not re-derive the root directory after the pre-parse read a Foundry option value as a "
+    "path, so the run keeps pytest's reading; no outcome or exit code changes (AAP 0.1.2)"
+)
+"""Logged at ``WARNING`` when pytest's pre-parse internals answer differently than expected."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,3 +504,115 @@ def _remember(raw: dict[str, object], spelling: str, value: object) -> None:
     """
     if value is not None:
         raw[spelling] = value
+
+
+def _takes_separate_value(token: str) -> bool:
+    """Report whether ``token`` is a Foundry option that consumes the argument after it."""
+    if not token.startswith(GENERIC_OPTION_PREFIX) or _OPTION_VALUE_SEPARATOR in token:
+        return False
+    special = _SPECIAL_BY_SPELLING.get(token)
+    return special is None or special.kind not in _VALUELESS_SPECIAL_KINDS
+
+
+def fold_option_values(args: Sequence[str]) -> list[str] | None:
+    """Return ``args`` with each Foundry option's separately typed value folded onto its token.
+
+    ``--foundry-artifacts.dir PATH`` becomes ``--foundry-artifacts.dir=PATH``, which ``argparse``
+    reads identically and pytest's early scan cannot mistake for a path on disk
+    (:func:`restore_preparse_state` states why that matters). ``None`` when nothing folded, so a
+    command line that needs no repair costs one pass over the arguments.
+
+    Returns:
+        A new list when at least one value was folded, otherwise ``None``.
+    """
+    folded: list[str] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        following = args[index + 1] if index + 1 < len(args) else ""
+        if following and _takes_separate_value(token) and not following.startswith(_OPTION_DASH):
+            folded.append(token + _OPTION_VALUE_SEPARATOR + following)
+            index += 2
+            continue
+        folded.append(token)
+        index += 1
+    return folded if folded != list(args) else None
+
+
+def restore_preparse_state(config: pytest.Config, args: list[str]) -> bool:
+    """Re-derive what pytest's pre-parse read before a Foundry option could be registered.
+
+    ``Config._initini`` fixes the root directory and the configuration file before a ``pytest11``
+    entry-point plugin is loaded, so the value of a ``--foundry-*`` option typed as its own token is
+    unknown to ``argparse`` there and falls through to the ``file_or_dir`` positional. An existing
+    directory named that way moves the root directory to its common ancestor with the invocation
+    directory and loses the configuration file, ``testpaths`` with it, so collection falls back to
+    the invocation directory -- where AAP 0.2.1 requires a worker's collection to be the serial
+    one. Called from :func:`foundry.plugin.pytest_load_initial_conftests`, when the option group is
+    registered and collection is not decided yet: the values are folded, the state is derived again
+    through pytest's own ``_initini``, and what pytest had already read from it -- the conftest
+    cutoff, ``addopts``, ``pythonpath`` and the two ini checks -- is restored.
+
+    Returns:
+        ``True`` when the state was re-derived, ``False`` when the command line needed no repair.
+
+    Raises:
+        UsageError: From either ini check, when the repaired file fails it; a run that never lost
+            the file reports the same fault at the same point.
+    """
+    folded = fold_option_values(args)
+    if folded is None:
+        return False
+    previous_root, previous_inipath = config.rootpath, config.inipath
+    confcutdir = str(previous_root) if previous_inipath is None else str(previous_inipath.parent)
+    try:
+        applied_addopts = tuple(str(token) for token in config.getini("addopts"))
+        applied_pythonpath = tuple(str(path) for path in config.getini("pythonpath"))
+        config._inicache.clear()
+        config._initini(folded)
+        if (config.rootpath, config.inipath) == (previous_root, previous_inipath):
+            return False
+        _restore_confcutdir(config, confcutdir)
+        _restore_addopts(config, args, applied_addopts)
+        _restore_pythonpath(config, applied_pythonpath)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        # AAP 0.1.2: Foundry's own fault is one WARNING, and the run keeps pytest's reading.
+        events.emit_plumbing_failure("config.cli_layer", _REPAIR_FAULT, exc=exc)
+        return False
+    _recheck_ini_requirements(config)
+    return True
+
+
+def _restore_confcutdir(config: pytest.Config, previous: str) -> None:
+    """Re-apply the derived conftest cutoff, leaving an explicit ``--confcutdir`` as typed."""
+    namespace = config.known_args_namespace
+    if getattr(namespace, "confcutdir", None) != previous:
+        return
+    inipath = config.inipath
+    namespace.confcutdir = str(config.rootpath) if inipath is None else str(inipath.parent)
+
+
+def _restore_addopts(config: pytest.Config, args: list[str], applied: tuple[str, ...]) -> None:
+    """Prepend the repaired file's ``addopts``, replacing exactly the tokens that were applied."""
+    needed = tuple(str(token) for token in config.getini("addopts"))
+    if needed == applied:
+        return
+    if tuple(args[: len(applied)]) == applied:
+        del args[: len(applied)]
+    args[:0] = list(needed)
+
+
+def _restore_pythonpath(config: pytest.Config, applied: tuple[str, ...]) -> None:
+    """Insert the repaired file's ``pythonpath`` entries, which the pre-parse never applied."""
+    needed = [str(path) for path in config.getini("pythonpath")]
+    if needed == list(applied):
+        return
+    for entry in reversed(needed):
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+
+
+def _recheck_ini_requirements(config: pytest.Config) -> None:
+    """Re-run the ``minversion`` and ``required_plugins`` checks the lost file carried."""
+    config._checkversion()
+    config._validate_plugins()

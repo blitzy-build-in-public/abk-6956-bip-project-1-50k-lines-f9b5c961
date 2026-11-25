@@ -6,8 +6,7 @@ marker, the twelve fixtures, the run identity and the three report files are in 
 no ``conftest.py`` declaration and no configuration file (AAP 0.4.2).
 
 **Import budget** (AAP 0.14.2). Module scope imports ``pytest``, ``typing``, ``foundry.core`` and
-``foundry.execution.state`` and nothing else: everything heavier is imported inside the hook that
-first needs it, which is what holds the startup budget.
+``foundry.execution.state`` only; everything heavier is imported inside the hook that needs it.
 
 **State** (AAP 0.4.8). Run state lives in ``config.stash`` behind the typed keys
 ``foundry.execution.state`` declares, per-item state in ``item.stash``, and what crosses a worker
@@ -64,10 +63,9 @@ _JSON_REPORT_OPTION_DEST: Final[str] = "foundry_json_report"
 """The ``dest`` :func:`foundry.config.cli_layer.alias_dest` gives ``--foundry-json-report``."""
 
 _TYPE_BY_KIND: Final[Mapping[str, type]] = {"float": float, "int": int}
-"""The ``argparse`` type of a generic option, per declared key kind.
+"""The ``argparse`` type of a generic option, per key kind; every other scalar kind is read as text.
 
-Every other scalar kind -- ``str``, ``path``, ``enum`` and ``bool`` -- is taken as text, because a
-boolean must be expressible as ``false`` and the rest are validated by the configuration layer.
+A boolean must be expressible as ``false``, and the rest are validated by the configuration layer.
 """
 
 _FLAG_KINDS: Final[frozenset[str]] = frozenset({"record-flag", "replay-flag"})
@@ -81,17 +79,14 @@ _ATTEMPT_REPORTS: Final[pytest.StashKey[list[pytest.TestReport]]] = pytest.Stash
 ]()
 """The reports of the attempt in flight, newest last, cleared when its ``setup`` report arrives.
 
-Transient attempt state rather than run state: created by an attempt's first phase, discarded by the
-next attempt's, and read by no other module.
+Transient attempt state rather than run state: discarded by the next attempt's first phase.
 """
 
 _RUN_RECORDS: Final[pytest.StashKey[dict[str, TestPayload]]] = pytest.StashKey[
     "dict[str, TestPayload]"
 ]()
-"""The payloads this process has recorded, by node id.
-
-On a worker this is what the process publishes as the node ids it ran; on the controller it is the
-run's results, the last report of an item leaving the complete payload behind.
+"""The payloads this process has recorded, by node id: on a worker the node ids it ran, on the
+controller the run's results, the last report of an item leaving the complete payload behind.
 """
 
 
@@ -112,10 +107,9 @@ class _TerminalReporter(typing.Protocol):
 
 
 class _XdistNode(typing.Protocol):
-    """The members of an xdist gateway or worker controller this module reads (AAP 0.2.1).
+    """The members an xdist gateway and a worker controller both provide, as read here (AAP 0.2.1).
 
-    ``pytest-xdist`` ships no type information, so importing it for annotations would need an ignore
-    that ``warn_unused_ignores`` makes fragile; a gateway and a worker controller both satisfy this.
+    ``pytest-xdist`` ships no types, so importing it for annotations would need a fragile ignore.
     """
 
     workerinput: dict[str, object]
@@ -128,13 +122,12 @@ class _XdistNode(typing.Protocol):
 def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginManager) -> None:
     """Declare the whole ``--foundry-*`` option surface, with no configuration file read.
 
-    Historic hook, so it is called before any argument is parsed, for an entry-point plugin too: no
-    ``conftest.py`` is needed to declare anything (AAP 0.4.2). Two families are registered -- the
-    aliases AAP 0.4.4 publishes and a generic ``--foundry-<dotted.key>`` for every *scalar* key of
-    :data:`foundry.config.keys.KEY_SPECS`, so criterion 4's ``--foundry-http.timeout 1.0`` and the
-    table's ``--foundry-timeout`` both exist. A misspelt spelling gains a placeholder option, since
-    AAP 0.4.7 answers an unknown key in any layer with exit 2 while pytest's parser answers 4.
-    Nothing is read from the parsed namespace, so ``--help`` is safe.
+    Historic hook, so it runs before any argument is parsed for an entry-point plugin too: no
+    ``conftest.py`` declares anything (AAP 0.4.2). Registered are the aliases AAP 0.4.4 publishes, a
+    generic ``--foundry-<dotted.key>`` for every *scalar* key of the registry -- so criterion 4's
+    ``--foundry-http.timeout 1.0`` and the table's ``--foundry-timeout`` both exist -- and a
+    placeholder for a misspelt spelling, which AAP 0.4.7 answers with exit 2 where the parser
+    answers 4. Nothing is read from the parsed namespace, so ``--help`` is safe.
     """
     from foundry.config import cli_layer, keys
 
@@ -197,13 +190,20 @@ def _add_option(
     )
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config: pytest.Config, args: list[str]) -> None:
+    """Repair what the pre-parse read before this module's options were registered (AAP 0.2.1)."""
+    from foundry.config import cli_layer
+
+    cli_layer.restore_preparse_state(early_config, args)
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
     """Resolve the run once and register everything that must exist before collection starts.
 
-    ``trylast`` so every peer plugin has configured: the deferred registrations see the final
-    plugin set, and the ``pytest-timeout`` seed overwrites that peer's derived value rather than
-    being overwritten by it.
+    ``trylast`` so every peer plugin has configured: the deferred registrations see the final plugin
+    set, and the ``pytest-timeout`` seed overwrites that peer's derived value, not the reverse.
 
     Raises:
         pytest.Exit: A configuration fault, with ``returncode=2`` on both surfaces (A4).

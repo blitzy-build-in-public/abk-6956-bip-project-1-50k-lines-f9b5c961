@@ -67,6 +67,16 @@ REPLAY_BASE_URL: Final[str] = "http://127.0.0.1:8765"
 BASE_URL_KEY: Final[pytest.StashKey[str]] = pytest.StashKey()
 """This process's base URL: the echo server's, or :data:`REPLAY_BASE_URL` in a replay run."""
 
+_OPERATOR_LAYERS: Final[frozenset[str]] = frozenset({"cli", "env"})
+"""The two layers that outrank this file's own directory settings (AAP 0.4.5).
+
+:data:`TESTDATA_DIR` and :data:`CASSETTE_DIR` are defaults this example supplies, not values an
+operator chose, so an explicit ``--foundry-cassette.dir`` / ``--foundry-data.dir`` or
+``FOUNDRY_CASSETTE__DIR`` / ``FOUNDRY_DATA__DIR`` wins over them. Without that deference a record
+run pointed at a temporary directory would rewrite the committed cassettes under ``cassettes/``
+instead, which is why the end-to-end proof of criterion 8 can record the example at all.
+"""
+
 _SERVER_KEY: Final[pytest.StashKey[ThreadingHTTPServer]] = pytest.StashKey()
 _THREAD_KEY: Final[pytest.StashKey[threading.Thread]] = pytest.StashKey()
 _INET_FAMILIES: Final[frozenset[int]] = frozenset({socket.AF_INET, socket.AF_INET6})
@@ -370,39 +380,48 @@ def _offline_guard() -> Iterator[None]:
     )
 
 
+def _operator_set(foundry_config: FoundryConfig, key: str) -> bool:
+    """Return whether the environment or the command line set ``key`` explicitly (AAP 0.4.5)."""
+    source = foundry_config.sources.get(key)
+    return source is not None and source.layer in _OPERATOR_LAYERS
+
+
 @pytest.fixture(scope="session")
 def foundry_config(foundry_config: FoundryConfig, checkout_base_url: str) -> FoundryConfig:
     """Return the run's configuration with this example's base URL and directories in it.
 
     Pytest's documented same-name override (AAP 0.4.3): the parameter of that name is the public
     session fixture, one level up. ``http.base_url`` becomes the echo server's URL, and ``data.dir``
-    and ``cassette.dir`` become this example's absolute directories. ``artifacts.dir`` keeps its
-    default so ``artifacts/<run_id>/`` lands in the invocation directory, and every other key --
-    ``execution.*`` (the retry budget this file states at import), ``cassette.mode``,
-    ``reporting.*``, ``logging.*``, ``secrets.*`` and ``profile`` -- stays the parent's. The
-    parent's nested models are copied, never mutated, because the parent is shared.
+    and ``cassette.dir`` become this example's absolute directories -- unless the environment or the
+    command line set one of those two itself, which outranks this file (AAP 0.4.5) and is how a
+    record run aimed at a temporary cassette directory stays out of the committed fixtures.
+    ``artifacts.dir`` keeps its default so ``artifacts/<run_id>/`` lands in the invocation
+    directory, and every other key -- ``execution.*`` (the retry budget this file states at
+    import), ``cassette.mode``, ``reporting.*``, ``logging.*``, ``secrets.*`` and ``profile`` --
+    stays the parent's. The parent's nested models are copied, never mutated, because the parent is
+    shared.
 
     Foundry's five layers are the only supported provenance, and a fixture override is none of them,
-    so the three injected keys are attributed to the ``file`` layer naming this conftest: the
-    project file that supplied them, rather than the field defaults the parent recorded.
-    ``execution.retries`` is not among them: the environment layer supplied it, and the parent's own
-    provenance already says so.
+    so the keys this file supplies are attributed to the ``file`` layer naming this conftest: the
+    project file that supplied them, rather than the field defaults the parent recorded. A key it
+    deferred keeps the parent's provenance, which already names the variable or option that set it,
+    and ``execution.retries`` is not injected at all: the environment layer supplied it.
     """
     from foundry.config.layers import ConfigLayer
     from foundry.config.sources import ConfigSource
 
     origin = ConfigSource(layer=ConfigLayer.FILE, detail=str(Path(__file__).resolve()))
     sources = dict(foundry_config.sources)
-    for key in ("cassette.dir", "data.dir", "http.base_url"):
-        sources[key] = origin
-    updated = foundry_config.model_copy(
-        update={
-            "http": foundry_config.http.model_copy(update={"base_url": checkout_base_url}),
-            "data": foundry_config.data.model_copy(update={"dir": TESTDATA_DIR}),
-            "cassette": foundry_config.cassette.model_copy(update={"dir": CASSETTE_DIR}),
-        }
-    )
-    return updated.with_sources(sources)
+    update: dict[str, object] = {}
+    if not _operator_set(foundry_config, "cassette.dir"):
+        sources["cassette.dir"] = origin
+        update["cassette"] = foundry_config.cassette.model_copy(update={"dir": CASSETTE_DIR})
+    if not _operator_set(foundry_config, "data.dir"):
+        sources["data.dir"] = origin
+        update["data"] = foundry_config.data.model_copy(update={"dir": TESTDATA_DIR})
+    sources["http.base_url"] = origin
+    update["http"] = foundry_config.http.model_copy(update={"base_url": checkout_base_url})
+    return foundry_config.model_copy(update=update).with_sources(sources)
 
 
 def pytest_terminal_summary(
