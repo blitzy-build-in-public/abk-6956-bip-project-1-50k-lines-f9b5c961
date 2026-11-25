@@ -1,36 +1,23 @@
 """Unit tests for ``foundry.cassette``: document, matcher, store, modes and transports.
 
-``foundry.cassette`` owns record/replay (AAP 0.3.2), and AAP 0.10.1 places its unit module here.
-What is pinned is what a regression would break silently, because a cassette is a file that outlives
-the run that wrote it: a later suite replays it on another machine, behind another port.
+``foundry.cassette`` owns record/replay (AAP 0.3.2), and what is pinned here is what a regression
+would break silently, because a cassette is a file that outlives the run that wrote it:
 
-* The document shape of AAP 0.4.6 -- ``recorded_at``, ``redacted_keys`` and an ordered list of
-  ``{request, response}`` interactions, a request holding ``method``, ``path``, ``query``,
-  ``body_sha256`` and ``headers_subset``, a response holding ``status``, ``headers`` and ``body`` --
-  survives the serialize/load round trip exactly, with no extra key and no reordering.
-* A match is decided by the method, the path, the decoded query pairs and the body hash and by
-  nothing else (AAP 0.2.1, AAP 0.3.2, assumption A7): parameter order and percent-encoding are
-  irrelevant, so are request headers, and no host or port reaches the comparison.
-* Redaction happens at capture (implicit requirement I4), so a recorded ``Authorization`` or
-  ``Cookie`` value never reaches the file and ``redacted_keys`` names what was scrubbed, sorted.
-* The four rows of the mode table (AAP 0.7.3, assumption A8) behave as the table states, and a
-  ``replay`` session holds no live transport whatever the caller passes it.
-* A :class:`~foundry.cassette.transport.ReplayTransport` answers from the document and raises the
-  typed miss naming method, path and cassette file, touching no socket on either path (criterion 8).
-  The store's loader is JSON, so no YAML loader sits on the replay path.
+* the AAP 0.4.6 document shape -- ``recorded_at``, ``redacted_keys`` and ordered
+  ``{request, response}`` interactions -- survives the serialize/load round trip, with no extra key;
+* a match is decided by method, path, decoded query pairs and body hash and by nothing else (A7);
+* redaction happens at capture (I4), so no recorded ``Authorization`` or ``Cookie`` value is stored;
+* the four rows of the mode table (AAP 0.7.3, A8) behave as the table states;
+* a :class:`~foundry.cassette.transport.ReplayTransport` answers from the document or raises the
+  typed miss, touching no socket on either path (criterion 8), through a JSON loader only.
 
-Three departures from the brief this module was written against: AAP 0.7.1 names the matcher seam
-``match(request, interactions)`` while the module calls it
-``foundry.cassette.matcher.match_interaction`` -- ``match`` is a soft keyword since Python 3.10 --
-and returns the matching position for the replay cursor; ``off`` and ``passthrough`` differ in two
-of the five mode flags, ``reads`` and the ``falls_through`` that follows from it; and
-``FoundryResponse.source`` is filled by ``foundry.http.response`` from the
-``foundry.cassette.source`` extension, so the tag itself is asserted, as is the ``***`` redaction
-marker.
+Where the code departs from the brief: the matcher seam is ``match_interaction`` rather than
+``match`` (a soft keyword since Python 3.10); ``off`` and ``passthrough`` differ in ``reads`` and
+the ``falls_through`` that follows from it; and ``FoundryResponse.source`` comes from the
+``foundry.cassette.source`` extension, so the tag is asserted with the ``***`` marker.
 
-Everything is built under ``tmp_path``: no socket is opened, no server is started, and the committed
-fixture ``tests/fixtures/cassettes/replay_echo.json`` is only read, its SHA-256 checked before and
-after. No test sleeps, and the one timestamp a document carries is fixed (AAP 0.14.3).
+Everything is built under ``tmp_path``; the committed fixture is only read, hashed before and after,
+and the one timestamp a document carries is fixed (AAP 0.14.3).
 """
 
 from __future__ import annotations
@@ -189,9 +176,8 @@ def _live_stub(
     """Return a live-transport stand-in beside the list of requests it was asked to send.
 
     ``replay`` holds no live transport, so a stub built with ``fail_if_called`` proves a miss never
-    falls back to the network: an attempted delegation raises ``RuntimeError`` instead of the typed
-    miss. A plain ``RuntimeError`` is raised, not a locally defined subclass, so every Foundry
-    exception still lives in ``core/exceptions.py``.
+    falls back to the network. A plain ``RuntimeError`` is raised, not a locally defined subclass,
+    so every Foundry exception still lives in ``core/exceptions.py``.
     """
     calls: list[httpx.Request] = []
 
@@ -516,9 +502,8 @@ def test_behaviour_table_matches_the_four_row_table() -> None:
         behaviour_for("sometimes")
     assert "sometimes" in raised.value.message
     assert "passthrough" in raised.value.message
-    # ``off`` and ``passthrough`` differ in one behaviour: only ``passthrough`` reads a cassette.
-    # ``falls_through`` is what reading means for a mode with a network, so those two flags are one
-    # behavioural difference rather than two (assumption A8).
+    # ``off`` and ``passthrough`` differ in one behaviour: only ``passthrough`` reads a cassette,
+    # and ``falls_through`` is what reading means for a mode with a network (assumption A8).
     off, passthrough = BEHAVIOURS["off"], BEHAVIOURS["passthrough"]
     differing = {flag for flag in _FLAG_NAMES if getattr(off, flag) != getattr(passthrough, flag)}
     assert differing == {"reads", "falls_through"}

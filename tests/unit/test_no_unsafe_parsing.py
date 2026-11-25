@@ -3,19 +3,15 @@
 AAP 0.3.2 permits YAML only through ``yaml.safe_load`` and forbids ``eval``, ``exec`` and
 ``pickle``; AAP 0.14.3 names this module as the mechanism for it.
 
-Detection is structural: every module is parsed with :mod:`ast` and its calls, imports and
-aliases resolved, so a mention in prose is not a finding while the call is one.
+Detection is structural: every module is parsed with :mod:`ast` and its calls, imports and aliases
+resolved, so a mention in prose is not a finding while the call is one. Four routes stay out of
+reach and review of the call site closes them: a computed attribute name, an alias rebound after its
+first binding, a loader fetched from a dict, and code inside a string.
 
-Four routes stay out of reach and review of the call site closes them: a computed attribute name,
-an alias rebound after its first binding, a loader fetched from a dict, and code inside a string.
-
-Every hit is reported once, with its path, line and name, sorted, so two runs read identically.
-
-The permitted path is proven: both designated readers are scanned and call ``safe_load``.
-
-There is no exemption list: a hit anywhere under the roots is a finding. The roots are the
-repository root's own ``*.py`` modules, ``src/foundry``, ``examples`` and every file under
-``scripts``. This module lives under ``tests/``, outside every root.
+Every hit is reported once, with its path, line and name, sorted, so two runs read identically, and
+both designated readers are scanned and shown to call ``safe_load``. There is no exemption list: the
+roots are the repository root's own ``*.py`` modules, ``src/foundry``, ``examples`` and every file
+under ``scripts``. This module lives under ``tests/``, outside every root.
 """
 
 from __future__ import annotations
@@ -142,8 +138,7 @@ _MINIMUM_INVENTORY: Final[int] = 20
 class Hit:
     """One offending statement: where it is and the name that makes it a finding.
 
-    The field order is the sort order -- path, then line, then name -- so a report of several hits
-    reads the same way on every run.
+    The field order is the sort order -- path, line, name -- so a report reads identically each run.
     """
 
     path: str
@@ -162,10 +157,7 @@ class ModuleScan:
 
 @dataclass(frozen=True)
 class _Aliases:
-    """The local names one module binds to the patrolled modules and to their callables.
-
-    ``modules`` maps a name to the module root it denotes and ``callables`` a name to the attribute.
-    """
+    """The local names one module binds: a name to a module root, or a name to an attribute."""
 
     modules: Mapping[str, str]
     callables: Mapping[str, tuple[str, str]]
@@ -189,8 +181,7 @@ def _string_constant(node: ast.expr) -> str | None:
 def _resolve_member(root: str, name: str) -> tuple[str, str] | None:
     """Resolve ``root.name`` when it names a loader, a builtin route or a serialiser member.
 
-    A root this scan does not follow -- ``os``, ``cursor``, ``json`` -- resolves to ``None``, and so
-    does an attribute of ``yaml`` that parses nothing, such as ``yaml.dump``.
+    A root the scan does not follow (``os``, ``json``) resolves to ``None``, as does ``yaml.dump``.
     """
     if root == _BUILTINS_MODULE:
         if name in _UNSAFE_BUILTINS:
@@ -206,10 +197,7 @@ def _resolve_member(root: str, name: str) -> tuple[str, str] | None:
 
 
 def _dynamic_import(node: ast.Call) -> tuple[str, str] | None:
-    """Resolve the module ``import_module`` or ``__import__`` names, by ``name=`` or positionally.
-
-    Only the root segment counts, so a call naming ``json`` resolves to ``None``.
-    """
+    """Resolve the module ``import_module`` or ``__import__`` names, by keyword or position."""
     named = [keyword.value for keyword in node.keywords if keyword.arg == "name"]
     argument = named[0] if named else (node.args[0] if node.args else None)
     module = None if argument is None else _string_constant(argument)
@@ -226,10 +214,7 @@ def _resolve_module(node: ast.expr, aliases: _Aliases) -> str | None:
 
 
 def _resolve_getattr(node: ast.Call, aliases: _Aliases) -> tuple[str, str] | None:
-    """Resolve ``getattr(<module>, "<name>")`` when the name is a string constant.
-
-    A name computed at run time and an object that is not a patrolled module resolve to ``None``.
-    """
+    """Resolve ``getattr(<module>, "<name>")`` for a string constant name, else ``None``."""
     if len(node.args) < 2:
         return None
     attribute = _string_constant(node.args[1])
@@ -242,8 +227,8 @@ def _resolve_getattr(node: ast.Call, aliases: _Aliases) -> tuple[str, str] | Non
 def _resolve_reference(node: ast.expr, aliases: _Aliases) -> tuple[str, str] | None:
     """Classify ``node`` by what it denotes, following every name ``aliases`` records.
 
-    A call resolves to what it yields, not what it calls, so one resolver serves alias collection
-    and call detection; anything else, including a computed attribute name, resolves to ``None``.
+    A call resolves to what it yields, so one resolver serves alias collection and call detection;
+    a computed attribute name resolves to ``None``.
     """
     if isinstance(node, ast.Call):
         callee = _resolve_reference(node.func, aliases)
@@ -274,7 +259,7 @@ def _record_assignments(
     """Record every assignment target whose value resolves to a patrolled name, in every scope.
 
     Returns True when a name was added, so the caller re-reads until an alias of an alias resolves;
-    a name keeps its first binding and the maps only grow, so the loop ends.
+    a name keeps its first binding, so the maps only grow and the loop ends.
     """
     aliases = _Aliases(modules, callables)
     added = False
@@ -376,8 +361,7 @@ def _collect_hits(tree: ast.AST, path: str, aliases: _Aliases) -> ModuleScan:
 def _shell_code(line: str) -> str:
     """Return ``line`` with its quoted literals and its trailing comment removed.
 
-    A command can only occupy an unquoted position, so prose and printed text stay out of the
-    report while ``eval "$command"`` stays.
+    A command can only occupy an unquoted position, so printed text stays out of the report.
     """
     code: list[str] = []
     quote: str | None = None
@@ -425,8 +409,7 @@ def _is_in_cache_directory(path: Path, root: Path) -> bool:
 def _scanned_files(root: Path) -> tuple[Path, ...]:
     """Return every file the scan reads, sorted, with cache directories skipped.
 
-    The repository root's own ``*.py`` modules are read first, so a module beside ``pyproject.toml``
-    cannot escape the walk, then the Python roots and the text root.
+    The root's own ``*.py`` modules come first, so none beside ``pyproject.toml`` escapes the walk.
     """
     files: list[Path] = [path for path in root.glob(_SCANNED_ROOT_MODULES) if path.is_file()]
     for relative in _SCANNED_PYTHON_ROOTS:

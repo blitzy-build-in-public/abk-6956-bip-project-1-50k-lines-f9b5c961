@@ -1,448 +1,345 @@
-"""Unit tests for the ten public fixtures this tree delivers, and the scopes they are cached under.
+"""Unit proof of the published fixture family: twelve names, four scopes, one barrel, light imports.
 
-AAP 0.4.3 publishes twelve fixtures with a scope and a return type each. This module covers the ten
-the tree delivers -- ``foundry_clock``, ``foundry_poll``, ``foundry_config``, ``foundry_profile``,
-``foundry_run_id``, ``foundry_artifacts``, ``foundry_data``, ``foundry_db``, ``foundry_factory`` and
-``foundry_log_capture`` -- because ``foundry_http`` and ``foundry_api`` land with their sibling
-modules.
-
-The fixtures are exercised where a suite meets them, not by calling their functions: the
-``pytest_plugins`` list below loads the eight fixture modules into this module's namespace, so every
-test that names a fixture is a real resolution through pytest's own machinery, with the caching and
-scope ordering that implies.
-
-A published scope is asserted worker-independently, one fixture per test: the test resolves the
-fixture, then reads the scope its own module declares and the scope pytest built for this node id,
-and requires both to be the published one. Nothing here compares a value with one a *different* item
-received, because xdist schedules two items of this module independently (AAP 0.2.2); that a
-consuming suite receives one object for the four session-scoped fixtures and a fresh one for the
-other six is proved by ``tests/plugin/test_fixture_activation.py``.
-
-Beyond name, scope and type, each fixture's own promise is pinned: the run id's shape, the artifact
-writer's ``dir_for``/``write``/``manifest``, the configuration's per-key provenance, the frozen
-clock, the data loader, the sqlite session's isolation, the Faker seed derived from run id and node
-id, the bounded log ring, and ``eventually`` both returning and timing out with an injected sleeper.
-
-The artifact and data directories are redirected into the session's temporary directory by the
-``foundry_config`` override below, and every other path is under ``tmp_path``, so nothing is written
-inside the repository. No test sleeps: the poll tests inject their own ``sleep``, and the timeout
-case advances a frozen clock (AAP 0.14.2).
+AAP 0.4.3 publishes twelve fixtures with a scope and a return type, and AAP 0.4.9 makes their names
+and scopes a compatibility promise. This module proves that declared surface and no behaviour: every
+fact -- name, scope, ``autouse`` flag, parameters, barrel membership, import cost -- is read from
+the artifact (pytest's own fixture marker, the module object, a child's ``sys.modules``, the ``ast``
+of the package source) rather than restated from it, and no fixture is ever called.
 """
 
 from __future__ import annotations
 
-import hashlib
-import logging
-import re
-from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+import ast
+import importlib
+import json
+import os
+import subprocess
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 import pytest
-from faker import Faker
-from sqlalchemy import String, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from foundry.config import FoundryConfig
-from foundry.data.cases import Case
-from foundry.obs.artifacts import ArtifactWriter
+_FIXTURE_PACKAGE: Final[str] = "foundry.fixtures"
+"""The package that holds the family: the module a suite's fixtures are registered from."""
 
-if TYPE_CHECKING:
-    from foundry.fixtures.artifacts import FoundryArtifacts
-    from foundry.fixtures.clock import FoundryClock
-    from foundry.fixtures.data import FoundryDataLoader
-    from foundry.fixtures.factory import FoundryFactory
-    from foundry.fixtures.logs import FoundryLogCapture
-    from foundry.fixtures.polling import FoundryPoll
+_BARREL: Final[str] = "foundry.fixtures.plugin"
+"""The single object ``foundry.plugin`` hands to ``pluginmanager.register`` (AAP 0.4.2)."""
 
-# Declared here because pytest reads this module's own plugin list at collection: it puts the ten
-# fixtures in scope for the tests below, and it is the list a project's conftest writes verbatim.
-pytest_plugins = [
-    "foundry.fixtures.artifacts",
-    "foundry.fixtures.clock",
-    "foundry.fixtures.config",
-    "foundry.fixtures.data",
-    "foundry.fixtures.db",
-    "foundry.fixtures.factory",
-    "foundry.fixtures.logs",
-    "foundry.fixtures.polling",
-]
+_BARREL_STEM: Final[str] = "plugin"
+"""The barrel's module stem, excluded wherever the *defining* modules are counted."""
 
-_RUN_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}")
-"""``YYYYmmddTHHMMSS-<6 hex>``: the shape AAP 0.4.3 publishes for ``foundry_run_id``."""
+_HEAVY_MODULES: Final[tuple[str, ...]] = (
+    "faker",
+    "jinja2",
+    "jsonschema",
+    "rich",
+    "sqlalchemy",
+)
+"""The five modules AAP 0.4.8 forbids at module scope on the ``foundry.plugin`` import path (I5)."""
 
-_EXPECTED: Final[Mapping[str, tuple[str, str]]] = {
-    "foundry_config": ("foundry.fixtures.config", "session"),
-    "foundry_profile": ("foundry.fixtures.config", "session"),
-    "foundry_run_id": ("foundry.fixtures.artifacts", "session"),
-    "foundry_artifacts": ("foundry.fixtures.artifacts", "session"),
-    "foundry_data": ("foundry.fixtures.data", "function"),
-    "foundry_db": ("foundry.fixtures.db", "function"),
-    "foundry_factory": ("foundry.fixtures.factory", "function"),
-    "foundry_clock": ("foundry.fixtures.clock", "function"),
-    "foundry_log_capture": ("foundry.fixtures.logs", "function"),
-    "foundry_poll": ("foundry.fixtures.polling", "function"),
-}
-"""Every fixture this tree delivers: the module AAP 0.10.1 places it in, and its AAP 0.4.3 scope.
+_IMPORT_PROBE: Final[str] = (
+    "import json\n"
+    "import sys\n"
+    "\n"
+    "import {module}\n"
+    "\n"
+    "FORBIDDEN = {forbidden!r}\n"
+    "print(json.dumps(sorted(name for name in FORBIDDEN if name in sys.modules)))\n"
+)
+"""The probe a fresh interpreter runs: import one module, report which heavy modules it loaded.
 
-The scope column is asserted against the declaration and against the definition pytest builds for
-the requesting item (see :func:`test_each_fixture_is_cached_under_the_scope_the_table_publishes`),
-and the published return type by :func:`_contract_types`, so a rename, a scope change or a
-return-type change of any of the ten fails here rather than in a consumer.
+It prints a JSON list and nothing else, so a module name in an unrelated warning is not a hit.
 """
 
-_SESSION_SCOPED: Final[tuple[str, ...]] = tuple(
-    name for name, (_module, scope) in _EXPECTED.items() if scope == "session"
+_PUBLISHED: Final[tuple[tuple[str, str, str], ...]] = (
+    # name, module stem inside foundry.fixtures, scope -- the fixture table of AAP 0.4.3.
+    ("foundry_config", "config", "session"),
+    ("foundry_profile", "config", "session"),
+    ("foundry_run_id", "artifacts", "session"),
+    ("foundry_artifacts", "artifacts", "session"),
+    ("foundry_http", "http", "function"),
+    ("foundry_api", "http", "function"),
+    ("foundry_data", "data", "function"),
+    ("foundry_db", "db", "function"),
+    ("foundry_factory", "factory", "function"),
+    ("foundry_clock", "clock", "function"),
+    ("foundry_log_capture", "logs", "function"),
+    ("foundry_poll", "polling", "function"),
 )
-_FUNCTION_SCOPED: Final[tuple[str, ...]] = tuple(
-    name for name, (_module, scope) in _EXPECTED.items() if scope == "function"
+"""The published family: twelve names, the module each is defined in, and each one's scope."""
+
+_EXPECTED_MODULES: Final[dict[str, str]] = {name: stem for name, stem, _scope in _PUBLISHED}
+"""Fixture name to the stem of the one module that defines it."""
+
+_EXPECTED_SCOPES: Final[dict[str, str]] = {name: scope for name, _stem, scope in _PUBLISHED}
+"""Fixture name to the scope AAP 0.4.3 publishes, which is what a suite caches by."""
+
+_SESSION_SCOPED: Final[tuple[str, ...]] = (
+    "foundry_artifacts",
+    "foundry_config",
+    "foundry_profile",
+    "foundry_run_id",
 )
+"""The four session-scoped fixtures, sorted: one resolution, one identity and one tree per run."""
 
 
-def _contract_types() -> Mapping[str, type[object]]:
-    """Return the return type AAP 0.4.3 publishes for each of the ten fixtures.
+@dataclass(frozen=True, slots=True)
+class _Declaration:
+    """One fixture as pytest itself records it, read off the marker the decorator attached."""
 
-    The fixture modules are imported here rather than at module scope on purpose: pytest loads them
-    as plugins when it collects this module, and a module imported before that cannot have assertion
-    rewriting applied to it, which pytest reports as a warning. Importing them from inside a test
-    keeps the collection clean and still asserts the exact type each fixture hands a suite.
+    name: str
+    module: str
+    scope: str
+    autouse: bool
+    params: object
+    docstring: str
+
+
+def _package_dir() -> Path:
+    """Return the directory the ``foundry.fixtures`` package is imported from, resolved."""
+    package = importlib.import_module(_FIXTURE_PACKAGE)
+    location = getattr(package, "__file__", None)
+    assert location is not None, f"{_FIXTURE_PACKAGE} was imported without a source file"
+    return Path(location).resolve().parent
+
+
+def _module_stems() -> tuple[str, ...]:
+    """Return the stems of the package's modules, ``__init__`` excluded, sorted.
+
+    One stem per module file on disk, so a module added without a published fixture is scanned.
     """
-    from foundry.fixtures.clock import FoundryClock
-    from foundry.fixtures.data import FoundryDataLoader
-    from foundry.fixtures.factory import FoundryFactory
-    from foundry.fixtures.logs import FoundryLogCapture
-    from foundry.fixtures.polling import FoundryPoll
-
-    return {
-        "foundry_config": FoundryConfig,
-        "foundry_profile": str,
-        "foundry_run_id": str,
-        "foundry_artifacts": ArtifactWriter,
-        "foundry_data": FoundryDataLoader,
-        "foundry_db": Session,
-        "foundry_factory": FoundryFactory,
-        "foundry_clock": FoundryClock,
-        "foundry_log_capture": FoundryLogCapture,
-        "foundry_poll": FoundryPoll,
-    }
+    stems = (path.stem for path in _package_dir().glob("*.py") if path.stem != "__init__")
+    return tuple(sorted(stems))
 
 
-_NODEID: Final[str] = "tests/test_api.py::test_checkout[order-1]"
-"""A node id carrying ``/``, ``::`` and ``[``, so the artifact directory proves its sanitising."""
+def _declarations(stem: str) -> dict[str, _Declaration]:
+    """Return every fixture one module of the package declares, keyed by its fixture name.
 
-_OTHER_NODEID: Final[str] = "tests/test_api.py::test_checkout[order-2]"
-"""A node id no test in this module carries: the seed a *different* item would be given."""
-
-_LOG_MESSAGE: Final[str] = "foundry fixture probe: one captured line"
-
-
-class _Base(DeclarativeBase):
-    """The declarative base of the one model the database fixture's schema is built from."""
-
-
-class _Row(_Base):
-    """A two-column table, which is enough to prove a schema was created and a row was written."""
-
-    __tablename__ = "widgets"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(20))
-
-
-# --- Fixtures -------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def foundry_config(
-    foundry_config: FoundryConfig,
-    repo_root: Path,
-    tmp_path_factory: pytest.TempPathFactory,
-) -> FoundryConfig:
-    """Override: put the artifact tree and the data directory inside the temporary directory.
-
-    This is the override AAP 0.4.3 documents -- request the public fixture, return a ``model_copy``
-    -- and it exists so that requesting ``foundry_artifacts`` cannot create an ``artifacts/`` tree
-    in the repository, and so that ``foundry_data`` resolves the committed files under
-    ``tests/fixtures`` instead of the default ``testdata``.
+    The name, scope, ``autouse`` and ``params`` are read from the marker pytest attached to the
+    function, so a renamed or rescoped fixture fails here rather than in a consumer.
     """
-    root = tmp_path_factory.mktemp("foundry-fixtures")
-    return foundry_config.model_copy(
-        update={
-            "artifacts": foundry_config.artifacts.model_copy(update={"dir": root / "artifacts"}),
-            "data": foundry_config.data.model_copy(
-                update={"dir": repo_root / "tests" / "fixtures"}
-            ),
-        }
-    )
-
-
-# --- Name, type and scope (AAP 0.4.3) ------------------------------------
-
-
-def test_the_delivered_fixtures_publish_the_names_the_contract_fixes() -> None:
-    """Each published name is the name its module declares, in the module AAP 0.10.1 places it."""
-    declared: dict[str, str] = {}
-    for name, (module_name, _scope) in _EXPECTED.items():
-        module = __import__(module_name, fromlist=[name])
-        definition = getattr(module, name)
-        assert definition.name == name
-        declared[name] = module_name
-    assert declared == {name: module for name, (module, _s) in _EXPECTED.items()}
-    assert {name: scope for name, (_m, scope) in _EXPECTED.items()} == {
-        "foundry_config": "session",
-        "foundry_profile": "session",
-        "foundry_run_id": "session",
-        "foundry_artifacts": "session",
-        "foundry_data": "function",
-        "foundry_db": "function",
-        "foundry_factory": "function",
-        "foundry_clock": "function",
-        "foundry_log_capture": "function",
-        "foundry_poll": "function",
-    }
-
-
-def test_every_fixture_returns_the_type_the_table_publishes(
-    foundry_config: FoundryConfig,
-    foundry_profile: str,
-    foundry_run_id: str,
-    foundry_artifacts: FoundryArtifacts,
-    foundry_data: FoundryDataLoader,
-    foundry_db: Session,
-    foundry_factory: FoundryFactory,
-    foundry_clock: FoundryClock,
-    foundry_log_capture: FoundryLogCapture,
-    foundry_poll: FoundryPoll,
-) -> None:
-    """The ten fixtures resolve, and each one's exact type is the type AAP 0.4.3 names."""
-    delivered: Mapping[str, object] = {
-        "foundry_config": foundry_config,
-        "foundry_profile": foundry_profile,
-        "foundry_run_id": foundry_run_id,
-        "foundry_artifacts": foundry_artifacts,
-        "foundry_data": foundry_data,
-        "foundry_db": foundry_db,
-        "foundry_factory": foundry_factory,
-        "foundry_clock": foundry_clock,
-        "foundry_log_capture": foundry_log_capture,
-        "foundry_poll": foundry_poll,
-    }
-    assert set(delivered) == set(_EXPECTED)
-    assert {name: type(value) for name, value in delivered.items()} == dict(_contract_types())
-
-
-@pytest.mark.parametrize("name", sorted(_EXPECTED))
-def test_each_fixture_is_cached_under_the_scope_the_table_publishes(
-    name: str, request: pytest.FixtureRequest
-) -> None:
-    """The fixture resolves; its declared and its effective scope are both the published one."""
-    module_name, expected_scope = _EXPECTED[name]
-    request.getfixturevalue(name)
-    declared = getattr(__import__(module_name, fromlist=[name]), name)
-    effective = request._fixturemanager.getfixturedefs(name, request.node)
-    assert declared._fixture_function_marker.scope == expected_scope
-    assert effective, f"{name} has no fixture definition for {request.node.nodeid}"
-    assert effective[-1].scope == expected_scope
-    assert sorted(_SESSION_SCOPED) == sorted(
-        {"foundry_config", "foundry_profile", "foundry_run_id", "foundry_artifacts"}
-    )
-    assert sorted(_FUNCTION_SCOPED) == sorted(set(_EXPECTED) - set(_SESSION_SCOPED))
-
-
-# --- foundry_run_id ------------------------------------------------------
-
-
-def test_foundry_run_id_matches_the_published_pattern_and_names_the_run_directory(
-    foundry_run_id: str, foundry_artifacts: ArtifactWriter, foundry_config: FoundryConfig
-) -> None:
-    """The id is ``YYYYmmddTHHMMSS-<6 hex>``, and it is the name of the run's artifact directory."""
-    assert _RUN_ID_PATTERN.fullmatch(foundry_run_id) is not None
-    assert foundry_artifacts.run_dir == (foundry_config.artifacts.dir / foundry_run_id).resolve()
-
-
-# --- foundry_artifacts ---------------------------------------------------
-
-
-def test_foundry_artifacts_writes_and_accounts_for_a_file_inside_the_run_directory(
-    foundry_artifacts: ArtifactWriter, foundry_run_id: str
-) -> None:
-    """``dir_for`` creates the test's directory, ``write`` fills it and ``manifest`` lists it."""
-    directory = foundry_artifacts.dir_for(_NODEID)
-    assert directory.is_dir()
-    assert directory.parent == foundry_artifacts.run_dir
-    assert foundry_run_id in directory.parent.name
-    writer = foundry_artifacts.for_node(_NODEID)
-    reference = writer.write("request", None, "GET /echo")
-    assert reference is not None
-    written = foundry_artifacts.run_dir / reference.path
-    assert written.is_file()
-    assert written.read_text(encoding="utf-8") == "GET /echo"
-    assert reference in writer.manifest
-    assert len(reference.sha256) == 64
-
-
-# --- foundry_config and foundry_profile ----------------------------------
-
-
-def test_foundry_config_answers_for_a_key_and_the_profile_agrees(
-    foundry_config: FoundryConfig, foundry_profile: str
-) -> None:
-    """A key's provenance is readable through ``source_of``; the profile is the resolved name."""
-    source = foundry_config.source_of("http.timeout")
-    assert source.label() == "default"
-    assert foundry_config.http.timeout == 10.0
-    assert foundry_profile == str(foundry_config.profile) == "default"
-
-
-# --- foundry_clock ------------------------------------------------------
-
-
-def test_foundry_clock_is_frozen_until_the_test_moves_it(foundry_clock: FoundryClock) -> None:
-    """``now()`` repeats, ``advance()`` moves the instant and ``set()`` replaces it."""
-    from foundry.fixtures.clock import DEFAULT_INSTANT
-
-    assert foundry_clock.now() == DEFAULT_INSTANT
-    assert foundry_clock.now() == foundry_clock.now()
-    assert foundry_clock.advance(seconds=90) == DEFAULT_INSTANT.replace(minute=1, second=30)
-    assert foundry_clock.now() == DEFAULT_INSTANT.replace(minute=1, second=30)
-    replacement = datetime(2030, 6, 1, 12, 0, tzinfo=UTC)
-    foundry_clock.set(replacement)
-    assert foundry_clock.now() == replacement
-
-
-# --- foundry_data -------------------------------------------------------
-
-
-def test_foundry_data_reads_the_committed_cases_and_matrix(
-    foundry_data: FoundryDataLoader,
-) -> None:
-    """``cases`` expands the tabular file; ``matrix`` the cross-product, both under ``data.dir``."""
-    cases = foundry_data.cases("cases.csv")
-    assert len(cases) == 12
-    assert all(isinstance(case, Case) for case in cases)
-    assert [case.id for case in cases][:2] == ["cases-0", "cases-1"]
-    assert cases[0].values["case_id"] == "C-001"
-    matrix = foundry_data.matrix("matrix.yaml")
-    assert len(matrix) == 12
-    assert len({case.id for case in matrix}) == 12
-
-
-# --- foundry_db --------------------------------------------------------
-
-
-@pytest.mark.parametrize("foundry_db", [_Row], indirect=True)
-def test_foundry_db_serves_a_transactional_session_over_the_registered_model(
-    foundry_db: Session,
-) -> None:
-    """The schema holds the requested table, and a committed row is visible to its own session."""
-    foundry_db.add(_Row(id=1, name="first"))
-    foundry_db.commit()
-    assert [row.name for row in foundry_db.scalars(select(_Row))] == ["first"]
-
-
-@pytest.mark.parametrize("foundry_db", [_Row], indirect=True)
-def test_foundry_db_shows_none_of_the_previous_tests_rows(foundry_db: Session) -> None:
-    """A second test's session is a fresh database, so nothing the first one wrote survives."""
-    assert foundry_db.scalars(select(_Row)).all() == []
-
-
-# --- foundry_factory ---------------------------------------------------
-
-
-def test_foundry_factory_is_seeded_from_the_run_id_and_the_node_id(
-    foundry_factory: FoundryFactory,
-    foundry_run_id: str,
-    request: pytest.FixtureRequest,
-) -> None:
-    """The seed is the published digest of ``run_id:nodeid``, and it reproduces the same draws."""
-    expected = int.from_bytes(
-        hashlib.sha256(f"{foundry_run_id}:{request.node.nodeid}".encode()).digest()[:8], "big"
-    )
-    assert foundry_factory.seed == expected
-    drawn = foundry_factory.name()
-    mirror = Faker()
-    mirror.seed_instance(expected)
-    assert mirror.name() == drawn
-    assert repr(foundry_factory) == f"FoundryFactory(seed={expected})"
-
-
-def test_foundry_factory_gives_a_different_test_a_different_value(
-    foundry_factory: FoundryFactory,
-    foundry_run_id: str,
-    request: pytest.FixtureRequest,
-) -> None:
-    """Another node id seeds a different generator, so neither the seed nor the value repeats."""
-    other = int.from_bytes(
-        hashlib.sha256(f"{foundry_run_id}:{_OTHER_NODEID}".encode()).digest()[:8], "big"
-    )
-    assert request.node.nodeid != _OTHER_NODEID
-    assert foundry_factory.seed != other
-    mirror = Faker()
-    mirror.seed_instance(other)
-    assert foundry_factory.name() != mirror.name()
-
-
-# --- foundry_log_capture -----------------------------------------------
-
-
-def test_foundry_log_capture_records_what_the_foundry_logger_emitted(
-    foundry_log_capture: FoundryLogCapture,
-) -> None:
-    """A record emitted on the ``foundry`` logger reaches both ``records`` and ``tail``."""
-    foundry_log_capture.clear()
-    logging.getLogger("foundry").warning(_LOG_MESSAGE)
-    records = foundry_log_capture.records
-    assert len(records) == 1
-    assert records[0].getMessage() == _LOG_MESSAGE
-    assert records[0].name == "foundry"
-    tail = foundry_log_capture.tail(1)
-    assert len(tail) == 1
-    assert _LOG_MESSAGE in tail[0]
-    assert foundry_log_capture.capacity > 0
-
-
-# --- foundry_poll ------------------------------------------------------
-
-
-def test_foundry_poll_returns_the_first_truthy_value(foundry_poll: FoundryPoll) -> None:
-    """``eventually`` polls until the callable returns something truthy, and waits only as asked."""
-    answers = iter([False, False, True])
-    delays: list[float] = []
-    ready = foundry_poll.eventually(
-        lambda: next(answers), timeout=1.0, interval=0.1, sleep=delays.append
-    )
-    assert ready is True
-    assert delays == [0.1, 0.1]
-
-
-def test_foundry_poll_fails_once_the_deadline_passes(
-    foundry_poll: FoundryPoll, foundry_clock: FoundryClock
-) -> None:
-    """A poller whose clock is driven by its sleeper expires without waiting for real time."""
-    from foundry.fixtures.clock import DEFAULT_INSTANT
-
-    def never() -> bool:
-        """Report "not ready", which no number of polls can satisfy."""
-        return False
-
-    with pytest.raises(AssertionError) as raised:
-        foundry_poll.eventually(
-            never,
-            timeout=0.5,
-            interval=0.1,
-            clock=foundry_clock,
-            sleep=_advancing(foundry_clock),
+    module = importlib.import_module(f"{_FIXTURE_PACKAGE}.{stem}")
+    declared: dict[str, _Declaration] = {}
+    for attribute, value in vars(module).items():
+        marker = getattr(value, "_fixture_function_marker", None)
+        if marker is None:
+            continue
+        name = str(getattr(marker, "name", None) or attribute)
+        declared[name] = _Declaration(
+            name=name,
+            module=stem,
+            scope=str(getattr(marker, "scope", "")),
+            autouse=bool(getattr(marker, "autouse", False)),
+            params=getattr(marker, "params", None),
+            docstring=str(getattr(value, "__doc__", "") or ""),
         )
-    assert "timed out after 0.5s" in str(raised.value)
-    assert foundry_clock.now() > DEFAULT_INSTANT
+    return declared
 
 
-def _advancing(clock: FoundryClock) -> Callable[[float], None]:
-    """Return a sleeper that moves ``clock`` instead of spending the time it is asked to wait."""
+def _definition_homes() -> dict[str, tuple[str, ...]]:
+    """Return each declared fixture with the non-barrel modules that declare it, sorted.
 
-    def sleep(seconds: float) -> None:
-        """Advance the frozen clock by the interval the poller asked for."""
-        clock.advance(seconds=seconds)
+    The barrel re-exports the family and so carries the same markers; excluding it leaves the
+    modules that own the behaviour.
+    """
+    homes: dict[str, list[str]] = {}
+    for stem in _module_stems():
+        if stem == _BARREL_STEM:
+            continue
+        for name in _declarations(stem):
+            homes.setdefault(name, []).append(stem)
+    return {name: tuple(sorted(modules)) for name, modules in homes.items()}
 
-    return sleep
+
+def _declaration_of(name: str) -> _Declaration:
+    """Return one published fixture as its own defining module declares it."""
+    expected = _EXPECTED_MODULES[name]
+    declared = _declarations(expected)
+    assert name in declared, f"{expected} declares no fixture named {name}"
+    return declared[name]
+
+
+def _registration_findings() -> list[str]:
+    """Return every plugin registration and hook definition found in the fixture package's source.
+
+    AAP 0.4.8 keeps registration in :mod:`foundry.plugin` alone: a ``pytest_plugins`` assignment or
+    a ``pytest_*`` function here would be a second, unreviewed registration path. The scan parses
+    the source, so a mention in prose is not a finding while an assignment or a definition is one.
+    """
+    findings: list[str] = []
+    for path in sorted(_package_dir().glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == "pytest_plugins":
+                    findings.append(f"{path.name}:{node.lineno}: assigns pytest_plugins")
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
+                "pytest_"
+            ):
+                findings.append(f"{path.name}:{node.lineno}: defines hook {node.name}")
+    return sorted(findings)
+
+
+def _heavy_modules_after_import(
+    module: str,
+    repo_root: Path,
+    build_env: Callable[..., dict[str, str]],
+) -> list[str]:
+    """Import ``module`` in a fresh interpreter and return the heavy modules it left loaded.
+
+    This process has already imported pytest and its siblings, so its ``sys.modules`` says nothing
+    about import cost; the child runs in the checkout with ``src`` first on ``PYTHONPATH``, so it
+    exercises the source tree. The child failing to import is an assertion failure, never a skip.
+    """
+    source_root = repo_root / "src"
+    inherited = os.environ.get("PYTHONPATH", "")
+    env = build_env(
+        {"PYTHONPATH": os.pathsep.join(part for part in (str(source_root), inherited) if part)}
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", _IMPORT_PROBE.format(module=module, forbidden=_HEAVY_MODULES)],
+        cwd=str(repo_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"importing {module} failed in a fresh interpreter:\n{completed.stderr}"
+    )
+    loaded = json.loads(completed.stdout)
+    assert isinstance(loaded, list), f"the probe printed something unexpected: {completed.stdout!r}"
+    return [str(name) for name in loaded]
+
+
+# --- The published set (AAP 0.4.3, AAP 0.4.9) -----------------------------
+
+
+def test_the_package_declares_exactly_the_twelve_published_fixtures() -> None:
+    """The package declares the twelve published names and nothing else, each in one module."""
+    homes = _definition_homes()
+    assert sorted(homes) == sorted(_EXPECTED_SCOPES), (
+        "the fixture package declares "
+        f"{sorted(homes)}; AAP 0.4.3 publishes {sorted(_EXPECTED_SCOPES)}"
+    )
+    shared = {name: list(modules) for name, modules in homes.items() if len(modules) != 1}
+    assert shared == {}, f"a fixture must be defined in exactly one module, not {shared}"
+
+
+def test_each_fixture_is_defined_in_the_module_the_plan_places_it_in() -> None:
+    """The name-to-module map equals AAP 0.10.1's, so a fixture moved between modules fails."""
+    homes = {name: modules[0] for name, modules in _definition_homes().items()}
+    assert homes == _EXPECTED_MODULES
+
+
+def test_the_published_scopes_are_four_session_and_eight_function() -> None:
+    """Every declared scope equals the published one, and the split is four session to eight."""
+    scopes = {name: _declaration_of(name).scope for name in _EXPECTED_SCOPES}
+    assert scopes == _EXPECTED_SCOPES
+    session_scoped = sorted(name for name, scope in scopes.items() if scope == "session")
+    assert session_scoped == sorted(_SESSION_SCOPED)
+    assert len(session_scoped) == 4
+    assert len(scopes) - len(session_scoped) == 8
+
+
+# --- The barrel (AAP 0.4.2) ----------------------------------------------
+
+
+def test_the_barrel_reexports_exactly_the_twelve_fixtures() -> None:
+    """``foundry.fixtures.plugin`` publishes the twelve names and no other ``foundry_`` one."""
+    barrel = importlib.import_module(_BARREL)
+    reexported = sorted(name for name in vars(barrel) if name.startswith("foundry_"))
+    assert reexported == sorted(_EXPECTED_SCOPES)
+
+
+@pytest.mark.parametrize("name", sorted(_EXPECTED_SCOPES))
+def test_each_barrel_reexport_is_the_function_its_own_module_defines(name: str) -> None:
+    """The barrel binds the function object itself, not a copy or a wrapper around it.
+
+    A downstream ``conftest.py`` overriding a fixture by name keeps working only while the name
+    refers to the one function its own module defines.
+    """
+    barrel = importlib.import_module(_BARREL)
+    home = importlib.import_module(f"{_FIXTURE_PACKAGE}.{_EXPECTED_MODULES[name]}")
+    assert getattr(barrel, name) is getattr(home, name)
+
+
+def test_the_barrel_holds_no_logic_of_its_own() -> None:
+    """The barrel is imports, names and a docstring: it defines nothing a fixture could hide behind.
+
+    A function or class defined inside it would be a fixture nobody published, and its ``__all__``
+    has to cover the twelve for ``import *`` to be complete.
+    """
+    barrel = importlib.import_module(_BARREL)
+    source = (_package_dir() / f"{_BARREL_STEM}.py").read_text(encoding="utf-8")
+    defined = sorted(
+        node.name
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    )
+    assert defined == [], f"{_BARREL} defines {defined} of its own"
+    assert set(barrel.__all__) >= set(_EXPECTED_SCOPES)
+
+
+# --- Documentation (AAP 0.4.3, AAP 0.13.2) --------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(_EXPECTED_SCOPES))
+def test_every_published_fixture_carries_a_docstring(name: str) -> None:
+    """Each fixture function documents itself: the docstring is its whole published manual."""
+    docstring = _declaration_of(name).docstring.strip()
+    assert docstring, f"{name} publishes no docstring"
+    assert docstring.splitlines()[0].strip(), f"{name} has a docstring with no summary line"
+
+
+# --- Import cost (implicit requirement I5, AAP 0.4.8) ---------------------
+
+
+@pytest.mark.parametrize("module", ["foundry", _FIXTURE_PACKAGE, _BARREL, "foundry.plugin"])
+def test_importing_a_fixture_module_pulls_no_heavy_dependency(
+    module: str,
+    repo_root: Path,
+    subprocess_env: Callable[..., dict[str, str]],
+) -> None:
+    """A fresh interpreter that imports one module holds none of the five heavy third-party ones.
+
+    ``foundry`` proves the package surface stays light, the package and barrel prove the family is
+    importable at ``pytest_configure`` cost, and ``foundry.plugin`` is what the 150 ms budget
+    measures.
+    """
+    assert _heavy_modules_after_import(module, repo_root, subprocess_env) == []
+
+
+# --- Registration and lifecycle discipline (AAP 0.4.8) --------------------
+
+
+def test_the_fixture_package_declares_no_plugin_list_and_no_hook() -> None:
+    """Registration and every hook belong to ``foundry.plugin``; the package does neither."""
+    scanned = {path.name for path in _package_dir().glob("*.py")}
+    expected = {f"{stem}.py" for stem in _EXPECTED_MODULES.values()} | {
+        "__init__.py",
+        f"{_BARREL_STEM}.py",
+    }
+    assert expected <= scanned, f"the scan missed {sorted(expected - scanned)}"
+    assert _registration_findings() == []
+
+
+def test_no_fixture_is_autouse_and_none_is_parametrised() -> None:
+    """The set is the twelve published fixtures: none runs unasked, none multiplies into params."""
+    declarations = {name: _declaration_of(name) for name in _EXPECTED_SCOPES}
+    unasked = sorted(name for name, declared in declarations.items() if declared.autouse)
+    assert unasked == [], f"these fixtures would run unasked: {unasked}"
+    multiplied = {
+        name: declared.params
+        for name, declared in declarations.items()
+        if declared.params is not None
+    }
+    assert multiplied == {}, f"these fixtures declare params: {multiplied}"

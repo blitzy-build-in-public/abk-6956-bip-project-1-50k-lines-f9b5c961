@@ -1,26 +1,17 @@
 """Unit tests for ``foundry.cli``: the argv builder, the command bodies and the renderers.
 
-AAP 0.4.4 fixes what each command does and which code it publishes, AAP 0.7.3 fixes the single
-document ``--format json`` and ``--json`` emit, and AAP 0.7.4 fixes the three terminal tables. This
-module pins that surface through the ``CliRunner``, one command at a time:
-``build_pytest_argv`` translates an option into the canonical ``--foundry-<dotted.key>`` spelling,
-emits the registry order and then the caller's pytest arguments verbatim, and is pure;
-``foundry run`` returns pytest's own status with the ``None`` a run can produce normalised to ``0``;
-``config show`` prints its table and exactly one ``{"resolved": ..., "sources": ...}`` document;
-``report compare`` prints the three labelled groups and exits ``1`` when something newly fails; and
-the four renderers write the columns, the ``(none)`` marker and the ``***`` a redacted value
-becomes.
+AAP 0.4.4 fixes what each command does and which code it publishes, AAP 0.7.3 the single document
+``--format json`` and ``--json`` emit, and AAP 0.7.4 the three terminal tables. This module pins
+that surface through the ``CliRunner``, one command at a time: ``build_pytest_argv`` translates an
+option into the canonical ``--foundry-<dotted.key>`` spelling, emits the registry order and then the
+caller's pytest arguments verbatim; ``foundry run`` returns pytest's own status; ``config show``
+prints one ``{"resolved": ..., "sources": ...}`` document; ``report compare`` exits ``1`` on a new
+failure; and the renderers write the columns, the ``(none)`` marker and the ``***`` marker.
 
-``foundry.cli.main`` is a sibling deliverable, so the exit code ``2`` a configuration or document
-fault earns is asserted where it is decided: the command raises the typed error that mapping
-consumes, prints nothing on stdout, and ``USAGE_OR_CONFIG`` is the published code. The run bootstrap
-``foundry run`` ends in is covered too: it resolves the configuration once, mints the run id,
-creates ``artifacts/<run_id>/`` and returns the two banner lines, all under ``tmp_path``.
-
-The package's import closure and the single owner of the override option set are guarded here: AAP
-0.4.4 requires the same ``--foundry-*`` set on every subcommand that resolves project configuration,
-so the group exists once, and every module ``pkgutil`` finds is imported, so a module naming
-something that does not exist fails as a test rather than as a gate outage.
+The exit code ``2`` a configuration or document fault earns is asserted where it is decided: the
+command raises the typed error that mapping consumes and prints nothing on stdout. The run bootstrap
+``foundry run`` ends in is covered too. The package's import closure and the single owner of the
+override option set are guarded here, so every module ``pkgutil`` finds is imported.
 """
 
 from __future__ import annotations
@@ -89,9 +80,6 @@ def _cli_module_names() -> tuple[str, ...]:
 
     Read from the package rather than listed, so the modules written after this test still run
     through it: a planned module such as ``foundry.cli.main`` needs no edit here to be covered.
-
-    Returns:
-        The fully qualified module names, sorted so a failure names the same module on every run.
     """
     return tuple(
         sorted(
@@ -108,13 +96,8 @@ _CLI_MODULE_NAMES: tuple[str, ...] = _cli_module_names()
 def _override_spellings(command: click.Command) -> set[str]:
     """Return the override option spellings ``command`` declares.
 
-    Args:
-        command: The click command to read; its parameters carry the spellings click stored from
-            the option decorators.
-
-    Returns:
-        The spellings beginning with ``--foundry-``, leaving out a command's own options
-        (``--resolved``, ``--format``, ``--json``) and its pass-through arguments.
+    Only the ``--foundry-`` spellings are kept, leaving out a command's own options (``--resolved``,
+    ``--format``, ``--json``) and its pass-through arguments.
     """
     return {
         spelling

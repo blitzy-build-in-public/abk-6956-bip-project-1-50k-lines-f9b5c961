@@ -3,23 +3,21 @@
 A secret reaches Foundry in shapes carrying no ``name=value`` separator on one line: a decoded pair
 list (``[["token", "<secret>"]]``), an RFC 7578 multipart part whose name is a
 ``Content-Disposition`` parameter, and a value under a name no deny-list enumerates -- the header a
-peer echoes a credential back in is usually one the peer invented (``x-echo: token=...``). AAP 0.3.2
-makes ``foundry.obs.redaction`` the one engine every sink calls, so the engine owns all three shapes
-rather than each dump, cassette and assertion message growing a rule of its own.
+peer echoes a credential back in is usually one the peer invented. AAP 0.3.2 makes
+``foundry.obs.redaction`` the one engine every sink calls, so it owns all three shapes here rather
+than each dump, cassette and assertion message growing a rule of its own.
 
-Pinned here, all through the public engine: the structural path masks a pair whose first element is
-a secret name, at any depth, and leaves other arrays alone; the free-text path masks the quoted pair
-entry and the multipart body while keeping the name and the punctuation readable; a kept part's own
-nested body is scrubbed in turn and the descent stops at :data:`MAX_DEPTH`; an unlisted header's
-value is scrubbed as free text while a media type, a date or an identifier is untouched; a second
-pass over masked text returns it unchanged; text dropped for its depth is marked with
-:data:`NESTING_TRUNCATION_MARKER` rather than reading as a scrubbed secret (AAP 0.4.6, 0.7.4); the
-cassette store names what it scrubbed in ``redacted_keys``; and the multipart scan costs time in the
-text's length, measured as a ratio so the pin holds on a host of any speed (AAP 0.14.2).
+Pinned through the public engine: the structural path masks a pair whose first element is a secret
+name at any depth and leaves other arrays alone; the free-text path masks the quoted pair entry and
+the multipart body while keeping the name readable; a kept part's nested body is scrubbed in turn
+and the descent stops at :data:`MAX_DEPTH`; an unlisted header's value is scrubbed while a media
+type, a date or an identifier is untouched; a second pass over masked text returns it unchanged;
+text dropped for depth carries :data:`NESTING_TRUNCATION_MARKER` rather than reading as a scrubbed
+secret; the cassette store names what it scrubbed in ``redacted_keys``; and the multipart scan
+costs time in the text's length, as a ratio, so the pin holds on a host of any speed (AAP 0.14.2).
 
-Separate from ``tests/unit/test_obs.py``, which already sits at the 700-line ceiling AAP 0.14.2 sets
-and ``scripts/count_lines.sh`` enforces. No socket is opened and nothing sleeps: every value is a
-literal, the store writes into ``tmp_path``, and the cost test reads this process's CPU time.
+Separate from ``tests/unit/test_obs.py``, which already sits at the 700-line ceiling. No socket is
+opened and nothing sleeps: every value is a literal and the store writes into ``tmp_path``.
 """
 
 from __future__ import annotations

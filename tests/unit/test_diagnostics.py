@@ -3,25 +3,16 @@
 AAP 0.4.4 fixes what ``foundry doctor`` answers -- ``0`` when every required probe passes, ``2``
 when a required probe fails, and no change at all for a warning -- and AAP 0.7.1/0.7.3 fix the rows
 and their words. Pinned here, probe by probe and then through
-:func:`~foundry.diagnostics.checks.run_checks`:
-
-* the six rows appear in the published order ``interpreter``, ``plugin``, ``configuration``,
-  ``artifacts``, ``cassettes``, ``socket_guard``, each with one of the three status words and a
-  non-empty, specific detail;
-* only a ``FAIL`` on a required row clears the report's ``ok`` -- the value that maps to the exit
-  code -- so a ``WARN`` never fails the command;
-* each probe is held to its own rule: the interpreter's platform and version policy, both halves of
-  the ``pytest11`` registration, the resolved profile or the configuration fault's own message, the
-  two directory states, and the socket-guard row.
+:func:`~foundry.diagnostics.checks.run_checks`: the six rows appear in the published order with one
+of the three status words and a specific detail; only a ``FAIL`` on a required row clears the
+report's ``ok``, so a ``WARN`` never fails the command; and each probe is held to its own rule.
 
 Every probe is handed a path under ``tmp_path``, so no test writes inside the repository, and
-nothing opens a socket or sleeps. Two contracts are judged through the seam the package really
-reads: the interpreter policy through the ``sys.platform``, ``sys.version_info`` and
+nothing opens a socket or sleeps. Two contracts are judged through the seam the package reads: the
+interpreter policy through the ``sys.platform``, ``sys.version_info`` and
 ``platform.python_implementation()`` that
-:meth:`~foundry.diagnostics.report.InterpreterInfo.current` reads, rather than through
-:func:`platform.system`, which the probe never calls; and the socket guard through the
-``FOUNDRY_SOCKET_GUARD`` and ``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` names ``tests/conftest.py``'s guard
-publishes.
+:meth:`~foundry.diagnostics.report.InterpreterInfo.current` reads, and the socket guard through the
+``FOUNDRY_SOCKET_GUARD`` and ``FOUNDRY_NON_LOOPBACK_ATTEMPTS`` names the suite guard publishes.
 """
 
 from __future__ import annotations
@@ -209,9 +200,9 @@ def test_a_warning_never_clears_the_verdict_and_a_required_failure_does() -> Non
 def _published_entry_point_targets() -> tuple[str, ...]:
     """Return the ``pytest11`` targets this environment publishes under the name ``foundry``.
 
-    Read from :mod:`importlib.metadata`, the source the probe consults when handed no pairs, so the
-    expectation follows the environment: a source checkout publishes nothing, an installed
-    ``pytest-foundry`` publishes ``foundry.plugin``.
+    Read from :mod:`importlib.metadata`, the source the probe consults when handed no pairs, so a
+    source checkout publishes nothing while an installed ``pytest-foundry`` publishes
+    ``foundry.plugin``.
     """
     return tuple(
         sorted(

@@ -2,8 +2,7 @@
 
 **The sleep cap.** AAP 0.14.2 permits at most 100 ms per sleep inside ``tests/`` and ``examples/``,
 and AAP 0.14.3 makes that a mechanism rather than a promise. A computed delay is refused too, since
-nothing can bound it; the one exemption is the body of a fake-sleep helper, which is how a retry or
-poll test hands a recording callable to the code under test instead of spending the time.
+nothing can bound it; the one exemption is the body of a fake-sleep helper.
 
 **The raw wall clock.** ``src/foundry`` routes every timestamp through
 ``foundry.core.ids.utc_now``, and the producers that legitimately stamp a value are listed by hand
@@ -12,9 +11,8 @@ reads, never a pattern.
 
 Both scans are structural: every module is parsed with :mod:`ast` and its imports, aliases and
 enclosing functions resolved, so a docstring naming the forbidden call is not a finding while the
-call itself is -- which is why this module can live inside the tree it scans. A ``sleep=`` keyword
-handed to a poller is a value reference, never a call (AAP 0.4.3). Every hit is reported with its
-path, line and argument, sorted, so two runs read identically.
+call itself is -- which is why this module can live inside the tree it scans. Every hit is reported
+with its path, line and argument, sorted, so two runs read identically.
 """
 
 from __future__ import annotations
@@ -40,10 +38,9 @@ _SLEEP_ATTRIBUTE: Final[str] = "sleep"
 _FAKE_SLEEP_FUNCTIONS: Final[frozenset[str]] = frozenset({"fake_sleep", "_fake_sleep"})
 """Helper names whose body may forward a computed delay instead of waiting.
 
-A fake sleeper records the delay or advances a frozen clock, so it spends no real time however large
-the value it is asked to wait (AAP 0.14.2's "except injected fakes").
+A fake sleeper records the delay or advances a frozen clock, so it spends no real time however
+large the value it is asked to wait (AAP 0.14.2's "except injected fakes").
 """
-
 _SLEEP_ROOTS: Final[tuple[str, ...]] = ("tests", "examples")
 """Roots under the cap: the self-test suite and the example project (AAP 0.14.2)."""
 
@@ -63,9 +60,8 @@ _WALL_CLOCK_LABELS: Final[Mapping[str, str]] = {
 }
 """Every resolved callable that reads the wall clock, mapped to the spelling a report shows.
 
-The keys are resolved through each module's own imports, so ``datetime.now`` behind
-``from datetime import datetime``, ``import datetime as dt`` and ``from time import time`` all land
-on one of these four entries.
+The keys are resolved through each module's own imports, so ``datetime.now`` behind an import alias
+lands on one of these four entries.
 """
 
 _WALL_CLOCK_PRODUCERS: Final[frozenset[str]] = frozenset(
@@ -105,9 +101,8 @@ _MINIMUM_SOURCE_MODULES: Final[int] = 50
 """A floor on the modules the wall-clock walk visits, for the same reason.
 
 A floor rather than an equality: the package grows, and an exact count would fail on every module a
-later change adds without telling anyone anything about this policy.
+change adds without saying anything about this policy.
 """
-
 _SLEEP_CALL: Final[str] = f"{_TIME_MODULE}.{_SLEEP_ATTRIBUTE}"
 """The forbidden call as source text, assembled from the two constants above."""
 

@@ -1,30 +1,24 @@
 """Unit tests for the ``foundry.data`` package: the four loaders, the case model, the matrix
 expander, the stable case ids, the schema gate and the extension registry.
 
-A data-driven test is only as trustworthy as the collection it was planned from, so this module pins
-the properties a regression would break rather than the implementation that provides them: the four
-format readers over one shared data set produce the same cases, a case carries the location it was
-read from, a matrix expands to one deterministic cross-product, a case id derives from the file and
-a position alone so every shard agrees (implicit requirement I6), a rejected row is reported with
-its file, line and column (AAP 0.4.7), the registry serves exactly five suffixes, and a file that
-parses to no data rows becomes the documented skip rather than a collection error.
+A data-driven test is only as trustworthy as the collection it was planned from, so this module
+pins the properties a regression would break: the four format readers over one shared data set
+produce the same cases, a case carries the location it was read from, a matrix expands to one
+deterministic cross-product, a case id derives from the file and a position alone so every shard
+agrees (I6), a rejected row is reported with its file, line and column (AAP 0.4.7), the registry
+serves five suffixes, and a file that parses to no data rows becomes the documented skip.
 
 Everything is driven through the package's public surface -- the ``foundry.data`` barrel and the two
-``foundry.core`` modules the ids delegate to -- because that is what ``foundry.plugin``'s
-``pytest_generate_tests`` delegation and the ``foundry_data`` fixture call. ``foundry.reporting``
-and ``foundry.cli`` are never imported: ``foundry.data`` may not depend on them (AAP 0.4.8).
+``foundry.core`` modules the ids delegate to -- because that is what the plugin's
+``pytest_generate_tests`` delegation and the fixture call; ``foundry.reporting`` and ``foundry.cli``
+are never imported (AAP 0.4.8). Where the modules on disk differ from the brief (AAP 0.7.2): a
+ragged row names the first header column it never filled while a long row keeps ``column=None``; a
+parsed JSON or YAML document reports ``line=None`` and takes its id from ``row_index``; the empty
+file's skip is built by ``build_parameters`` and bound by ``parametrize``; and a matrix axis value
+is canonical JSON, which keeps ``1`` and ``"1"`` distinct.
 
-Four expectations follow the modules on disk rather than the brief this file was written against
-(AAP 0.7.2, AAP 0.4.7): a ragged row is reported with its line and the first header column it never
-filled, while a row longer than the header keeps ``column=None``; a parsed JSON or YAML document
-reports ``line=None`` on every row, so only CSV and JSON Lines name a physical line, and the case id
-then comes from ``row_index``; the skip an empty file produces is built by
-``foundry.data.build_parameters`` and bound by ``foundry.data.parametrize``, so one test pins each
-half; and a matrix axis value is rendered as canonical JSON, which keeps ``1`` and ``"1"`` distinct.
-
-Determinism (AAP 0.14.3): the committed fixtures under ``tests/fixtures`` are only ever read, every
-file this module writes lives under ``tmp_path``, no wall-clock value is asserted and no socket is
-opened.
+Determinism (AAP 0.14.3): the committed fixtures are only read, every file this module writes lives
+under ``tmp_path``, no wall-clock value is asserted and no socket is opened.
 """
 
 from __future__ import annotations

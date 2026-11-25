@@ -1,32 +1,22 @@
 """Unit tests for the ``foundry.contract`` capability package.
 
-One module pins the whole contract of loading a JSON Schema document, validating an instance against
-it and reporting the violation Foundry chooses (AAP 0.3.2, 0.4.3, 0.4.7, 0.4.8, 0.7.1):
+One module pins the whole contract of loading a JSON Schema document, validating an instance
+against it and reporting the violation Foundry chooses (AAP 0.3.2, 0.4.3, 0.4.7, 0.4.8, 0.7.1):
+``load_schema`` takes a mapping, a ``.json`` path and a ``.yaml``/``.yml`` path and refuses a
+missing file, an unsupported extension, a non-object document and a remote reference, each as a
+``ContractError``; ``validate_instance``, ``find_violation`` and ``iter_violations`` share one walk;
+the reported violation is shallowest JSON path, then the path, then the message, so each ordering
+test hands the library's errors in a contradicting order, which is what lets it fail; and rendering
+and excerpts redact on the way out.
 
-* ``load_schema`` accepts a mapping in memory, a ``.json`` path and a ``.yaml``/``.yml`` path, and
-  refuses a missing file, an unsupported extension, a non-object document and a reference that would
-  make a validator retrieve another document -- each as a ``ContractError``, never as the builtin
-  the standard library raised.
-* ``validate_instance`` raises, ``find_violation`` returns and ``iter_violations`` enumerates, all
-  through one walk, so every validator the two committed fixture schemas exercise is proven.
-* The reported violation is Foundry's own choice, never the library's: shallowest JSON path first,
-  then the path structurally, then the message. Each ordering test therefore hands
-  ``first_violation`` the library's errors in an order that contradicts that rule, which is what
-  makes the assertions able to fail.
-* Rendering and excerpts redact on the way out, so a secret a validator message quotes, or one a
-  non-JSON body carries, reaches no message, no detail and no JSON dump.
-
-Two expectations differ from the brief this file was written against, the modules on disk being
-authoritative (AAP 0.7.1, AAP 0.4.7): ``load_schema`` is a loader, not a metaschema check, so
-``tests/fixtures/invalid_schema.json`` loads as the mapping it is and the ``ContractError`` comes
-from the first validation; and ``excerpt`` appends its ``...`` marker after cutting the body to
-``MAX_EXCERPT_BYTES``, so the budget is asserted with the marker, never against the bare constant.
+Where the modules on disk differ from the brief (AAP 0.7.1, AAP 0.4.7): ``load_schema`` is a
+loader, not a metaschema check, so ``tests/fixtures/invalid_schema.json`` loads as the mapping it is
+and the ``ContractError`` comes from the first validation; and ``excerpt`` appends its ``...``
+marker after cutting the body, so the budget is asserted with the marker.
 
 Determinism and isolation (AAP 0.14.3): every schema and body is built in ``tmp_path``, the
-committed fixtures are only read, nothing sleeps and no socket is opened -- the remote-reference
-test closes the two name-resolution seams. The single subprocess is the sanctioned lazy-import probe
-(implicit requirement I5): importing ``foundry.contract`` pulls in neither ``jsonschema`` nor
-``yaml``.
+committed fixtures are only read, nothing sleeps and no socket is opened. The single subprocess is
+the sanctioned lazy-import probe (I5): importing ``foundry.contract`` pulls neither dependency.
 """
 
 from __future__ import annotations
