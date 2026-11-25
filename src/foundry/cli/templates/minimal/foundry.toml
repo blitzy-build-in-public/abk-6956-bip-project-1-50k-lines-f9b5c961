@@ -1,0 +1,42 @@
+# Foundry configuration for this project.
+#
+# Every setting below is a commented default, so this project resolves the same
+# configuration Foundry uses when no file is present. Foundry rejects keys it
+# does not define, so uncomment only lines that already appear here.
+# Precedence, lowest to highest: defaults, this file, FOUNDRY_* environment
+# variables, --foundry-<dotted.key> command-line options.
+
+# profile = "default"                  # default | local | ci | staging
+
+# [http]
+# timeout = 10.0                       # request timeout in seconds, 0 < t <= 300
+# base_url = "http://127.0.0.1:8000"   # absolute URL required by foundry_api
+
+# [http.retries]
+# max_attempts = 3                     # 1..10, the first attempt included
+
+# [artifacts]
+# dir = "artifacts"                    # <dir>/<run_id>/ collects per-test artifacts
+
+# [reporting]
+# html = true                          # writes report.html
+# json = true                          # writes results.json
+
+# [data]
+# dir = "testdata"                     # directory the data loaders resolve against
+
+# [cassette]
+# dir = "cassettes"                    # recorded request/response pairs
+# mode = "off"                         # off | record | replay | passthrough
+
+# [execution]
+# timeout = 60.0                       # per-test timeout in seconds
+# retries = 0                          # repeats after the first attempt
+# quarantine_mode = "report"           # report | strict
+
+# [secrets]
+# redact_keys = ["authorization", "set-cookie", "cookie", "x-api-key"]
+
+# [logging]
+# level = "INFO"                       # DEBUG | INFO | WARNING | ERROR
+# capture_lines = 200                  # per-test log ring and report log tail

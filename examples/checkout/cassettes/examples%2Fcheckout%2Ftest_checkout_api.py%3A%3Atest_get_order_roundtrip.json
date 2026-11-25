@@ -1,0 +1,45 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "body_sha256": "b0e5734197bafbcb152c803b34ceb91d9fb1524c221883df40aefe8cfa5f0aaa",
+        "headers_subset": {
+          "authorization": "***",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/orders",
+        "query": []
+      },
+      "response": {
+        "body": "{\"currency\":\"EUR\",\"items\":[{\"quantity\":2,\"sku\":\"SKU-1001\",\"unit_price_cents\":2500}],\"order_id\":\"ord-3f737f7054d3\",\"status\":\"created\",\"total_cents\":5000}",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status": 201
+      }
+    },
+    {
+      "request": {
+        "body_sha256": null,
+        "headers_subset": {
+          "authorization": "***"
+        },
+        "method": "GET",
+        "path": "/orders/ord-3f737f7054d3",
+        "query": []
+      },
+      "response": {
+        "body": "{\"currency\":\"EUR\",\"items\":[],\"order_id\":\"ord-3f737f7054d3\",\"status\":\"created\",\"total_cents\":0}",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "recorded_at": "2025-01-01T00:00:00.000+00:00",
+  "redacted_keys": [
+    "authorization"
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "body_sha256": null,
+        "headers_subset": {
+          "authorization": "***"
+        },
+        "method": "GET",
+        "path": "/health",
+        "query": []
+      },
+      "response": {
+        "body": "{\"query\":[],\"service\":\"checkout\",\"status\":\"ok\",\"version\":\"0.1.0\"}",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body_sha256": null,
+        "headers_subset": {
+          "authorization": "***",
+          "x-example-trace": "health"
+        },
+        "method": "GET",
+        "path": "/health",
+        "query": [
+          [
+            "page",
+            "2"
+          ],
+          [
+            "sort",
+            "asc"
+          ]
+        ]
+      },
+      "response": {
+        "body": "{\"query\":[[\"page\",\"2\"],[\"sort\",\"asc\"]],\"service\":\"checkout\",\"status\":\"ok\",\"version\":\"0.1.0\"}",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body_sha256": null,
+        "headers_subset": {
+          "authorization": "***"
+        },
+        "method": "GET",
+        "path": "/health",
+        "query": [
+          [
+            "page",
+            "2"
+          ],
+          [
+            "sort",
+            "asc"
+          ]
+        ]
+      },
+      "response": {
+        "body": "{\"query\":[[\"page\",\"2\"],[\"sort\",\"asc\"]],\"service\":\"checkout\",\"status\":\"ok\",\"version\":\"0.1.0\"}",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "recorded_at": "2025-01-01T00:00:00.000+00:00",
+  "redacted_keys": [
+    "authorization"
+  ]
+}

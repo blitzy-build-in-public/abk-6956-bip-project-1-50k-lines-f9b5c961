@@ -1,0 +1,7 @@
+"""Smoke test for this project's Foundry configuration."""
+
+
+def test_config_defaults(foundry_config):
+    """The resolved configuration exposes Foundry's documented defaults."""
+    assert foundry_config.profile == "default"
+    assert foundry_config.http.timeout == 10.0

@@ -1,0 +1,7 @@
+sku,quantity,unit_price_cents,discount_percent,expected_total_cents,expected_tier
+SKU-1001,1,2500,0,2500,standard
+SKU-1001,3,2500,0,7500,standard
+SKU-2002,2,2000,10,3600,standard
+SKU-2002,5,2000,25,7500,bulk
+SKU-3003,4,1250,0,5000,bulk
+SKU-3003,10,1250,50,6250,bulk

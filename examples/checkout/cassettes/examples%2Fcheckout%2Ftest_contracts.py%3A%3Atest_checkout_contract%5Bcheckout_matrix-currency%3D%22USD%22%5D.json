@@ -1,0 +1,27 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "body_sha256": "0c274f3691c6dffa839a0c0076cd75ff7776523aa2438e4b1aab7b38e42844c6",
+        "headers_subset": {
+          "authorization": "***",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/orders",
+        "query": []
+      },
+      "response": {
+        "body": "{\"currency\":\"USD\",\"items\":[{\"quantity\":1,\"sku\":\"SKU-1001\",\"unit_price_cents\":2500}],\"order_id\":\"ord-5711b3b69377\",\"status\":\"created\",\"total_cents\":2500}",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status": 201
+      }
+    }
+  ],
+  "recorded_at": "2025-01-01T00:00:00.000+00:00",
+  "redacted_keys": [
+    "authorization"
+  ]
+}

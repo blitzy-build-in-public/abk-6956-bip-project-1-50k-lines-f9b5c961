@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cart_pricing row",
+  "description": "One row of cart_pricing.csv: a cart line and the totals the pricing rule must reproduce.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sku",
+    "quantity",
+    "unit_price_cents",
+    "discount_percent",
+    "expected_total_cents",
+    "expected_tier"
+  ],
+  "properties": {
+    "sku": {
+      "description": "Product identifier.",
+      "type": "string",
+      "pattern": "^SKU-[0-9]{4}$"
+    },
+    "quantity": {
+      "description": "Units ordered. Integer >= 1; a CSV cell is text, so the decimal-string form is accepted too.",
+      "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "string", "pattern": "^[1-9][0-9]*$"}
+      ]
+    },
+    "unit_price_cents": {
+      "description": "Unit price in cents. Integer >= 1; a CSV cell is text, so the decimal-string form is accepted too.",
+      "anyOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "string", "pattern": "^[1-9][0-9]*$"}
+      ]
+    },
+    "discount_percent": {
+      "description": "Whole-percent discount in 0..100; a CSV cell is text, so the decimal-string form is accepted too.",
+      "anyOf": [
+        {"type": "integer", "minimum": 0, "maximum": 100},
+        {"type": "string", "pattern": "^(0|[1-9][0-9]?|100)$"}
+      ]
+    },
+    "expected_total_cents": {
+      "description": "Total after discount: (quantity * unit_price_cents * (100 - discount_percent)) // 100.",
+      "anyOf": [
+        {"type": "integer", "minimum": 0},
+        {"type": "string", "pattern": "^(0|[1-9][0-9]*)$"}
+      ]
+    },
+    "expected_tier": {
+      "description": "Pricing tier: bulk when quantity >= 4, standard otherwise.",
+      "enum": ["bulk", "standard"]
+    }
+  }
+}

@@ -1,0 +1,10 @@
+"""This test replays a recorded GET /health interaction, so it needs no server or network."""
+
+from foundry.assertions import assert_json_subset, assert_status
+
+
+def test_health(foundry_api):
+    """GET /health returns 200 with a JSON body whose status is ok."""
+    response = foundry_api.get("/health")
+    assert_status(response, 200)
+    assert_json_subset(response.json(), {"status": "ok"})

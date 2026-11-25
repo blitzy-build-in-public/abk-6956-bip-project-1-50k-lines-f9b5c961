@@ -1,0 +1,27 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "body_sha256": "8dd1bf42a2fb1ede97598ecd73cb7c6384887f3d7785ac87a8d0269425ba0d42",
+        "headers_subset": {
+          "authorization": "***",
+          "content-type": "application/json"
+        },
+        "method": "POST",
+        "path": "/orders",
+        "query": []
+      },
+      "response": {
+        "body": "{\"currency\":\"GBP\",\"items\":[{\"quantity\":1,\"sku\":\"SKU-1001\",\"unit_price_cents\":2500}],\"order_id\":\"ord-f0f3105f19a4\",\"status\":\"created\",\"total_cents\":2500}",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status": 201
+      }
+    }
+  ],
+  "recorded_at": "2025-01-01T00:00:00.000+00:00",
+  "redacted_keys": [
+    "authorization"
+  ]
+}
