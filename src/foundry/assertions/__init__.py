@@ -13,9 +13,4 @@ from foundry.assertions.json_schema import assert_json_schema as assert_json_sch
 from foundry.assertions.json_subset import assert_json_subset as assert_json_subset
 from foundry.assertions.status import assert_status as assert_status
 
-__all__ = [
-    "assert_json_schema",
-    "assert_json_subset",
-    "assert_status",
-    "eventually",
-]
+__all__ = ["assert_json_schema", "assert_json_subset", "assert_status", "eventually"]

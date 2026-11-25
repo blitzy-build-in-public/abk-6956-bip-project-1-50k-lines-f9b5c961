@@ -26,7 +26,7 @@ from pydantic import (
 
 from foundry.core.exceptions import DataError, FieldValueError, FoundryError
 from foundry.core.ids import is_valid_run_id, parse_iso8601, to_iso8601
-from foundry.core.types import ArtifactKind, Phase, QuarantineState
+from foundry.core.types import ArtifactKind, AttemptRecord, Phase, QuarantineState
 
 __all__: Final[tuple[str, ...]] = (
     "FAILING_OUTCOMES",
@@ -199,11 +199,13 @@ class FailureRecord(_FrozenRecord):
         message: The failure text, already redacted (AAP 0.3.2), so it is safe to persist.
         traceback_path: The traceback artifact's path relative to the run directory, or ``None``
             when no traceback file was written.
+        http_attempts: One record per HTTP attempt the failure made, already redacted.
     """
 
     phase: Phase
     message: str
     traceback_path: str | None = None
+    http_attempts: tuple[AttemptRecord, ...] = ()
 
     @field_validator("traceback_path")
     @classmethod
@@ -214,11 +216,12 @@ class FailureRecord(_FrozenRecord):
         return _normalise_relative_path(value, field="traceback_path")
 
     def to_dict(self) -> dict[str, object]:
-        """Return the failure as a JSON-ready mapping of its three fields."""
+        """Return the failure as a JSON-ready mapping of its four fields."""
         return {
             "phase": self.phase,
             "message": self.message,
             "traceback_path": self.traceback_path,
+            "http_attempts": [attempt.as_dict() for attempt in self.http_attempts],
         }
 
 

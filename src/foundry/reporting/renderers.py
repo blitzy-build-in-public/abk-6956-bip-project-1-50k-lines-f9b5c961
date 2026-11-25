@@ -168,22 +168,13 @@ def write_html_report(
 # literal (AAP 0.4.9), never a runtime registration.
 RENDERERS: Final[dict[str, RendererSpec]] = {
     _JSON_FORMAT: RendererSpec(
-        name=_JSON_FORMAT,
-        filename=RESULTS_FILENAME,
-        writer=write_results,
-        order=0,
+        name=_JSON_FORMAT, filename=RESULTS_FILENAME, writer=write_results, order=0
     ),
     _HTML_FORMAT: RendererSpec(
-        name=_HTML_FORMAT,
-        filename=HTML_FILENAME,
-        writer=write_html_report,
-        order=1,
+        name=_HTML_FORMAT, filename=HTML_FILENAME, writer=write_html_report, order=1
     ),
     _JUNIT_FORMAT: RendererSpec(
-        name=_JUNIT_FORMAT,
-        filename=JUNIT_FILENAME,
-        writer=write_junit,
-        order=2,
+        name=_JUNIT_FORMAT, filename=JUNIT_FILENAME, writer=write_junit, order=2
     ),
 }
 """Every report format Foundry writes, keyed by the name it is asked for by.

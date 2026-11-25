@@ -387,8 +387,7 @@ def _testcase(record: ResultRecord, scrub: Redactor) -> ElementTree.Element:
     """
     classname, name = split_nodeid(record.nodeid)
     testcase = ElementTree.Element(
-        _TESTCASE,
-        {"classname": classname, "name": name, "time": _seconds(record.duration_ms)},
+        _TESTCASE, {"classname": classname, "name": name, "time": _seconds(record.duration_ms)}
     )
     _add_properties(testcase, _testcase_properties(record, scrub))
     _add_outcome(testcase, record, scrub)

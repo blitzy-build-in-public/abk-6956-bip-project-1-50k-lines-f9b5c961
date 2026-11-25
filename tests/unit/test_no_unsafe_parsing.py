@@ -1,7 +1,5 @@
 """Tree-wide proof that Foundry reaches no unsafe deserialiser: YAML only via safe_load."""
 
-from __future__ import annotations
-
 import ast
 import inspect
 import re

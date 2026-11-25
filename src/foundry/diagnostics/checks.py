@@ -238,10 +238,7 @@ def check_plugin_registered(
             required=True,
         )
     return ProbeResult(
-        name=PROBE_PLUGIN,
-        status=ProbeStatus.PASS,
-        detail=f"{expected} registered",
-        required=True,
+        name=PROBE_PLUGIN, status=ProbeStatus.PASS, detail=f"{expected} registered", required=True
     )
 
 
@@ -297,10 +294,7 @@ def _resolve_configuration(
         resolved = resolve()
     except ConfigError as error:
         return None, ProbeResult(
-            name=PROBE_CONFIGURATION,
-            status=ProbeStatus.FAIL,
-            detail=str(error),
-            required=True,
+            name=PROBE_CONFIGURATION, status=ProbeStatus.FAIL, detail=str(error), required=True
         )
     return resolved, _configuration_row(str(resolved.profile))
 
@@ -333,11 +327,7 @@ def _prove_writable(path: Path) -> None:
     created: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="wb",
-            prefix=_PROBE_FILE_PREFIX,
-            suffix=_PROBE_FILE_SUFFIX,
-            dir=path,
-            delete=False,
+            mode="wb", prefix=_PROBE_FILE_PREFIX, suffix=_PROBE_FILE_SUFFIX, dir=path, delete=False
         ) as handle:
             created = Path(handle.name)
             handle.write(_PROBE_FILE_CONTENT)
@@ -387,10 +377,7 @@ def check_artifacts_dir(
             required=True,
         )
     return ProbeResult(
-        name=PROBE_ARTIFACTS,
-        status=ProbeStatus.PASS,
-        detail=f"{target} writable",
-        required=True,
+        name=PROBE_ARTIFACTS, status=ProbeStatus.PASS, detail=f"{target} writable", required=True
     )
 
 

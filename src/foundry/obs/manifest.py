@@ -175,11 +175,7 @@ def entry_for(kind: ArtifactKind, file: str, data: bytes, *, redacted: bool) -> 
         The entry carrying ``data``'s length and digest; :func:`build_document` checks the path.
     """
     return ManifestEntry(
-        kind=kind,
-        file=file,
-        bytes=len(data),
-        sha256=sha256_hex(data),
-        redacted=redacted,
+        kind=kind, file=file, bytes=len(data), sha256=sha256_hex(data), redacted=redacted
     )
 
 

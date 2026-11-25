@@ -1,10 +1,7 @@
 """The terminal as a redaction sink, driven through ``pytester``: a printed secret and a logged one.
-
 AAP 0.14.3 makes the terminal a sink beside the files and the reports, and the framework reaches it
 through the one ``TerminalWriter`` pytest prints every failure, capture section and live log record
 with, so only a real run shows that the value never arrives."""
-
-from __future__ import annotations
 
 import json
 from typing import Any, Final

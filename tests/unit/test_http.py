@@ -1,7 +1,5 @@
 """Unit tests for ``foundry.http``: URL joining, headers, retries, auth and the response wrapper."""
 
-from __future__ import annotations
-
 import base64
 import json
 from collections.abc import Callable, Mapping

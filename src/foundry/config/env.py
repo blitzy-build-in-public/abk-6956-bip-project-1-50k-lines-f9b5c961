@@ -312,10 +312,7 @@ def _unknown_variable(spelling: str, folded_name: str) -> ConfigError:
     if not intended:
         return errors.unknown_variable(spelling)
     return errors.unknown_key(
-        intended,
-        closest=keys.closest_key(intended),
-        layer=errors.LAYER_ENV,
-        detail=spelling,
+        intended, closest=keys.closest_key(intended), layer=errors.LAYER_ENV, detail=spelling
     )
 
 

@@ -524,8 +524,7 @@ AAP 0.14.3 makes a reporting fault one ``WARNING`` that changes no outcome and n
 """
 
 _ATTRIBUTE_REFERENCE: Final[re.Pattern[str]] = re.compile(
-    r"""\s(?:href|src)\s*=\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)')""",
-    re.IGNORECASE,
+    r"""\s(?:href|src)\s*=\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)')""", re.IGNORECASE
 )
 """One quoted ``href`` or ``src`` attribute of the rendered document, in either quote style.
 

@@ -9,10 +9,13 @@ capture at ``WARNING`` (AAP 0.4.7). Importing it binds names only (AAP 0.4.8).
 from __future__ import annotations
 
 import json
+import re
 import types
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import partial
+from itertools import groupby
 from pathlib import Path, PurePosixPath
 from typing import Final
 
@@ -30,7 +33,7 @@ from foundry.obs.manifest import (
     sha256_hex,
     timestamp,
 )
-from foundry.obs.redaction import Redactor
+from foundry.obs.redaction import REDACTED, Redactor
 
 __all__: Final[tuple[str, ...]] = (
     "ARTIFACT_FILENAMES",
@@ -285,7 +288,10 @@ class ArtifactWriter:
             return None
         if self._nodeid is None:
             return self._scoped().write_text(kind, text, name)
-        scrubbed = self._redactor.text(text)
+        if kind == "traceback":
+            scrubbed = _scrub_traceback(text, self._redactor)
+        else:
+            scrubbed = self._redactor.text(text)
         return self._store(kind, name, _one_newline(scrubbed), redacted=scrubbed != text)
 
     def write_log_tail(self, lines: Sequence[str]) -> ArtifactRef | None:
@@ -363,11 +369,7 @@ class ArtifactWriter:
             return None
         path = relative_artifact_path(target, self._run_dir)
         reference = ArtifactRef(
-            kind=kind,
-            path=path,
-            bytes=len(payload),
-            sha256=sha256_hex(payload),
-            redacted=redacted,
+            kind=kind, path=path, bytes=len(payload), sha256=sha256_hex(payload), redacted=redacted
         )
         if not self._state.disabled:
             self._refs[path] = reference
@@ -518,6 +520,42 @@ def _scrub_log_line(line: str, redactor: Redactor) -> str:
     if sep and level.isupper() and level.isalpha() and logger.split(".")[0] == "foundry":
         return f"{redactor.text(head)}{sep}{redactor.text(message)}"
     return redactor.text(line)
+
+
+#: pytest's four-column prefix on a frame's source excerpt, marking the line that raised.
+_TRACEBACK_MARKED: Final[str] = ">   "
+#: A quoted literal in a source line's value position: ``{"token": "x"}``; a concatenation is kept.
+_SECRET_LITERAL_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"[\"']?(?P<name>[A-Za-z_][A-Za-z0-9_.\-]*)[\"']?(?P<sep>\s*[:=]\s*)"
+    r"(?P<quote>[\"'])(?P<value>(?![ \t]*[+%])(?:[^\"'\\\r\n]|\\.)*)(?P=quote)"
+)
+
+
+def _is_source_line(line: str) -> bool:
+    """Report whether a rendered line is one of pytest's four-column source-excerpt lines."""
+    return line.startswith((_TRACEBACK_MARKED, "    "))
+
+
+def _scrub_traceback(text: str, redactor: Redactor) -> str:
+    """Scrub a rendered traceback, keeping the failing frame's source lines as the code that ran."""
+    mask = partial(_masked_literal, redactor=redactor)
+    rendered: list[str] = []
+    for _, run in groupby(text.splitlines(keepends=True), _is_source_line):
+        block = list(run)
+        if any(line.startswith(_TRACEBACK_MARKED) for line in block):
+            rendered.extend(_SECRET_LITERAL_PATTERN.sub(mask, line) for line in block)
+        else:
+            # A markerless run may be a locals display, not code: one pass scrubs it (AAP 0.14.3).
+            rendered.append(redactor.text("".join(block)))
+    return "".join(rendered)
+
+
+def _masked_literal(match: re.Match[str], *, redactor: Redactor) -> str:
+    """Return ``match`` with the literal's content masked when its name is secret-bearing."""
+    if not redactor.redacts(match.group("name")):
+        return match.group(0)
+    kept = match.group(0)[: match.start("value") - match.start()]
+    return f"{kept}{REDACTED}{match.group('quote')}"
 
 
 def _dump(value: object, redactor: Redactor) -> str:

@@ -1,11 +1,8 @@
 """Unit tests for ``foundry.diagnostics``: the six doctor probes and the report they build.
-
 AAP 0.4.4 fixes the exit mapping (0 when every required probe passes, 2 when one fails, unchanged
 for a warning), AAP 0.7.1/0.7.3 fix the rows and their words, and the socket-guard row is optional;
 the live plugin row is proven through ``tests/plugin/test_cli_surface.py`` and the profile row
 through ``tests/unit/test_doctor_profile_row.py``."""
-
-from __future__ import annotations
 
 import json
 import logging

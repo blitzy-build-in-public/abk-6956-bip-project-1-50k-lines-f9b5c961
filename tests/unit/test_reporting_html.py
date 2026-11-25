@@ -1,10 +1,7 @@
 """The rendered ``report.html`` page: self-containment, structure and determinism (AAP 0.4.7).
-
 Every assertion reads the document a browser would open: nothing referencing an absolute scheme, a
 ``<link>`` or a ``src=``; the stylesheet inlined; every node id escaped; the rows sorted by node id;
 the Quarantined and Errors regions named landmarks."""
-
-from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path

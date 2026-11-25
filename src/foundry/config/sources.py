@@ -16,10 +16,7 @@ from typing import Final, TypeAlias
 
 from foundry.config.layers import DEFAULT_DETAIL, ConfigLayer, layer_label
 
-__all__: Final[tuple[str, ...]] = (
-    "ConfigSource",
-    "ConfigSources",
-)
+__all__: Final[tuple[str, ...]] = ("ConfigSource", "ConfigSources")
 
 _PROFILE_LAYER_PREFIX: Final[str] = f"{ConfigLayer.PROFILE.value}:"
 """The prefix a profile-sourced layer carries its name inside (AAP 0.4.5).

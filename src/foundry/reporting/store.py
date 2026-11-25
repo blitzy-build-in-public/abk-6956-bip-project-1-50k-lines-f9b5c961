@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Final
 
 from foundry.core.exceptions import DataError, ElementTypeError
+from foundry.core.types import AttemptRecord
 from foundry.obs.events import emit_plumbing_failure, emit_report_written
 from foundry.obs.redaction import REDACTED, Redactor, default_redactor
 from foundry.reporting.record import (
@@ -276,12 +277,19 @@ def _redact_record(record: ResultRecord, scrub: Redactor) -> dict[str, object]:
 
 
 def _redact_failure(failure: FailureRecord, scrub: Redactor) -> dict[str, object]:
-    """Return one failure entry with its message and its traceback path redacted."""
+    """Return one failure entry with its message, traceback path and HTTP attempts redacted."""
     payload = failure.to_dict()
     payload["message"] = _scrubbed(scrub, failure.message)
     if failure.traceback_path is not None:
         payload["traceback_path"] = _scrubbed(scrub, failure.traceback_path)
+    payload["http_attempts"] = [_redact_attempt(one, scrub) for one in failure.http_attempts]
     return payload
+
+
+def _redact_attempt(attempt: AttemptRecord, scrub: Redactor) -> dict[str, object]:
+    """Return one HTTP attempt with its message redacted, ``None`` kept as ``None``."""
+    message = None if attempt.message is None else _scrubbed(scrub, attempt.message)
+    return {**attempt.as_dict(), "message": message}
 
 
 def _redact_artifact(artifact: ArtifactRecord, scrub: Redactor) -> dict[str, object]:

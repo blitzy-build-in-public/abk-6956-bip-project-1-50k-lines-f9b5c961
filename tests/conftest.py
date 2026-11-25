@@ -1,11 +1,8 @@
 """Shared fixtures and process-wide guards for Foundry's own test suite.
-
 Holds the top-level ``pytest_plugins`` declaration, the session environment pinning (``TZ``,
 ``LC_ALL``, ``LANG``, ``PYTEST_ADDOPTS``, ``locale``, ``PYTEST_DEBUG_TEMPROOT``/``TMPDIR``), the
 shared fixtures, and the loopback-only socket guard of AAP 0.14.3, which refuses every non-loopback
 target before the syscall."""
-
-from __future__ import annotations
 
 import importlib.metadata
 import ipaddress
@@ -60,7 +57,6 @@ if _PRIVATE_TEMPROOT is not None:
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     """Point the session's basetemp inside the private root whenever the caller named none.
-
     A given basetemp is used directly, so ``_pytest.tmpdir`` never enters the ``pytest-of-<user>``
     branch this mitigation avoids; the hook runs first because that plugin reads the option in its
     own configure hook."""
@@ -71,7 +67,6 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Remove the private root after a clean run, and keep it after a failing one to inspect.
-
     A failing run's tree is evidence, so it survives and the controlling process names it; a worker
     stays quiet, because the controller's line is the one a reader can act on."""
     if _PRIVATE_TEMPROOT is None:
@@ -100,7 +95,6 @@ _OFFLINE_RULE: Final[str] = "AAP 0.14.3"
 @dataclass
 class SocketGuardState:
     """Live counters of this suite's loopback-only guard.
-
     Process-global, so one ``-n auto`` worker owns them and the offline proof measures a delta.
     ``foundry.diagnostics.socket_guard`` recognises a guard by ``FOUNDRY_SOCKET_GUARD`` and
     ``FOUNDRY_NON_LOOPBACK_ATTEMPTS``, which :meth:`__getattr__` serves live."""
@@ -148,7 +142,6 @@ def _is_local_host(host: str) -> bool:
 
 def _refused_target(family: int, address: object) -> tuple[str, object] | None:
     """Return the ``(host, port)`` to refuse, or ``None`` when the target may proceed.
-
     Only ``AF_INET``/``AF_INET6`` are policed, and a name is refused *before* the resolver runs,
     because resolving it would open the very socket being refused."""
     if family not in _INET_FAMILIES:
@@ -376,7 +369,6 @@ def example_project(repo_root: pathlib.Path) -> pathlib.Path:
 @pytest.fixture
 def write_project(tmp_path: pathlib.Path) -> Callable[..., pathlib.Path]:
     """Function scope: write a throwaway project into a test-owned directory and return it.
-
     Every file is UTF-8 with LF newlines and a trailing newline, ``pyproject.toml`` is written only
     when a caller passes it (so a zero-configuration directory stays configuration free), and
     containment is enforced so ``examples/checkout`` can never be mutated."""

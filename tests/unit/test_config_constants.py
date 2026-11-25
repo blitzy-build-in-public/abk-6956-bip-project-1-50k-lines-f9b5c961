@@ -2,8 +2,6 @@
 bounds and range texts of ``foundry.core.limits``, the constraint texts in ``foundry.config.keys``
 and every constant a capability package re-publishes must agree, number for number and text too."""
 
-from __future__ import annotations
-
 import re
 from collections.abc import Callable
 from typing import Final

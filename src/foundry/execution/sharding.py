@@ -356,10 +356,7 @@ class ShardingService:
         losses = self.errors.lost_workers()
         workers = self.nodes.workers()
         if not workers and not losses:
-            serial_only = ShardingReport(
-                serial_count=len(serial),
-                distributed_count=len(serial),
-            )
+            serial_only = ShardingReport(serial_count=len(serial), distributed_count=len(serial))
             emit_sharding_decision(CONTROLLER_WORKER_ID, serial_only.serial_count)
             return serial_only
         managed = self.nodes.all_nodes()

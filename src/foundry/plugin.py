@@ -162,14 +162,7 @@ def _add_option(
     if is_flag:
         group.addoption(spelling, dest=dest, action="store_true", default=None, help=help_text)
         return
-    group.addoption(
-        spelling,
-        dest=dest,
-        default=None,
-        type=str,
-        metavar="VALUE",
-        help=help_text,
-    )
+    group.addoption(spelling, dest=dest, default=None, type=str, metavar="VALUE", help=help_text)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -224,8 +217,7 @@ def _boot(config: pytest.Config) -> SessionState:
         if isinstance(shared, dict):
             return session.state_from_worker_payload(shared)
     return session.bootstrap_session(
-        cli_input=cli_layer.collect_from_pytest(config),
-        invocation_dir=config.invocation_params.dir,
+        cli_input=cli_layer.collect_from_pytest(config), invocation_dir=config.invocation_params.dir
     )
 
 
@@ -354,14 +346,14 @@ def pytest_runtest_makereport(
     """
     report = yield
     try:
-        _stamp(item, report)
+        _stamp(item, report, call)
     except Exception as exc:
         # Failure-isolation rule: Foundry's own capture may not change a test's outcome.
         _warn("could not stamp a report with Foundry's record data", exc)
     return report
 
 
-def _stamp(item: pytest.Item, report: pytest.TestReport) -> None:
+def _stamp(item: pytest.Item, report: pytest.TestReport, call: pytest.CallInfo[None]) -> None:
     """Assemble the item's payload from the data available and write it onto ``report``.
 
     The attempt's reports live in :data:`~foundry.execution.state.ATTEMPT_REPORTS`, cleared by that
@@ -395,6 +387,7 @@ def _stamp(item: pytest.Item, report: pytest.TestReport) -> None:
         log_tail=log_tail,
         started_at=item.stash.get(exec_state.ITEM_STARTED_AT, state.started_at),
         finished_at=ids.utc_now(),
+        http_attempts=coordinator.record_http_attempts(item, report, call),
     )
     exec_state.write_properties(report, payload)
 

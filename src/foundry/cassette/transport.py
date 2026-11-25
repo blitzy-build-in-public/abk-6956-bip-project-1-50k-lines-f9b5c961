@@ -57,13 +57,7 @@ A ``passthrough`` replay tags a delegated reply with this value rather than with
 """
 
 VOLATILE_HEADERS: Final[frozenset[str]] = frozenset(
-    {
-        "host",
-        "content-length",
-        "connection",
-        "accept-encoding",
-        "user-agent",
-    }
+    {"host", "content-length", "connection", "accept-encoding", "user-agent"}
 )
 """The header names a capture drops, because they say nothing about the exchange.
 

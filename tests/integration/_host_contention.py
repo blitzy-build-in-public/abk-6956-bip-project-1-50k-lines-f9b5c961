@@ -1,5 +1,4 @@
 """Host-contention evidence the two timing budgets of AAP 0.14.2 are read through.
-
 A sample is set aside only on its own wall clock exceeding its own CPU time, never on host load."""
 
 from __future__ import annotations

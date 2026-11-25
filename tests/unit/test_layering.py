@@ -1,7 +1,5 @@
 """AAP 0.4.8's import-direction matrix over the package's own source; contract -> obs departs it."""
 
-from __future__ import annotations
-
 import ast
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path

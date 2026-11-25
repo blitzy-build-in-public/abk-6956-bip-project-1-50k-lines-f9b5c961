@@ -17,6 +17,9 @@ __all__: Final[tuple[str, ...]] = (
     "BAD_ENV_TEMPLATE",
     "BAD_OPTION_TEMPLATE",
     "ENV_NOT_SUPPORTED_TEMPLATE",
+    "HEADER_CONTROL_CHARACTER_HINT",
+    "HEADER_NAME_REQUIRED_HINT",
+    "INVALID_SHAPE_HINT",
     "INVALID_SHAPE_TEMPLATE",
     "LAYER_CLI",
     "LAYER_DEFAULT",
@@ -61,9 +64,8 @@ __all__: Final[tuple[str, ...]] = (
 )
 
 
-# The four resolution layers plus the prefix that labels a profile table. A ``ConfigSource``
-# layer and a message layer are spelled by these same values, so a row and an error name a layer
-# alike.
+# The four resolution layers plus the prefix that labels a profile table. A ``ConfigSource`` layer
+# and a message layer are spelled by these same values, so a row and an error name a layer alike.
 LAYER_DEFAULT: Final[str] = "default"
 LAYER_FILE: Final[str] = "file"
 LAYER_ENV: Final[str] = "env"
@@ -154,6 +156,21 @@ MISSING_REQUIRED_TEMPLATE: Final[str] = "{key} is required when {strategy_key} i
 INVALID_SHAPE_TEMPLATE: Final[str] = "invalid shape for {key}: expected {expected}"
 """A TOML section that is not a table, or two keys that cannot both be flattened."""
 
+INVALID_SHAPE_HINT: Final[str] = (
+    "Check that a section is a table of keys and that no key is defined twice"
+)
+"""The structural remedy: the section's layout is what the operator changes."""
+
+HEADER_CONTROL_CHARACTER_HINT: Final[str] = (
+    "Remove the control characters from the header name or value; a tab stays legal in a value"
+)
+"""The remedy for a control character in a header entry, which the hint never quotes."""
+
+HEADER_NAME_REQUIRED_HINT: Final[str] = (
+    "Give the header a name; an empty header name cannot be sent"
+)
+"""The remedy for an empty header name: the entry needs a name, not a different layout."""
+
 PROFILE_INVALID_TEMPLATE: Final[str] = "unknown profile: {value} (expected one of {accepted})"
 """A ``profile`` value outside the four names AAP 0.4.5 accepts."""
 
@@ -184,11 +201,7 @@ def missing_file(path: Path) -> ConfigError:
 
     The message is exactly ``config file not found: <path>`` and there is no hint.
     """
-    return ConfigError(
-        MISSING_FILE_TEMPLATE.format(path=path),
-        layer=LAYER_FILE,
-        path=path,
-    )
+    return ConfigError(MISSING_FILE_TEMPLATE.format(path=path), layer=LAYER_FILE, path=path)
 
 
 def unreadable_file(path: Path, cause: str) -> ConfigError:
@@ -239,10 +252,7 @@ def unknown_key(key: str, *, closest: str | None, layer: str, detail: str) -> Co
         hint_parts.append(UNKNOWN_KEY_HINT_TEMPLATE.format(closest=closest))
     hint_parts.append(_layer_note(layer, detail))
     return ConfigError(
-        UNKNOWN_KEY_TEMPLATE.format(key=key),
-        key=key,
-        layer=layer,
-        hint=" ".join(hint_parts),
+        UNKNOWN_KEY_TEMPLATE.format(key=key), key=key, layer=layer, hint=" ".join(hint_parts)
     )
 
 
@@ -381,17 +391,18 @@ def missing_required_for(key: str, required_key: str, *, strategy: str) -> Confi
     )
 
 
-def invalid_shape(key: str, expected: str, *, layer: str) -> ConfigError:
+def invalid_shape(key: str, expected: str, *, layer: str, hint: str | None = None) -> ConfigError:
     """Build the error for a value whose shape is wrong for its key.
 
     Covers a section that is not a table, a table where a scalar belongs and two keys that cannot
-    both be flattened.
+    both be flattened. AAP 0.4.5 sets the message. ``hint`` states the remedy, or the structural
+    one when it is ``None``.
     """
     return ConfigError(
         INVALID_SHAPE_TEMPLATE.format(key=key, expected=expected),
         key=key,
         layer=layer,
-        hint="Check that a section is a table of keys and that no key is defined twice",
+        hint=INVALID_SHAPE_HINT if hint is None else hint,
     )
 
 

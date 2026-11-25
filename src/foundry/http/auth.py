@@ -323,10 +323,7 @@ def resolve_auth(
         return AuthHeader(name=AUTHORIZATION, value=f"{_BASIC_SCHEME} {credential}")
     if strategy == STRATEGY_HEADER:
         name = _require_setting(
-            settings.header_name,
-            _KEY_HEADER_NAME,
-            STRATEGY_HEADER,
-            "the header name to send",
+            settings.header_name, _KEY_HEADER_NAME, STRATEGY_HEADER, "the header name to send"
         )
         value_variable = _require_setting(
             settings.header_value_env,

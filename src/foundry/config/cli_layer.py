@@ -418,10 +418,7 @@ def _unknown_option(spelling: str) -> ConfigError:
     """
     candidate = spelling.removeprefix(GENERIC_OPTION_PREFIX) or spelling
     return errors.unknown_key(
-        candidate,
-        closest=keys.closest_key(candidate),
-        layer=errors.LAYER_CLI,
-        detail=spelling,
+        candidate, closest=keys.closest_key(candidate), layer=errors.LAYER_CLI, detail=spelling
     )
 
 

@@ -143,7 +143,5 @@ def expand_matrix(document: LoadedMatrix) -> Matrix:
             :func:`foundry.core.ids.case_id_for_matrix`.
     """
     return expand_axes(
-        source_file=document.path,
-        axes=dict(document.axes),
-        name=case_stem(document.path),
+        source_file=document.path, axes=dict(document.axes), name=case_stem(document.path)
     )

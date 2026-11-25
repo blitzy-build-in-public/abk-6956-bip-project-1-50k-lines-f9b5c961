@@ -246,10 +246,7 @@ class RetryExhaustedError(TransportError):
     def _attribute_items(self) -> tuple[tuple[str, object], ...]:
         """Return the inherited request attributes and then ``attempts``."""
         return _present(
-            method=self.method,
-            path=self.path,
-            cause=self.cause,
-            attempts=self.attempts,
+            method=self.method, path=self.path, cause=self.cause, attempts=self.attempts
         )
 
 

@@ -183,10 +183,7 @@ def apply_profile(
     merged = dict(base)
     merged.update(checked)
     return ProfileApplication(
-        name=name,
-        values=merged,
-        applied=True,
-        contributed=frozenset(checked),
+        name=name, values=merged, applied=True, contributed=frozenset(checked)
     )
 
 

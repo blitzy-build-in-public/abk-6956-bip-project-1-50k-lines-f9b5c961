@@ -1,8 +1,5 @@
 """A real session resolves the ten delivered fixtures through a consuming ``pytest_plugins`` list.
-
 Autoload stays off, so the child proves that path alone; the second child is the control."""
-
-from __future__ import annotations
 
 import json
 from pathlib import Path

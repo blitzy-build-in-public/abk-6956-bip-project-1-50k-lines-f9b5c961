@@ -130,35 +130,14 @@ KEY_SPECS: tuple[KeySpec, ...] = (
         constraint=accepted_values_text(AuthStrategy),
         enum_type=AuthStrategy,
     ),
+    KeySpec(dotted="http.auth.token_env", kind="str", constraint="a variable name", nullable=True),
+    KeySpec(dotted="http.auth.user_env", kind="str", constraint="a variable name", nullable=True),
     KeySpec(
-        dotted="http.auth.token_env",
-        kind="str",
-        constraint="a variable name",
-        nullable=True,
+        dotted="http.auth.password_env", kind="str", constraint="a variable name", nullable=True
     ),
+    KeySpec(dotted="http.auth.header_name", kind="str", constraint="a header name", nullable=True),
     KeySpec(
-        dotted="http.auth.user_env",
-        kind="str",
-        constraint="a variable name",
-        nullable=True,
-    ),
-    KeySpec(
-        dotted="http.auth.password_env",
-        kind="str",
-        constraint="a variable name",
-        nullable=True,
-    ),
-    KeySpec(
-        dotted="http.auth.header_name",
-        kind="str",
-        constraint="a header name",
-        nullable=True,
-    ),
-    KeySpec(
-        dotted="http.auth.header_value_env",
-        kind="str",
-        constraint="a variable name",
-        nullable=True,
+        dotted="http.auth.header_value_env", kind="str", constraint="a variable name", nullable=True
     ),
     KeySpec(dotted="artifacts.dir", kind="path", constraint="a writable directory path"),
     KeySpec(dotted="artifacts.keep_passed", kind="bool", constraint="true or false"),
@@ -174,10 +153,7 @@ KEY_SPECS: tuple[KeySpec, ...] = (
         enum_type=CassetteMode,
     ),
     KeySpec(
-        dotted="execution.retries",
-        kind="int",
-        constraint="0..10",
-        aliases=("--foundry-retries",),
+        dotted="execution.retries", kind="int", constraint="0..10", aliases=("--foundry-retries",)
     ),
     KeySpec(
         dotted="execution.timeout",

@@ -98,9 +98,7 @@ def build_group() -> click.Group:
         help=_GROUP_HELP,
     )
     @click.version_option(
-        version=foundry.__version__,
-        prog_name=_PROG_NAME,
-        message=_VERSION_MESSAGE,
+        version=foundry.__version__, prog_name=_PROG_NAME, message=_VERSION_MESSAGE
     )
     def application() -> None:
         """Publish the five subcommands that make up the ``foundry`` command line."""

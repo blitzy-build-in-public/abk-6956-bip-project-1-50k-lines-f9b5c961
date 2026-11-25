@@ -1,8 +1,6 @@
 """The four-layer configuration ladder with per-key provenance (AAP 0.14.1 criterion 4): the value
 resolves 1.0 (cli), 3.5 (env), 2.0 (file) and 10.0 (default), each naming its layer."""
 
-from __future__ import annotations
-
 import json
 import tomllib
 from collections.abc import Mapping

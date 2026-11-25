@@ -201,11 +201,7 @@ def _request_url_off_origin() -> ConfigError:
     or a query value; the fault is described by the key that resolves it.
     """
     return ConfigError(
-        _MESSAGE_OFF_ORIGIN,
-        key=_BASE_URL_KEY,
-        layer=None,
-        path=None,
-        hint=_HINT_OFF_ORIGIN,
+        _MESSAGE_OFF_ORIGIN, key=_BASE_URL_KEY, layer=None, path=None, hint=_HINT_OFF_ORIGIN
     )
 
 
@@ -245,12 +241,7 @@ def split_url(url: str) -> UrlParts:
         path = head[separator:]
     userinfo, host, port = _split_authority(authority)
     return UrlParts(
-        scheme=scheme,
-        host=host.casefold(),
-        port=port,
-        path=path,
-        query=query,
-        userinfo=userinfo,
+        scheme=scheme, host=host.casefold(), port=port, path=path, query=query, userinfo=userinfo
     )
 
 

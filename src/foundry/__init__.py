@@ -1,6 +1,13 @@
 """The ``foundry`` import package: version string and exception names, nothing else.
 
-The version resolves on first access, so importing does no I/O (AAP 0.4.1, 0.4.8)."""
+The version resolves on first access, so importing does no I/O (AAP 0.4.1, 0.4.8).
+
+``PYTEST_DONT_REWRITE`` is pytest's own opt-out marker for assertion rewriting (AAP 0.4.2,
+0.7.4). The pytest11 entry point makes this a plugin package, so the console script's
+``foundry run`` has imported it by the time its in-process ``pytest.main`` installs the rewriting
+hook, and without the marker pytest opens every such run with ``PytestAssertRewriteWarning:
+Module already imported so cannot be rewritten; foundry``. Nothing here holds an assert, so no
+rewritten form of this module is lost."""
 
 from typing import Final
 

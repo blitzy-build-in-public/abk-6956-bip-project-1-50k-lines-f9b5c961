@@ -133,9 +133,7 @@ SCAFFOLD_FILES: Final[tuple[ScaffoldEntry, ...]] = (
     ),
     ScaffoldEntry(template=_MINIMAL, source="orders.csv", destination="testdata/orders.csv"),
     ScaffoldEntry(
-        template=_MINIMAL,
-        source="orders.schema.json",
-        destination="testdata/orders.schema.json",
+        template=_MINIMAL, source="orders.schema.json", destination="testdata/orders.schema.json"
     ),
     ScaffoldEntry(template=_API, source="foundry.toml", destination="foundry.toml"),
     ScaffoldEntry(template=_API, source="test_api.py.tmpl", destination="tests/test_api.py"),
@@ -225,8 +223,7 @@ def _require_template(template: str) -> None:
         return
     accepted = ", ".join(sorted(SCAFFOLD_TEMPLATES))
     raise ConfigError(
-        f"unknown scaffold template: {template}",
-        hint=f"accepted templates: {accepted}",
+        f"unknown scaffold template: {template}", hint=f"accepted templates: {accepted}"
     )
 
 
@@ -413,12 +410,7 @@ def _create_directory(directory: Path) -> None:
     show_default=True,
     help="the scaffold to write",
 )
-@click.option(
-    "--force",
-    is_flag=True,
-    default=False,
-    help="write into a non-empty directory",
-)
+@click.option("--force", is_flag=True, default=False, help="write into a non-empty directory")
 def init(path: Path, *, template: str = _MINIMAL, force: bool = False) -> int:
     """Scaffold a Foundry project into ``path`` and publish the exit status of AAP 0.4.4.
 

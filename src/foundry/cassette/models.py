@@ -374,8 +374,7 @@ class RecordedRequest:
         query = _entries(_require_value(fields, "query", where=where), where=f"{where} 'query'")
         body_sha256 = _optional_str(fields, "body_sha256", where=where)
         headers = _frozen_headers(
-            _require_value(fields, "headers_subset", where=where),
-            where=f"{where} 'headers_subset'",
+            _require_value(fields, "headers_subset", where=where), where=f"{where} 'headers_subset'"
         )
         return cls(
             method=method,

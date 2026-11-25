@@ -254,9 +254,7 @@ def emit_sharding_decision(worker_id: str, count: int) -> None:
 def emit_attempt(nodeid: str, attempt: int, outcome: str) -> None:
     """Record one attempt of a test and its outcome, at ``DEBUG``, with the node id scrubbed."""
     _emit(
-        "attempt",
-        LEVEL_DEBUG,
-        _pairs(nodeid=_scrubbed(nodeid), attempt=attempt, outcome=outcome),
+        "attempt", LEVEL_DEBUG, _pairs(nodeid=_scrubbed(nodeid), attempt=attempt, outcome=outcome)
     )
 
 
@@ -266,11 +264,7 @@ def emit_artifact_written(nodeid: str, kind: str, path: str, size_bytes: int, sh
         "artifact_written",
         LEVEL_DEBUG,
         _pairs(
-            nodeid=_scrubbed(nodeid),
-            kind=kind,
-            path=path,
-            size_bytes=size_bytes,
-            sha256=sha256,
+            nodeid=_scrubbed(nodeid), kind=kind, path=path, size_bytes=size_bytes, sha256=sha256
         ),
     )
 

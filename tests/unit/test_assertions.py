@@ -2,8 +2,6 @@
 ``repr`` of the redacted body cut to ``MAX_EXCERPT_BYTES``, then marked with ``TRUNCATION_MARKER``.
 """
 
-from __future__ import annotations
-
 import ast
 import json
 from collections.abc import Callable, Mapping

@@ -3,8 +3,6 @@ Foundry's own pytest plugin, activation being the pytest11 entry point alone (AA
 Markdown documents, where only a fenced line counts. One allowlisted site: the startup cost module.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final

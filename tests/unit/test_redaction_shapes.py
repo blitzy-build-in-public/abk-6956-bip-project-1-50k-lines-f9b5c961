@@ -2,8 +2,6 @@
 is a header parameter, and a credential under a name no deny-list enumerates; obs.redaction is the
 one engine every sink calls, so it owns all of them here."""
 
-from __future__ import annotations
-
 import json
 import time
 from datetime import UTC, datetime

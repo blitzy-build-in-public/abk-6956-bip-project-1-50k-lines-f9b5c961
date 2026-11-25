@@ -1,17 +1,13 @@
 """Unit tests for the per-test artifact capture of ``foundry.execution.coordinator``.
-
 The capture path is where a test's own output becomes a file, so these cases hold it to the two
 documents that describe it: AAP 0.4.6's artifact layout, in which each captured section reaches
 ``stdout.log`` or ``stderr.log`` exactly once and in phase order and both logs exist even when
 nothing was captured, and AAP 0.1.2's failure isolation, in which an unrenderable traceback costs
 one ``WARNING``, that one file and nothing else.
-
 The phase reports a case hands the capture path are stand-ins for the three reports pytest builds
 for one item, so no case here drives pytest machinery, sleeps, reads the wall clock or opens a
 socket (AAP 0.14.3). The fixed run id, profile and node id are imported from
 ``tests.unit.test_execution`` rather than restated, so the suite describes one run and not two."""
-
-from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
@@ -33,7 +29,6 @@ _PHASES: Final[tuple[str, ...]] = ("setup", "call", "teardown")
 
 class _PhaseReport:
     """The attributes the capture path reads from one of pytest's phase reports.
-
     ``sections`` is the accumulated ``(title, content)`` list pytest re-sends on every phase's
     report and ``longrepr`` is what a traceback is rendered from; the stand-in keeps both without a
     runtest protocol behind it."""
@@ -73,7 +68,6 @@ def _phase_reports(
     longrepr: object = "AssertionError: deliberate failure",
 ) -> list[_PhaseReport]:
     """Return the setup, call and teardown reports pytest builds from one item's section list.
-
     pytest appends a non-empty ``(when, key, content)`` triple as each phase runs and re-sends the
     whole accumulated list on that phase's report, so the setup report carries the setup sections,
     the call report the setup and call sections, and the teardown report all of them. Only the call
@@ -104,7 +98,6 @@ def _capture_streams(
     longrepr: object = "AssertionError: deliberate failure",
 ) -> Path:
     """Capture one item's artifacts from stand-in reports and return the directory it wrote.
-
     The writer is a real one rooted in ``tmp_path`` and bound to :data:`_NODEID`, the log ring is
     a real :class:`foundry.obs.capture.LogRing`, and the stash is a plain dict, so the capture path
     runs as it does for an item with no runtest protocol behind it."""

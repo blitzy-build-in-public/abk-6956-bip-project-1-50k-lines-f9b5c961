@@ -470,12 +470,7 @@ class RetryRunner:
                 response = send()
             except httpx.HTTPError as exc:
                 self._retry_or_raise(
-                    exc,
-                    records,
-                    number=number,
-                    started=attempt_started,
-                    method=method,
-                    path=path,
+                    exc, records, number=number, started=attempt_started, method=method, path=path
                 )
                 continue
             predicate = classify(None, response.status_code)
@@ -486,9 +481,7 @@ class RetryRunner:
                 continue
             records.append(self._record(number, OUTCOME_RESPONSE, attempt_started, None, message))
             return RetriedResponse(
-                response=response,
-                attempts=tuple(records),
-                elapsed_ms=_elapsed_ms(started),
+                response=response, attempts=tuple(records), elapsed_ms=_elapsed_ms(started)
             )
         # Unreachable: the final iteration can neither continue nor fall through, because the
         # retry branch requires `number < total`. The statement keeps the function total for the

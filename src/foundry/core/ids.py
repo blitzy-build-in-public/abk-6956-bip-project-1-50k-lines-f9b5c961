@@ -121,8 +121,7 @@ def _require_stem(stem: str) -> None:
     """
     if not stem.strip():
         raise FoundryError(
-            "case id requires a file stem",
-            hint="pass the data file's stem, for example cart",
+            "case id requires a file stem", hint="pass the data file's stem, for example cart"
         )
 
 
@@ -134,11 +133,7 @@ def _canonical_json(value: object, axis: str) -> str:
     """
     try:
         return json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            default=str,
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str
         )
     except (TypeError, ValueError) as exc:
         raise FoundryError(

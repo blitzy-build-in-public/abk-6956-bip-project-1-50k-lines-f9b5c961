@@ -2,8 +2,6 @@
 seam in test_http.py and the exit-code seam in test_cli.py cannot see. The interrupt case needs a
 child process, because pytester's in-process runner re-raises an inner session's interrupt."""
 
-from __future__ import annotations
-
 import json
 from typing import Any, Final
 
@@ -25,20 +23,14 @@ _INTERRUPT_MODULE: Final[str] = "test_interrupt_in_the_call_phase"
 _API_WITHOUT_BASE_URL: Final[str] = '''def test_requests_the_configured_client(foundry_api) -> None:
     """Request a path, which the fixture refuses to serve without a base URL."""
     foundry_api.get("/health")
-
-
 def test_still_runs_after_the_error() -> None:
     assert True
 '''
 
 _INTERRUPT_IN_CALL: Final[str] = """def test_before_the_interrupt() -> None:
     assert True
-
-
 def test_interrupts_in_the_call_phase() -> None:
     raise KeyboardInterrupt
-
-
 def test_after_the_interrupt() -> None:
     assert False, "the session stopped at the interrupt, so this test must never be reached"
 """
@@ -137,3 +129,24 @@ def test_an_interrupt_flushes_partial_results_and_writes_the_report(
             f"report.html references {scheme}, so it stops opening offline (assumption I10)"
         )
     _read(pytester, _JUNIT_FILE)
+
+
+_DEAD_TOML: Final[str] = (
+    '[http]\nbase_url = "http://127.0.0.1:1"\n'
+    '[http.retries]\nmax_attempts = 3\nbackoff_base = 0.0\nretry_on = ["connect"]\n'
+)
+_DEAD_API: Final[str] = 'def test_dead(foundry_api) -> None:\n    foundry_api.get("/health")\n'
+
+
+def test_a_transport_fault_persists_every_http_attempt_in_the_record(
+    pytester: pytest.Pytester, clean_foundry_env: None
+) -> None:
+    pytester.makefile(".toml", foundry=_DEAD_TOML)
+    pytester.makepyfile(test_dead=_DEAD_API)
+    result = pytester.runpytest("-q")
+    record = _records(pytester)["test_dead.py::test_dead"]
+    [failure] = record["failures"]
+    assert (result.ret, record["attempts"], failure["phase"]) == (1, 1, "call"), record
+    made = [(one["number"], one["outcome"], one["retry_on"]) for one in failure["http_attempts"]]
+    assert made == [(number, "connect", "connect") for number in (1, 2, 3)], made
+    assert all(one["elapsed_ms"] >= 0 for one in failure["http_attempts"])

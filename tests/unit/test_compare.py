@@ -2,8 +2,6 @@
 AAP 0.14.1 makes the three sets an acceptance observation; ``has_new_failures`` is the predicate the
 command's exit code follows, and the CLI surface itself belongs to ``tests/unit/test_cli.py``."""
 
-from __future__ import annotations
-
 import json
 from collections.abc import Sequence
 from itertools import combinations

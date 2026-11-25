@@ -2,8 +2,6 @@
 ``passed`` record with ``attempts: 3``, the default retries nothing, and the budget is bounded.
 Each generated test counts its attempts in a file, so no run depends on process memory."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Final

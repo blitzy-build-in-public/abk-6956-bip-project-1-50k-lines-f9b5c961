@@ -1,16 +1,12 @@
 """Unit tests for ``foundry.execution.quarantine``: the marker, both modes and the exit-code rule.
-
 One case per row of the table AAP 0.4.7 publishes and per name AAP 0.4.2, 0.4.6 and 0.4.9 fix: the
 verdict a marked test gets in ``report`` and in ``strict`` mode, the ``quarantined_failed`` and
 ``quarantine_passed`` outcomes with A11's note asking for the marker's removal, the tallies that say
 how many marked failures the run itself counts, and the marker vocabulary the report republishes.
-
 Nothing here drives pytest machinery, sleeps, reads the wall clock or opens a socket (AAP 0.14.3):
 every verdict is decided from a registry and an outcome the run already recorded. The coordinator's
 per-test capture has its own module, ``tests.unit.test_execution_capture``, and the retry budget,
 sharding, timeout and wire payloads stay in ``tests.unit.test_execution``."""
-
-from __future__ import annotations
 
 import pytest
 

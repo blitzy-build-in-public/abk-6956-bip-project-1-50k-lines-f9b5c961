@@ -47,12 +47,7 @@ if TYPE_CHECKING:
     carry no order of their own.
     """
 
-__all__: Final[tuple[str, ...]] = (
-    "create_all",
-    "drop_all",
-    "metadata_for",
-    "normalize_models",
-)
+__all__: Final[tuple[str, ...]] = ("create_all", "drop_all", "metadata_for", "normalize_models")
 """The four runtime calls this module publishes, sorted.
 
 ``ModelLike`` and ``ModelSpec`` are deliberately absent: both are unions over SQLAlchemy types bound
@@ -177,8 +172,7 @@ def _not_a_model(value: object) -> FoundryError:
     whole-argument rejection at the end of :func:`normalize_models`.
     """
     return FoundryError(
-        f"not a SQLAlchemy model or table: {type(value).__qualname__}",
-        hint=_NOT_A_MODEL_HINT,
+        f"not a SQLAlchemy model or table: {type(value).__qualname__}", hint=_NOT_A_MODEL_HINT
     )
 
 

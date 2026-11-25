@@ -1,10 +1,7 @@
 """End-to-end proof that the installed plugin activates with no Foundry configuration at all.
-
 AAP 0.14.1 criterion 2: a real ``pytest`` child holding one test file and nothing else exits 0,
 prints ``foundry: profile=default`` and writes the three report files in its invocation directory.
 """
-
-from __future__ import annotations
 
 import importlib.metadata
 import json

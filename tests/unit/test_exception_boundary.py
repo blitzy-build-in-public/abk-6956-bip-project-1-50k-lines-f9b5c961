@@ -1,7 +1,5 @@
 """The tree-wide proof that only ``core/exceptions.py`` defines Foundry's exception types."""
 
-from __future__ import annotations
-
 import ast
 import builtins
 import functools

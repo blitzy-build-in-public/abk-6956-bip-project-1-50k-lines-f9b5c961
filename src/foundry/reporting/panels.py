@@ -125,11 +125,7 @@ def _panel_sort_key(panel: FailurePanel) -> tuple[str, int, str]:
         ``(nodeid, phase index, message)``: a setup failure is listed before the call failure of
         the same test, and the message separates two failures of one phase.
     """
-    return (
-        panel.nodeid,
-        _PHASE_ORDER_INDEX.get(panel.phase, len(PHASE_ORDER)),
-        panel.message,
-    )
+    return (panel.nodeid, _PHASE_ORDER_INDEX.get(panel.phase, len(PHASE_ORDER)), panel.message)
 
 
 @dataclass(frozen=True, slots=True)

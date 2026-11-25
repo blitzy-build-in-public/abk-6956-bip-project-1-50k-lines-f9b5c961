@@ -201,8 +201,7 @@ class CassetteSession:
         """
         if not nodeid.strip():
             raise FoundryError(
-                "cassette session needs the node id of the test it records",
-                hint=_BLANK_NODEID_HINT,
+                "cassette session needs the node id of the test it records", hint=_BLANK_NODEID_HINT
             )
         self._behaviour = behaviour_for(mode)
         self._nodeid = nodeid

@@ -1,8 +1,6 @@
 """Redaction's coverage floor: every credential shape loses its value wherever it stands, while a
 location, a node id and a deny-list read as written under the pass that must keep them."""
 
-from __future__ import annotations
-
 from typing import Final
 
 import pytest

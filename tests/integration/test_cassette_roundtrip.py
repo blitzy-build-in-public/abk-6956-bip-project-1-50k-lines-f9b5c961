@@ -1,8 +1,6 @@
 """Record then replay through a loopback echo server (AAP 0.14.1 criteria 7 and 8): one recorded
 document, an order-insensitive replay that refuses every ``connect``, and the typed miss error."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import re

@@ -289,11 +289,12 @@ class AttemptPayload:
 
 @dataclass(frozen=True, slots=True)
 class FailurePayload:
-    """One failing phase of one test, with its run-relative traceback path (AAP 0.4.6)."""
+    """One failing phase of one test, with its traceback path and its HTTP attempts (AAP 0.4.6)."""
 
     phase: Phase
     message: str
     traceback_path: str | None = None
+    http_attempts: tuple[AttemptPayload, ...] = ()
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> Self | None:
@@ -303,6 +304,7 @@ class FailurePayload:
                 phase=_one_of(payload, "phase", PHASES),
                 message=_text(payload, "message"),
                 traceback_path=_optional_path(payload, "traceback_path"),
+                http_attempts=_records(payload, "http_attempts", AttemptPayload),
             )
         except FieldValueError:
             return None
@@ -313,6 +315,7 @@ class FailurePayload:
             "phase": self.phase,
             "message": self.message,
             "traceback_path": self.traceback_path,
+            "http_attempts": [attempt.as_dict() for attempt in self.http_attempts],
         }
 
 
@@ -622,6 +625,10 @@ ITEM_STASH_KEYS: Final = (
 ATTEMPT_REPORTS: Final[pytest.StashKey[list[pytest.TestReport]]] = pytest.StashKey[
     list[pytest.TestReport]
 ]()
+# The HTTP attempt lists the attempt in flight raised, by phase, cleared by its ``setup`` report.
+ATTEMPT_EXHAUSTED: Final[pytest.StashKey[dict[Phase, tuple[AttemptPayload, ...]]]] = (
+    pytest.StashKey[dict[Phase, tuple[AttemptPayload, ...]]]()
+)
 
 
 def bounded_tail(lines: Iterable[str], limit: int) -> tuple[str, ...]:

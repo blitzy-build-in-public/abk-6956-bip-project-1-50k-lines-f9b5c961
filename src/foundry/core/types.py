@@ -30,13 +30,7 @@ PHASES: Final[tuple[Phase, ...]] = ("setup", "call", "teardown")
 """Every ``Phase`` value, in the order pytest runs the phases."""
 
 ArtifactKind: TypeAlias = Literal[
-    "request",
-    "response",
-    "stdout",
-    "stderr",
-    "traceback",
-    "log_tail",
-    "manifest",
+    "request", "response", "stdout", "stderr", "traceback", "log_tail", "manifest"
 ]
 """The kinds of per-test artifact Foundry captures (AAP 0.4.6, AAP 0.7.2)."""
 

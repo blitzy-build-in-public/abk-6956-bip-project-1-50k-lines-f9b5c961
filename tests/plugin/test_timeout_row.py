@@ -2,8 +2,6 @@
 phase ``call``, the limit in the message, partial stdout and the log tail attached. The body
 logs before printing, and its second of work is a ``time.monotonic()`` loop rather than a sleep."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Final, cast

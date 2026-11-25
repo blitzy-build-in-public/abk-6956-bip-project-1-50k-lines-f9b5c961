@@ -1,10 +1,7 @@
 """The published surface as an executable contract: fixed names, keys and options (AAP 0.4.9).
-
 AAP 0.4.9 fixes a set for ``0.1.0``, addable but never renamed or removed, with a docstring on
 every public name. The inner ``pytester`` run requests all twelve fixtures and its records are read.
 """
-
-from __future__ import annotations
 
 import inspect
 import json
@@ -99,11 +96,8 @@ _RECORD_PAIRS: Final = ((ResultRecord, RESULT_RECORD_KEYS, 14), (RunError, RUN_E
 INNER_TEST_SOURCE: Final[str] = """
 import re
 from datetime import datetime
-
 from foundry.http import FoundrySession
 NAMES = "config profile run_id artifacts http api data db factory clock log_capture poll".split()
-
-
 def test_every_fixture_resolves(request) -> None:
     got = {name: request.getfixturevalue(f"foundry_{name}") for name in NAMES}
     clock, before = got["clock"], got["clock"].now(); clock.advance(seconds=1)

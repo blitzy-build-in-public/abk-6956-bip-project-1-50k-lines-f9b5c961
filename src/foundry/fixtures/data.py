@@ -86,9 +86,7 @@ class FoundryDataLoader:
         from foundry.data.registry import load_cases
 
         loaded = load_cases(
-            self._resolve(name),
-            strict=self.schema_strict,
-            schema_dir=self.schema_dir,
+            self._resolve(name), strict=self.schema_strict, schema_dir=self.schema_dir
         )
         return tuple(loaded.cases)
 
@@ -193,7 +191,5 @@ def foundry_data(
     """
     directory = _base_directory(foundry_config.data.dir, request)
     return FoundryDataLoader(
-        directory=directory,
-        schema_strict=foundry_config.data.schema_strict,
-        schema_dir=directory,
+        directory=directory, schema_strict=foundry_config.data.schema_strict, schema_dir=directory
     )

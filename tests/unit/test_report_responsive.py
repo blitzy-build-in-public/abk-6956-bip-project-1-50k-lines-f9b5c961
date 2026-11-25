@@ -1,7 +1,5 @@
 """Unit tests for the report's narrow-window layout and its numeric cells (AAP 0.7.4)."""
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 
 from foundry.reporting import assets, html

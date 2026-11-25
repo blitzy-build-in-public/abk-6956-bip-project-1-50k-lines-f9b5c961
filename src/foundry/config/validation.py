@@ -16,6 +16,8 @@ from pydantic import ValidationError
 
 from foundry.config.enums import accepted_values_text, parse_enum
 from foundry.config.errors import (
+    HEADER_CONTROL_CHARACTER_HINT,
+    HEADER_NAME_REQUIRED_HINT,
     LAYER_CLI,
     bad_env_value,
     bad_option_value,
@@ -91,6 +93,12 @@ _BOUNDS_LIMIT_RE: Final[re.Pattern[str]] = re.compile(r"^(\d+(?:\.\d+)?) < t <= 
 
 _CONTROL_CHARACTER_RE: Final[re.Pattern[str]] = re.compile(r"[\x00-\x1f\x7f]")
 """Every C0 control character and DEL, which a message must never emit raw."""
+
+_CONTENT_SHAPE_HINTS: Final[tuple[tuple[str, str], ...]] = (
+    ("with a control character", HEADER_CONTROL_CHARACTER_HINT),
+    ("an empty header name", HEADER_NAME_REQUIRED_HINT),
+)
+"""Rule-sentence fragment -> the remedy a content fault of a mapping-kind key states."""
 
 
 def accepted_range(spec: KeySpec) -> str:
@@ -351,11 +359,7 @@ def _probe_range(spec: KeySpec, value: float, *, option: str) -> None:
     above = value > high if high_inclusive else value >= high
     if below or above:
         raise range_violation(
-            spec.dotted,
-            _render_value(value),
-            spec.constraint,
-            layer=LAYER_CLI,
-            detail=option,
+            spec.dotted, _render_value(value), spec.constraint, layer=LAYER_CLI, detail=option
         )
 
 
@@ -380,7 +384,7 @@ def translate_validation_error(
         return cross_field
     spec = spec_for(key)
     if spec is not None and spec.kind == "mapping":
-        return invalid_shape(key, spec.constraint, layer=label)
+        return invalid_shape(key, spec.constraint, layer=label, hint=_content_shape_hint(message))
     if spec is None:
         constraint = _STRING_VALUE if _nested_under_mapping_key(key) else _DOCUMENTED_VALUE
     else:
@@ -431,6 +435,14 @@ def _cross_field_error(message: str) -> ConfigError | None:
 def _is_strategy_key(key: str) -> bool:
     """Return whether the leaf of ``key`` is the one whose value is an auth strategy."""
     return key.rsplit(".", 1)[-1] == "strategy"
+
+
+def _content_shape_hint(message: str) -> str | None:
+    """Return the remedy the rule sentence ``message`` states, or ``None`` for a shape fault."""
+    for fragment, hint in _CONTENT_SHAPE_HINTS:
+        if fragment in message:
+            return hint
+    return None
 
 
 def _render_value(value: object) -> str:

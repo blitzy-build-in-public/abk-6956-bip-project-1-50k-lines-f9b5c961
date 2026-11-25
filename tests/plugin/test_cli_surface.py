@@ -65,6 +65,12 @@ _FAILING_TEST: Final[str] = "def test_bad() -> None:\n    assert False\n"
 _RAISING_CONFTEST: Final[str] = (
     'def pytest_configure(config: object) -> None:\n    raise RuntimeError("deliberate")\n'
 )
+_CONTROL_CHARACTERS: Final[re.Pattern[str]] = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+r"""Every control character a terminal line never carries raw: all of C0 but the newline, DEL, C1.
+A newline is the one control character the multi-line surfaces really carry, so it is excluded here
+and the line structure it produces is asserted in its place."""
+_INIT_REFUSAL_HINT: Final[str] = "  pass --force to write the scaffold files into it anyway"
+"""The two-space-indented hint under ``foundry init``'s non-empty refusal (AAP 0.7.4)."""
 _HELP_CASES: Final[tuple[tuple[tuple[str, ...], str, str], ...]] = (
     (("run",), "", "--foundry-profile --foundry-config --foundry-timeout"),
     (("init",), "--template --force", "--template --force"),
@@ -73,6 +79,25 @@ _HELP_CASES: Final[tuple[tuple[tuple[str, ...], str, str], ...]] = (
     (("report", "compare"), "--json", "--json"),
     (("doctor",), "--json", "--json --foundry-config"),
 )
+_HELP_SURFACES: Final[tuple[tuple[str, ...], ...]] = (
+    (),
+    *(case[0] for case in _HELP_CASES),
+    ("config",),
+    ("report",),
+)
+"""Every ``--help`` surface the CLI publishes, as the command path that publishes it (AAP 0.7.4)."""
+_DEVELOPER_TOKENS: Final[tuple[str, ...]] = (
+    "AAP ",
+    ":func:",
+    "Raises:",
+    "foundry.core.exceptions",
+    "``",
+)
+"""Plan citations, Sphinx roles, exception paths and literals only Foundry's code should show."""
+_BODY_PARAGRAPH: Final[re.Pattern[str]] = re.compile(
+    r"\AUsage:[^\n]*\n\n(?P<body>(?:  \S[^\n]*\n)+)"
+)
+"""The description click prints between a command's usage line and its options (AAP 0.7.4)."""
 # (identifier, pytest code, argv, files, conftest) for each code foundry run must hand back.
 _CodeCase = tuple[str, int, tuple[str, ...], dict[str, str], str | None]
 _PYTEST_CODE_CASES: Final[tuple[_CodeCase, ...]] = (
@@ -97,6 +122,12 @@ def _snapshot(directory: Path) -> tuple[tuple[str, bytes], ...]:
     return tuple((path.relative_to(directory).as_posix(), path.read_bytes()) for path in files)
 
 
+def _reads_like_a_sibling(description: str) -> bool:
+    """Return whether a description opens lowercase and carries no full stop, as a sibling does.
+    Proper nouns inside it keep their capital: ``run the test suite under Foundry``."""
+    return description[:1] == description[:1].lower() and not description.endswith(".")
+
+
 @pytest.fixture(name="run")
 def _run_fixture(capsys: pytest.CaptureFixture[str], clean_foundry_env: None) -> _Cli:
     return partial(_run_cli, capsys)
@@ -119,6 +150,26 @@ def test_group_help_lists_the_five_subcommands_and_the_version_banner() -> None:
     assert (version.exit_code, version.stdout.strip()) == (SUCCESS, "foundry, version 0.1.0")
 
 
+def test_no_subcommand_prints_the_help_as_real_lines_on_stderr(run: _Cli) -> None:
+    r"""The bare ``foundry`` invocation keeps the help's own lines and spells no line break.
+    AAP 0.7.4 makes the terminal one of the product's three user surfaces and requires what it
+    carries to be readable as lines: click hands the group's help over as one multi-line string, so
+    the sink prints those lines rather than folding them onto one line of ``\x0a`` spellings, and no
+    other control character reaches the terminal either. The usage line comes first and the
+    ``Commands:`` heading starts a line of its own, which is what the subcommand list hangs under.
+    """
+    refused = run()
+    assert (refused.code, refused.stdout) == (USAGE_OR_CONFIG, "")
+    assert not _CONTROL_CHARACTERS.search(refused.stderr), refused.stderr
+    assert "\\x0a" not in refused.stderr, refused.stderr
+    assert "\\x09" not in refused.stderr, refused.stderr
+    lines = refused.stderr.splitlines()
+    assert lines[0] == "Usage: foundry [OPTIONS] COMMAND [ARGS]...", lines[:1]
+    assert "Commands:" in lines, lines
+    listed = tuple(match["name"] for match in _COMMAND_ROW.finditer(refused.stderr))
+    assert listed == _SUBCOMMANDS, listed
+
+
 @pytest.mark.parametrize(
     ("commands", "documented", "must_show"), _HELP_CASES, ids=[" ".join(c[0]) for c in _HELP_CASES]
 )
@@ -132,6 +183,25 @@ def test_each_subcommand_help_shows_only_documented_options(
     undocumented = sorted(t for t in tokens if t not in allowed and not t.startswith("--foundry-"))
     assert not undocumented, (commands, undocumented)
     assert not set(must_show.split()) - tokens, (commands, must_show)
+
+
+@pytest.mark.parametrize("commands", _HELP_SURFACES, ids=lambda path: " ".join(path) or "foundry")
+def test_no_help_surface_prints_developer_facing_text(commands: tuple[str, ...]) -> None:
+    """Every ``--help`` describes its surface in the operator's terms (AAP 0.7.4).
+    click prints the callback docstring when a command declares no ``help`` string: plan citations,
+    Sphinx roles and the exception a path error raises would leak, and the ``report`` group's
+    description is held to the lowercase, unpunctuated shape its four siblings print."""
+    result = _invoke(*commands, "--help")
+    assert result.exit_code == SUCCESS, result.stderr
+    leaked = [token for token in _DEVELOPER_TOKENS if token in result.stdout]
+    assert not leaked, (commands, leaked, result.stdout)
+    rows = {match["name"]: match["description"] for match in _COMMAND_ROW.finditer(result.stdout)}
+    if not commands:
+        assert rows.get("report") and _reads_like_a_sibling(rows["report"]), result.stdout
+    if commands == ("report",):
+        described = _BODY_PARAGRAPH.search(result.stdout)
+        assert described is not None, result.stdout
+        assert _reads_like_a_sibling(" ".join(described["body"].split())), result.stdout
 
 
 def test_config_validate_and_show_exit_codes_formats_and_redaction(
@@ -199,6 +269,26 @@ def test_init_exit_codes(tmp_path: Path) -> None:
     (occupied := tmp_path / "occupied").write_text("kept\n", encoding="utf-8")
     assert _invoke("init", str(occupied)).exit_code == USAGE_OR_CONFIG
     assert occupied.read_text(encoding="utf-8") == "kept\n"
+
+
+def test_init_refusal_prints_the_message_then_its_indented_hint(run: _Cli, tmp_path: Path) -> None:
+    r"""``foundry init`` on a non-empty directory prints the message, then a two-space hint.
+    AAP 0.7.4's error-plus-hint convention puts the message on stderr and the next step on a line
+    indented two spaces beneath it, and AAP 0.4.4 fixes the message wording, the empty stdout and
+    exit code ``2``. Both lines reach the terminal as lines of their own -- no ``\x0a`` spelling and
+    no other control character -- and the refusal leaves the directory exactly as it was."""
+    target = tmp_path / "occupied"
+    target.mkdir()
+    (target / "kept.txt").write_text("kept\n", encoding="utf-8")
+    refused = run("init", str(target))
+    assert (refused.code, refused.stdout) == (USAGE_OR_CONFIG, "")
+    assert not _CONTROL_CHARACTERS.search(refused.stderr), refused.stderr
+    assert "\\x0a" not in refused.stderr, refused.stderr
+    assert "\\x09" not in refused.stderr, refused.stderr
+    message, hint = refused.stderr.splitlines()
+    assert message == f"cannot scaffold into {target}: the directory is not empty"
+    assert hint == _INIT_REFUSAL_HINT
+    assert (target / "kept.txt").read_text(encoding="utf-8") == "kept\n"
 
 
 def test_run_hands_back_pass_fail_and_configuration_exit_codes(

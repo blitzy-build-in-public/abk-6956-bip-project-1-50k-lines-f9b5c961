@@ -116,9 +116,7 @@ def open_session(engine: Engine, models: ModelSpec = None) -> Session:
         raise
     log_event(
         LifecycleEvent(
-            name="db_session",
-            level=LEVEL_DEBUG,
-            fields=(("models", str(len(schema_models))),),
+            name="db_session", level=LEVEL_DEBUG, fields=(("models", str(len(schema_models))),)
         )
     )
     return session

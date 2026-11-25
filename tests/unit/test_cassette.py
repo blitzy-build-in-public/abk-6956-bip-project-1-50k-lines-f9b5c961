@@ -4,8 +4,6 @@ miss and the committed fixture's round trip all pinned. A redacted query value n
 committed file in the clear: capture writes the marker, names the parameter in ``redacted_keys`` and
 replay matches on that same marker."""
 
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime

@@ -197,9 +197,7 @@ def _parse_by_suffix(path: Path) -> object:
 
     log_event(
         LifecycleEvent(
-            name="schema_load",
-            level=LEVEL_DEBUG,
-            fields=(("path", str(path)), ("suffix", suffix)),
+            name="schema_load", level=LEVEL_DEBUG, fields=(("path", str(path)), ("suffix", suffix))
         )
     )
     text = _read_text(path)
@@ -350,10 +348,7 @@ def _check_reference(value: object, *, path: str, origin: Path | None) -> None:
     hint = "inline the referenced schema, or point at a fragment such as '#/$defs/Price'"
     if origin is not None:
         hint = f"{hint} instead of the reference in {origin}"
-    raise _error(
-        f"remote schema reference is not supported: {rendered} at {path}",
-        hint=hint,
-    )
+    raise _error(f"remote schema reference is not supported: {rendered} at {path}", hint=hint)
 
 
 def _child(path: str, key: object) -> str:

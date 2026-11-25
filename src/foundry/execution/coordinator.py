@@ -16,15 +16,17 @@ fault is one ``WARNING`` that changes no outcome, and importing the module binds
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, TypeVar
 
+from foundry.core.exceptions import RetryExhaustedError
 from foundry.core.ids import utc_now
 from foundry.core.types import PHASES, AttemptRecord, Phase
 from foundry.execution import quarantine, retry, timeout
 from foundry.execution.session import SessionState, session_state
 from foundry.execution.state import (
+    ATTEMPT_EXHAUSTED,
     ITEM_ARTIFACTS,
     ITEM_ATTEMPT_STARTED_MONOTONIC,
     ITEM_ATTEMPTS,
@@ -51,6 +53,7 @@ __all__: Final[tuple[str, ...]] = (
     "final_outcome",
     "first_failure_message",
     "ledger_of",
+    "record_http_attempts",
     "reset_item_state",
     "run_attempts",
 )
@@ -281,6 +284,22 @@ def _failure_message(reports: Sequence[pytest.TestReport], redactor: Redactor) -
         return None
 
 
+def record_http_attempts(
+    item: pytest.Item, report: pytest.TestReport, call: pytest.CallInfo[None]
+) -> Mapping[Phase, tuple[AttemptPayload, ...]]:
+    """Bank the phase's HTTP attempts so the record carries them (AAP 0.4.7 row 6)."""
+    banked = item.stash.setdefault(ATTEMPT_EXHAUSTED, {})
+    if report.when == "setup":
+        banked.clear()
+    error: BaseException | None = getattr(call.excinfo, "value", None)
+    while error is not None and not isinstance(error, RetryExhaustedError):
+        error = error.__cause__ or error.__context__
+    phase = next((one for one in PHASES if one == report.when), None)
+    if isinstance(error, RetryExhaustedError) and phase is not None:
+        banked[phase] = tuple(AttemptPayload.from_record(one) for one in error.attempts)
+    return dict(banked)
+
+
 def run_attempts(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
     """Run ``item`` up to ``execution.retries`` times; the ``firstresult`` hook's whole body.
 
@@ -355,10 +374,7 @@ def _attempt_loop(
             ),
         )
         if not retry.should_retry(
-            phase=_failing_phase(reports),
-            outcome=outcome,
-            attempts_used=number,
-            policy=policy,
+            phase=_failing_phase(reports), outcome=outcome, attempts_used=number, policy=policy
         ):
             break
         # The attempt is discarded, so the peer's timer for it is disarmed before the next attempt

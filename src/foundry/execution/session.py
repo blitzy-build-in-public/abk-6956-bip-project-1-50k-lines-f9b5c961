@@ -34,6 +34,7 @@ from foundry.execution.state import (
     SESSION_RUN_ERRORS,
     SESSION_STATE,
     ArtifactPayload,
+    AttemptPayload,
     FailurePayload,
     OutcomeValue,
     TestPayload,
@@ -229,8 +230,10 @@ def create_state(
         started_at=moment,
     )
     # ``logging.level`` applies to the ``foundry`` logger and nothing else (AAP 0.4.5, AAP 0.4.8).
-    # It is applied once per process because the resolved level is what lets an ``INFO`` record from
-    # the suite reach the capture ring and the report's log tail (requirement I7).
+    # ``foundry.config.merge.resolve`` applied it when it resolved this configuration, and applying
+    # it again here is idempotent: a worker rebuilds the controller's state in its own process and
+    # needs the same level, which is what lets an ``INFO`` record from the suite reach the capture
+    # ring and the report's log tail (requirement I7).
     configure_logging(config.logging.level)
     # The run's engine masks every record the suite logs through the ``foundry`` logger before any
     # handler renders it, so pytest's captured-log block, the terminal and the log tail carry the
@@ -393,6 +396,7 @@ def assemble_payload(
     log_tail: Iterable[str],
     started_at: datetime,
     finished_at: datetime,
+    http_attempts: Mapping[Phase, tuple[AttemptPayload, ...]] | None = None,
 ) -> TestPayload:
     """Assemble one collected item's record from the data the capture phase already redacted.
 
@@ -403,6 +407,9 @@ def assemble_payload(
     """
     outcome = _outcome_from_reports(reports) if quarantine.state == "none" else quarantine.outcome
     traceback_path = _traceback_path(artifacts)
+    failures = _failure_entries(reports, state.redactor, traceback_path)
+    banked: Mapping[Phase, tuple[AttemptPayload, ...]] = http_attempts or {}
+    failures = tuple(replace(one, http_attempts=banked.get(one.phase, ())) for one in failures)
     return TestPayload(
         run_id=state.run_id,
         started_at=to_iso8601(started_at),
@@ -413,7 +420,7 @@ def assemble_payload(
         attempts=max(1, len(attempts)),
         duration_ms=max(0.0, sum(record.elapsed_ms for record in attempts)),
         markers=tuple(markers),
-        failures=_failure_entries(reports, state.redactor, traceback_path),
+        failures=failures,
         artifacts=tuple(
             ArtifactPayload(kind=ref.kind, path=ref.path, bytes=ref.bytes) for ref in artifacts
         ),

@@ -190,11 +190,7 @@ def describe(
         for dotted, value in deferred.items():
             spelling = not_applied.spelling_for(dotted) or keys.cli_option(dotted)
             rendered.append(
-                ConfigRow(
-                    key=dotted,
-                    value=value,
-                    source=f"{NOT_APPLIED_SOURCE_PREFIX}{spelling}",
-                )
+                ConfigRow(key=dotted, value=value, source=f"{NOT_APPLIED_SOURCE_PREFIX}{spelling}")
             )
     return tuple(rendered)
 

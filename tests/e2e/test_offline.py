@@ -1,10 +1,7 @@
 """Offline evidence for Foundry's own suite: the guard's counters plus a mechanical folder scan.
-
 The guard sees this interpreter only, so the scan proves the offline discipline is written into this
 folder's code — the installer allowlist and the loopback-only URLs (AAP 0.14.3). Every rule is a
 pure function over parsed source, so a docstring naming an installer or a URL is never a finding."""
-
-from __future__ import annotations
 
 import ast
 import pathlib

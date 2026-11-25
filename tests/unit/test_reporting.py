@@ -3,8 +3,6 @@ Every record-derived string the JUnit document carries is reduced to XML 1.0's `
 first, and the artifact properties keep their order (AAP 0.4.6). The HTML page's own cases live in
 ``tests/unit/test_reporting_html.py``."""
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime

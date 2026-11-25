@@ -2,8 +2,6 @@
 the terminal cannot carry a secret; a redaction fault costs one WARNING and no record changes fate.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from typing import Final

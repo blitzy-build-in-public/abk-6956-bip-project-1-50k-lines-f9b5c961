@@ -2,8 +2,6 @@
 ``model_copy`` override may install a plain-string profile where ``.value`` would raise, and the row
 renders from ``foundry.config.errors.success_message`` rather than a second copy of the sentence."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

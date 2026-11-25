@@ -1,7 +1,5 @@
 """Unit tests for ``foundry.db``: the engine, the session and the schema helpers."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

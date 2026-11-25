@@ -20,13 +20,7 @@ import pytest
 from foundry.data.ids import case_stem, tabular_case_id
 from foundry.data.loaders.base import LoadedTable
 
-__all__ = [
-    "Case",
-    "CaseSet",
-    "build_case_set",
-    "build_parameters",
-    "parametrize",
-]
+__all__ = ["Case", "CaseSet", "build_case_set", "build_parameters", "parametrize"]
 
 # The data column whose value may label a case. The label is display-only: ids are built
 # from the row position so that relabelling a row cannot perturb collection.

@@ -1,7 +1,5 @@
 """Acceptance criteria 3 and 8: the documented 24-test example run, then its record/replay pair."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import re

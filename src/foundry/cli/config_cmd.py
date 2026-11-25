@@ -62,17 +62,13 @@ def _override_option_table() -> tuple[_OverrideOption, ...]:
         help_text = f"override {spec.dotted} (accepted: {spec.constraint})"
         spelling = keys.cli_option(spec.dotted)
         entries[spelling] = _OverrideOption(
-            spelling=spelling,
-            dest=keys.option_dest(spec.dotted),
-            help_text=help_text,
+            spelling=spelling, dest=keys.option_dest(spec.dotted), help_text=help_text
         )
         for alias in spec.aliases:
             entries.setdefault(
                 alias,
                 _OverrideOption(
-                    spelling=alias,
-                    dest=cli_layer.alias_dest(alias),
-                    help_text=help_text,
+                    spelling=alias, dest=cli_layer.alias_dest(alias), help_text=help_text
                 ),
             )
     for special in cli_layer.SPECIAL_OPTIONS:
@@ -98,13 +94,7 @@ def _option_decorator(option: _OverrideOption) -> Callable[[_F], _F]:
     through, so a rejected value carries one wording on both surfaces. Each call returns a fresh
     decorator, so no two commands share one parameter object.
     """
-    return click.option(
-        option.spelling,
-        option.dest,
-        type=str,
-        default=None,
-        help=option.help_text,
-    )
+    return click.option(option.spelling, option.dest, type=str, default=None, help=option.help_text)
 
 
 def override_options(command: _F) -> _F:
@@ -175,8 +165,7 @@ def config_group() -> None:
 
 
 @config_group.command(
-    name="show",
-    help="print the resolved configuration with the layer that supplied each value",
+    name="show", help="print the resolved configuration with the layer that supplied each value"
 )
 @override_options
 @click.option(
@@ -229,8 +218,7 @@ def show_command(*, resolved: bool, output_format: str | None, **supplied: objec
 
 
 @config_group.command(
-    name="validate",
-    help="resolve the configuration and report whether it is valid",
+    name="validate", help="resolve the configuration and report whether it is valid"
 )
 @override_options
 def validate_command(**supplied: object) -> int:
@@ -251,7 +239,6 @@ def validate_command(**supplied: object) -> int:
     """
     config = merge.resolve(cli_overrides=_supplied_input(supplied))
     cli_render.render_message(
-        config_errors.success_message(config.profile),
-        redactor=config_render.redactor_for(config),
+        config_errors.success_message(config.profile), redactor=config_render.redactor_for(config)
     )
     return exit_codes.SUCCESS

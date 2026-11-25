@@ -166,8 +166,7 @@ def create_engine(database_url: str = DEFAULT_DATABASE_URL, *, foreign_keys: boo
         url = make_url(database_url)
     except ArgumentError as exc:
         raise FoundryError(
-            "invalid database URL",
-            hint="pass an sqlite URL such as the default in-memory one",
+            "invalid database URL", hint="pass an sqlite URL such as the default in-memory one"
         ) from exc
 
     # The backend is checked first because it is the more fundamental fault: a URL naming both an

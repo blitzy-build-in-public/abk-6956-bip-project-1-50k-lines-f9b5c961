@@ -1,6 +1,5 @@
 """The evidence scan behind the reachability ledger, held to both directions of its rule: every
-sample below is synthetic text, and a child source is scanned like the module that writes it.
-"""
+sample below is synthetic text, and a child source is scanned like the module that writes it."""
 
 from __future__ import annotations
 
@@ -18,27 +17,20 @@ _ENTRIES: Final[tuple[tuple[str, str], ...]] = (
 )
 
 _BACKED_SAMPLE: Final[str] = """import pathlib
-
-
 def test_the_session_is_configured(foundry_config) -> None:
     pathlib.Path("cases.csv").read_text()
     pathlib.Path("results.json").write_text(run_foundry("config", "show").stdout)
 """
 
 _MENTION_ONLY_SAMPLE: Final[str] = '''"""Only prose: foundry_config, config and cases.csv."""
-
 _FIXTURES = ("foundry_config",)
 _COMMANDS = ("run", "init", "config", "report", "doctor")
 _REPORT = "results.txt"
-
-
 def test_nothing_here_reaches_the_surface() -> None:
     assert _FIXTURES == ("foundry_config",)
 '''
 
 _USEFIXTURES_SAMPLE: Final[str] = """import pytest
-
-
 @pytest.mark.usefixtures("foundry_config")
 def test_the_configuration_is_available() -> None:
     raise AssertionError
@@ -67,18 +59,14 @@ def test_the_written_project_requests_it(pytester) -> None:
 '''
 
 _PROSE_SAMPLE: Final[str] = '''"""A docstring holding a fragment that names a fixture:
-
 def test_the_fixture_is_requested(foundry_data) -> None:
     assert foundry_data.cases("cases.csv")
 """
-
-
 def test_the_docstring_is_not_a_request() -> None:
     raise AssertionError
 '''
 
 _PREFIXED_DOCUMENT_SAMPLE: Final[str] = '''"""Naming the documents it builds."""
-
 _NEW: Final[str] = "results_new.json"
 '''
 

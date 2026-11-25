@@ -1,10 +1,7 @@
 """End-to-end proof that the distribution builds, installs offline and runs from a fresh venv.
-
 AAP 0.14.1 criterion 1: ``uv build`` yields the wheel and the sdist, and the wheel installed with
 ``--no-index --find-links`` gives a console script printing ``foundry, version 0.1.0`` and exits 0.
 This is the only module that installs anything (AAP 0.14.3); its archive listings are the proof."""
-
-from __future__ import annotations
 
 import email.parser
 import json
@@ -55,6 +52,12 @@ _PROBE: Final[str] = (
     "print(json.dumps({g: {e.name: e.value for e in d.entry_points if e.group == g} "
     'for g in ("pytest11", "console_scripts")}))\n'
 )
+# The two documented terminal lines of AAP 0.7.4, asserted on the console script's own output: the
+# activation banner, then the run id and the artifacts root the run it announces wrote.
+_ACTIVATION_BANNER: Final[str] = "foundry: profile=default"
+_RUN_LINE: Final[re.Pattern[str]] = re.compile(
+    r"^foundry: run \S+ artifacts at (?P<root>.+)$", re.MULTILINE
+)
 
 _Built = tuple[Path, tuple]
 
@@ -99,13 +102,6 @@ def _installer_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if not k.startswith(_CHILD_STRIPPED_PREFIXES)}
 
 
-def _wheelhouse() -> Path:
-    override = next((os.environ[n] for n in _WHEELHOUSE_VARIABLES if os.environ.get(n)), "")
-    found = Path(override) if override else _SHARED_WHEELHOUSE
-    assert found.is_dir(), _CACHE_HINT
-    return found
-
-
 def _run_env(builder: Callable[..., dict[str, str]], venv_dir: Path) -> dict[str, str]:
     bin_dir = _venv_bin(venv_dir, "python").parent
     inherited = os.environ.get("PATH", "")
@@ -128,17 +124,6 @@ def _installed_requirements(venv_dir: Path) -> dict[str, tuple[str, ...]]:
     return found
 
 
-def _dependency_closure(direct: Sequence[str], meta: dict[str, tuple[str, ...]]) -> frozenset[str]:
-    closure: set[str] = set()
-    pending = list(direct)
-    while pending:
-        name = pending.pop()
-        if name not in closure:
-            closure.add(name)
-            pending.extend(meta.get(name, ()))
-    return frozenset(closure)
-
-
 @pytest.fixture(scope="module")
 def built_dist(repo_root: Path, tmp_path_factory: pytest.TempPathFactory) -> _Built:
     out = tmp_path_factory.mktemp("dist")
@@ -158,7 +143,10 @@ def fresh_venv(
     directory, build_invocations = built_dist
     venv_dir = tmp_path_factory.mktemp("venv")
     workspace = tmp_path_factory.mktemp("workspace")
-    find_links = ("--find-links", str(_wheelhouse()))
+    override = next((os.environ[n] for n in _WHEELHOUSE_VARIABLES if os.environ.get(n)), "")
+    wheelhouse = Path(override) if override else _SHARED_WHEELHOUSE
+    assert wheelhouse.is_dir(), _CACHE_HINT
+    find_links = ("--find-links", str(wheelhouse))
     env = _installer_env()
     invocations = [_run((*_VENV_CREATE, str(venv_dir)), env, "venv", workspace)]
     assert invocations[0].returncode == 0, invocations[0].detail()
@@ -230,7 +218,41 @@ def test_the_install_used_offline_flags_and_the_closure_matches_the_manifest(
     installed = _installed_requirements(fresh_venv.venv)
     absent = sorted(set(direct) - set(installed))
     assert absent == [], f"the declared runtime dependencies {absent} are not installed"
-    closure = _dependency_closure(direct, installed)
+    closure: set[str] = set()
+    pending = list(direct)
+    while pending:
+        name = pending.pop()
+        if name not in closure:
+            closure.add(name)
+            pending.extend(installed.get(name, ()))
     baseline = frozenset({"pip", "setuptools", "wheel"}) | {_normalize(DIST_NAME)}
     undeclared = sorted(set(installed) - closure - baseline)
     assert undeclared == [], f"{undeclared} arrived outside the declared closure (AAP 0.5.2)"
+
+
+def test_the_installed_console_script_runs_a_suite_without_an_assert_rewrite_warning(
+    fresh_venv: _Installation, subprocess_env: Callable[..., dict[str, str]]
+) -> None:
+    venv, env = fresh_venv.venv, _run_env(subprocess_env, fresh_venv.workspace)
+    project = fresh_venv.workspace / "assert_rewrite_warning"
+    project.mkdir()
+    (project / "test_smoke.py").write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+    # pytest derives the modules it rewrites from every pytest11 distribution, which on a wheel
+    # install names foundry itself; the console script imports the package before its in-process
+    # pytest.main installs the rewriting hook, so this is the one install path where the package's
+    # PYTEST_DONT_REWRITE marker is what keeps a run's terminal output free of a warning (AAP 0.4.4,
+    # 0.7.4). A bare pytest in the same directory is the unwarned baseline both runs must match.
+    foundry_run = _run((str(_venv_bin(venv, "foundry")), "run", "-q"), env, "run", project)
+    output = foundry_run.stdout + foundry_run.stderr
+    assert foundry_run.returncode == 0, foundry_run.detail()
+    assert "PytestAssertRewriteWarning" not in output, output
+    assert "warnings summary" not in foundry_run.stdout, foundry_run.stdout
+    assert "1 passed" in foundry_run.stdout, foundry_run.stdout
+    assert _ACTIVATION_BANNER in foundry_run.stdout, foundry_run.stdout
+    announced = _RUN_LINE.search(foundry_run.stdout)
+    assert announced is not None, foundry_run.stdout
+    assert Path(announced.group("root")).is_dir(), announced.group("root")
+    bare = _run((str(_venv_bin(venv, "pytest")), "-q"), env, "pytest", project)
+    assert bare.returncode == 0, bare.detail()
+    assert "PytestAssertRewriteWarning" not in bare.stdout + bare.stderr, bare.detail()
+    assert "1 passed" in bare.stdout, bare.stdout

@@ -8,13 +8,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from foundry.data.loaders.base import (
-    LoadedTable,
-    Loader,
-    RawRow,
-    check_row_width,
-    data_error,
-)
+from foundry.data.loaders.base import LoadedTable, Loader, RawRow, check_row_width, data_error
 
 __all__: list[str] = ["LOADER", "CsvLoader"]
 
@@ -125,13 +119,7 @@ class CsvLoader:
                     previous_line = reader.line_num
                     if not row:
                         continue
-                    check_row_width(
-                        path,
-                        columns,
-                        tuple(row),
-                        line=line,
-                        row_index=row_index,
-                    )
+                    check_row_width(path, columns, tuple(row), line=line, row_index=row_index)
                     rows.append(
                         RawRow(
                             values=tuple(zip(columns, row, strict=True)),

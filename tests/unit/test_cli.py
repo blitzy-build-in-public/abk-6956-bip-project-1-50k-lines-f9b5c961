@@ -1,8 +1,6 @@
 """Unit tests for ``foundry.cli``: the five subcommands, the exit-code map and the renderers.
 AAP 0.4.4 fixes what each publishes and which code it returns; invocations stay in process."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Final, NamedTuple
@@ -69,12 +67,6 @@ def _write_config(directory: Path, text: str) -> Path:
     return path
 
 
-def _command_names(help_text: str) -> list[str]:
-    assert "Commands:" in help_text, help_text
-    section = help_text.split("Commands:", 1)[1]
-    return [line.split()[0] for line in section.splitlines() if line.strip()][:5]
-
-
 @pytest.fixture(autouse=True)
 def _logical_width(monkeypatch: _Monkey) -> None:
     monkeypatch.setenv("COLUMNS", "400")
@@ -95,7 +87,10 @@ def test_the_published_code_vocabulary_the_five_subcommands_and_the_banner() -> 
     help_result = CliRunner().invoke(build_group(), ["--help"])
     version_result = CliRunner().invoke(build_group(), ["--version"])
     assert help_result.exit_code == SUCCESS, help_result.output
-    assert _command_names(help_result.output) == list(_SUBCOMMANDS)
+    assert "Commands:" in help_result.output, help_result.output
+    section = help_result.output.split("Commands:", 1)[1]
+    listed = [line.split()[0] for line in section.splitlines() if line.strip()][:5]
+    assert listed == list(_SUBCOMMANDS)
     assert version_result.exit_code == SUCCESS, version_result.output
     assert version_result.output.strip() == _VERSION_BANNER
 

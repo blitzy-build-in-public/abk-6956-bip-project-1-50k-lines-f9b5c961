@@ -300,11 +300,7 @@ def _parameter_table() -> Mapping[str, str]:
         )
         for alias in spec.aliases:
             alias_word = alias.removeprefix(keys.GENERIC_OPTION_PREFIX)
-            remember(
-                entries,
-                (alias, alias_word, alias_word.replace("-", "_")),
-                spelling,
-            )
+            remember(entries, (alias, alias_word, alias_word.replace("-", "_")), spelling)
     for special in cli_layer.SPECIAL_OPTIONS:
         word = special.spelling.removeprefix(keys.GENERIC_OPTION_PREFIX)
         remember(

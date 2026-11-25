@@ -1,5 +1,4 @@
 """AAP 0.14.1 criterion 13: no public surface entry rests on a unit test alone.
-
 Each module's module-level ``REACHES`` tuple declares the public-surface entries its own tests drive
 through a real entry point -- a pytester inner run, a CliRunner invocation or a subprocess -- never
 a direct in-process import of the unit under test. The vocabulary is closed, an entry spelling

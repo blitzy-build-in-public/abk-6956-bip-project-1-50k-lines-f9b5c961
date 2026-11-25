@@ -1,8 +1,6 @@
 """The published fixture family: twelve names, their scopes, one barrel, light imports.
 Read from pytest's marker, the modules, a child's ``sys.modules`` and the package ``ast``."""
 
-from __future__ import annotations
-
 import ast
 import importlib
 import json

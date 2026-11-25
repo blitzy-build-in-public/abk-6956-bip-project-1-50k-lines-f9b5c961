@@ -2,8 +2,6 @@
 I9): an absolute target naming a second loopback listener is refused, so that peer records nothing,
 while a path against the base URL carries the bearer token to the base URL's own peer."""
 
-from __future__ import annotations
-
 import json
 import threading
 from collections.abc import Iterator

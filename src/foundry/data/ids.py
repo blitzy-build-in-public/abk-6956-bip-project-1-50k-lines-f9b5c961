@@ -10,11 +10,7 @@ from pathlib import Path
 
 from foundry.core.ids import case_id_for_matrix, case_id_for_row
 
-__all__ = [
-    "case_stem",
-    "matrix_case_id",
-    "tabular_case_id",
-]
+__all__ = ["case_stem", "matrix_case_id", "tabular_case_id"]
 
 # --- The stem an id starts with --------------------------------------------
 

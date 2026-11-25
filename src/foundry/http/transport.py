@@ -163,7 +163,5 @@ def close_quietly(transport: httpx.BaseTransport | None) -> None:
         transport.close()
     except _CLOSE_ERRORS as exc:
         emit_plumbing_failure(
-            _COMPONENT,
-            f"could not close the {type(transport).__name__}",
-            exc=exc,
+            _COMPONENT, f"could not close the {type(transport).__name__}", exc=exc
         )

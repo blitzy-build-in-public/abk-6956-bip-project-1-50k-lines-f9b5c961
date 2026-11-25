@@ -1,8 +1,6 @@
 """The data-collection states of AAP 0.14.1 criterion 5 through ``pytester``: an unsupported
 extension, a short row located by file, line and column, and a header-only skip."""
 
-from __future__ import annotations
-
 import json
 import shutil
 from collections.abc import Mapping
@@ -27,10 +25,7 @@ _EMPTY: Final[str] = "header_only.csv"
 _SUPPORTED_LINE: Final[str] = "supported extensions: csv, json, jsonl, yaml, yml"
 
 _COLLECTING_CONFTEST: Final[str] = """import pathlib
-
 import foundry.data
-
-
 def pytest_generate_tests(metafunc):
     name = getattr(metafunc.module, "DATA_FILE", None)
     if name is not None:
@@ -50,10 +45,6 @@ _USING_FIXTURE: Final[str] = """def test_the_fixture_reads_the_records(foundry_d
 
 def _case_module(data_file: str) -> str:
     return f"DATA_FILE = {data_file!r}\n\n\ndef test_case(case) -> None:\n    assert case.id\n"
-
-
-def _loader_modules() -> dict[str, str]:
-    return {f"test_{Path(record).suffix[1:]}.py": _case_module(record) for record in _LOADERS}
 
 
 def _build_project(pytester: pytest.Pytester, repo_root: Path, modules: Mapping[str, str]) -> Path:
@@ -124,7 +115,7 @@ def test_header_only_file_skips_with_reason(
 def test_four_loaders_agree_and_collection_is_deterministic(
     pytester: pytest.Pytester, repo_root: Path, clean_foundry_env: None
 ) -> None:
-    modules = _loader_modules()
+    modules = {f"test_{Path(record).suffix[1:]}.py": _case_module(record) for record in _LOADERS}
     _build_project(pytester, repo_root, modules)
     result = pytester.runpytest("-q")
     assert result.ret == 0

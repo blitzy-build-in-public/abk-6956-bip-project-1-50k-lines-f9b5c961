@@ -149,11 +149,7 @@ def _compare_object(
         if found is _MISSING:
             return _Mismatch(child, f"expected key {key!r} is absent from the actual object")
         mismatch = _compare(
-            expected[key],
-            found,
-            child,
-            redactor=redactor,
-            secret=secret or _redacts(key, redactor),
+            expected[key], found, child, redactor=redactor, secret=secret or _redacts(key, redactor)
         )
         if mismatch is not None:
             return mismatch
@@ -313,10 +309,7 @@ def _render(value: object, redactor: Redactor) -> str:
     """
     try:
         encoded = json.dumps(
-            redactor.json_value(value),
-            sort_keys=True,
-            ensure_ascii=False,
-            default=repr,
+            redactor.json_value(value), sort_keys=True, ensure_ascii=False, default=repr
         )
     except (TypeError, ValueError):
         # A cyclic or otherwise unencodable value still has to produce a usable message.

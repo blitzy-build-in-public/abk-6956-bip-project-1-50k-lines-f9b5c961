@@ -8,6 +8,7 @@ command renders, and every cell, message and line passes through the redactor be
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
@@ -89,6 +90,27 @@ _STATUS_STYLES: Final[Mapping[str, str]] = MappingProxyType(
     {_PASS: "green", _WARN: "yellow", _FAIL: "red"}
 )
 """rich's built-in style names that distinguish the three states; no custom style is set."""
+
+_CONTROL_ESCAPE: Final[re.Pattern[str]] = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+r"""Every control character with no visible form: all of C0 except tab (``\x09``) and newline
+(``\x0a``), which carry the line structure, plus carriage return (``\x0d``, which would otherwise
+overwrite a line and which ``rich`` silently drops), ``DEL`` and the C1 range.
+
+``rich`` 13.9.4 drops only ``\x07``, ``\x08``, ``\x0b``, ``\x0c`` and ``\x0d`` from a ``Text``, so a
+control code left in the string reaches the operator's terminal as a byte -- an ``ESC`` sequence
+included, which can colour or otherwise manipulate the screen. Tab and newline stay because the
+terminal surface really does span lines: click hands a group's help text over as one multi-line
+string and a refusal folds its hint into an indented second line (AAP 0.7.4), so
+:func:`_single_line_text` spells the line breaks of the one surface that must not.
+"""
+
+_LINE_BREAKS: Final[re.Pattern[str]] = re.compile(r"[\x09\x0a]")
+r"""The control characters that carry line structure: tab and newline, kept by every other sink.
+
+The terminal keeps them because a click help text and an error's hint are genuinely multi-line
+(AAP 0.7.4), so :func:`_single_line_text` spells them at the one call site that needs a single line
+rather than :func:`_scrubbed_text` spelling them everywhere.
+"""
 
 
 class KeyValueSourceRow(Protocol):
@@ -197,24 +219,89 @@ def _redactor(redactor: Redactor | None) -> Redactor:
     return default_redactor() if redactor is None else redactor
 
 
+def _spell(match: re.Match[str]) -> str:
+    r"""Return one matched character as its ``\xNN`` escape, the spelling every terminal sink uses.
+
+    The substitution callable rather than a lambda at each site, so the spelling a reader searches
+    for -- a backslash, an ``x`` and two lowercase hex digits -- is written once.
+
+    Args:
+        match: One match of a pattern whose group is exactly one character.
+
+    Returns:
+        The character's code as a backslash, an ``x`` and two lowercase hex digits.
+    """
+    return f"\\x{ord(match.group()):02x}"
+
+
+def _visible_control_characters(text: str) -> str:
+    r"""Return ``text`` with every :data:`_CONTROL_ESCAPE` character spelled as its ``\xNN`` escape.
+
+    The terminal is a user surface AAP 0.7.4 fixes, and a result document handed to ``foundry
+    report compare`` is operator-named input rather than trusted text: ``rich`` drops only ``\x07``,
+    ``\x08``, ``\x0b``, ``\x0c`` and ``\x0d`` from a ``Text``, so a ``NUL``, ``ESC``, ``DEL`` or C1
+    byte in a node id still reaches the terminal as a byte, and an ``ESC`` sequence can colour or
+    otherwise manipulate the operator's screen. Each becomes a backslash, an ``x`` and two
+    lowercase hex digits a reader can search for -- the spelling
+    :func:`foundry.reporting.panels.visible_control_characters` already uses for the HTML report.
+    Tab and newline are left to the caller, because they are line structure here (AAP 0.7.4) and
+    :func:`_single_line_text` spells them for the one surface that must stay on one line.
+
+    Args:
+        text: The already-redacted cell, message or line that is about to reach the terminal.
+
+    Returns:
+        ``text`` with every :data:`_CONTROL_ESCAPE` match replaced in place, else unchanged.
+    """
+    return _CONTROL_ESCAPE.sub(_spell, text)
+
+
 def _scrubbed_text(
     text: str, redactor: Redactor, *, style: str | None = None, diagnostic: bool = False
 ) -> Text:
-    """Return ``text`` redacted and wrapped as rich ``Text``, optionally in a built-in style.
+    r"""Return ``text`` redacted and wrapped as rich ``Text``, optionally in a built-in style.
 
     Wrapping rather than passing a ``str`` keeps markup out of the console: rich parses
     ``[``-delimited tags in a ``str`` but never in ``Text``, so a parametrised node id such as
     ``test_login[case-1]`` prints exactly as written. ``diagnostic`` scrubs through
     :meth:`Redactor.diagnostic` rather than :meth:`Redactor.text`, which keeps the key, closest
     match and accepted values AAP 0.4.5 makes part of a configuration diagnostic readable, while the
-    values such a message carries are still masked.
+    values such a message carries are still masked. Every control character with no visible form
+    that the scrubbed text carries is spelled as its ``\xNN`` escape by
+    :func:`_visible_control_characters`, because this function is the one place terminal text
+    becomes a ``Text`` and no cell may colour or manipulate the operator's terminal (AAP 0.7.4).
+    Tab and newline pass through as the line structure a click help text and an error's hint really
+    carry, and :func:`_single_line_text` spells them for a surface that must stay on one line.
     """
     from rich.text import Text
 
-    scrubbed = redactor.diagnostic(text) if diagnostic else redactor.text(text)
+    redacted = redactor.diagnostic(text) if diagnostic else redactor.text(text)
+    scrubbed = _visible_control_characters(redacted)
     if style is None:
         return Text(scrubbed)
     return Text(scrubbed, style=style)
+
+
+def _single_line_text(text: str, redactor: Redactor) -> Text:
+    r"""Return ``text`` as one terminal line: its line breaks spelled, then redacted and wrapped.
+
+    AAP 0.7.4 makes a node id one entry on one line of one group, and a result document handed to
+    ``foundry report compare`` is operator-named input rather than trusted text, so the line breaks
+    such a document puts in a node id are data and are spelled here: the ``\x0a`` or ``\x09`` a node
+    id carries reaches the terminal as ``\x0a`` or ``\x09`` rather than as a line or a column
+    break, which keeps a hostile document from forging a line of the operator's own output ahead of
+    a group it does not belong to. The shared sink keeps tab and newline because a click help text
+    and a refusal's hint really do span lines (AAP 0.7.4), which is why this spelling lives at the
+    surface that needs a single line rather than in :func:`_scrubbed_text`.
+
+    Args:
+        text: The assembled line, a node id included, that must reach the terminal as one line.
+        redactor: The redactor the line passes through.
+
+    Returns:
+        The line as rich ``Text``, every line break it carried spelled as ``\x09`` or ``\x0a``.
+    """
+    return _scrubbed_text(_LINE_BREAKS.sub(_spell, text), redactor)
 
 
 def _table(title: str | None, columns: _RowCells, redactor: Redactor) -> Table:
@@ -231,8 +318,7 @@ def _table(title: str | None, columns: _RowCells, redactor: Redactor) -> Table:
     from rich.table import Table
 
     table = Table(
-        title=None if title is None else _scrubbed_text(title, redactor),
-        show_header=True,
+        title=None if title is None else _scrubbed_text(title, redactor), show_header=True
     )
     for column in columns:
         table.add_column(_scrubbed_text(column, redactor))
@@ -393,13 +479,18 @@ def render_comparison(groups: ComparisonGroups, *, redactor: Redactor | None = N
 
 
 def _render_group(console: Console, label: str, nodeids: Sequence[str], redactor: Redactor) -> None:
-    """Print one comparison group: its label and size, then its node ids or the empty marker."""
+    """Print one comparison group: its label and size, then its node ids or the empty marker.
+
+    A node id is one entry on one line of one group (AAP 0.7.4), so each prints through
+    :func:`_single_line_text`: the line breaks a hostile result document put in a node id are
+    spelled rather than forging a line of the operator's own output.
+    """
     console.print(_scrubbed_text(f"{label} ({len(nodeids)}):", redactor), soft_wrap=True)
     if not nodeids:
-        console.print(_scrubbed_text(f"{_LINE_INDENT}{_NONE_MARKER}", redactor), soft_wrap=True)
+        console.print(_single_line_text(f"{_LINE_INDENT}{_NONE_MARKER}", redactor), soft_wrap=True)
         return
     for nodeid in nodeids:
-        console.print(_scrubbed_text(f"{_LINE_INDENT}{nodeid}", redactor), soft_wrap=True)
+        console.print(_single_line_text(f"{_LINE_INDENT}{nodeid}", redactor), soft_wrap=True)
 
 
 # --- single lines, errors, documents ----------------------------------------

@@ -1,8 +1,6 @@
 """AAP 0.4.6's ninth outcome as real runs produce it: a worker that kills itself under ``-n 2``, and
 a serial session stopped by ``pytest.exit``. Only a real process produces ``not_run`` (A12)."""
 
-from __future__ import annotations
-
 import json
 import pathlib
 from collections.abc import Callable, Sequence
@@ -33,16 +31,10 @@ def test_item(index: int) -> None:
 """
 
 _STOP_MODULE: Final[str] = """import pytest
-
-
 def test_a() -> None:
     assert True
-
-
 def test_b() -> None:
     pytest.exit("stop here", returncode=1)
-
-
 def test_c() -> None:
     assert True
 """

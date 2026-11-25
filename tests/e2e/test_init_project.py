@@ -1,9 +1,6 @@
 """End-to-end proof that ``foundry init`` scaffolds a project which runs green offline.
-
 AAP 0.14.1 criterion 10: ``foundry init <dir> && cd <dir> && pytest`` exits 0 with one passing test
 and nothing listening, and a non-empty directory without ``--force`` exits 2 creating nothing."""
-
-from __future__ import annotations
 
 import hashlib
 import json

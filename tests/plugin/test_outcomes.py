@@ -3,8 +3,6 @@ back from a real session: A12 records a lost worker's item with its partial data
 ``run_error`` naming the worker. Nothing here mocks the plugin, the CLI or a renderer (AAP 0.14.5).
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any, Final
 
@@ -18,21 +16,15 @@ _NO_RESTART: Final[str] = "--max-worker-restart=0"
 # Each project below is whole, so the marker or the process exit under test is its only difference
 # from a green run.
 _XFAIL_AND_XPASS: Final[str] = """import pytest
-
-
 @pytest.mark.xfail(reason="fails on purpose, so this attempt is xfailed")
 def test_known_failure() -> None:
     assert False, "xfail sentinel"
-
-
 @pytest.mark.xfail(reason="passes, so the marker is stale")
 def test_stale_marker() -> None:
     assert True
 """
 
 _CRASHING: Final[str] = """import os
-
-
 def test_crashes_the_worker() -> None:
     os._exit(3)
 """

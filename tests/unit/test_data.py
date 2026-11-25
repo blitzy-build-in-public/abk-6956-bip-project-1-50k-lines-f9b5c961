@@ -1,7 +1,5 @@
 """Unit tests for ``foundry.data``: the four loaders, the case model and the schema gate."""
 
-from __future__ import annotations
-
 import dataclasses
 import json
 from collections.abc import Callable, Mapping, Sequence

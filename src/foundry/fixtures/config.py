@@ -89,8 +89,7 @@ def foundry_config(request: pytest.FixtureRequest) -> FoundryConfig:
     from foundry.config.cli_layer import collect_from_pytest
 
     return resolve(
-        cli_overrides=collect_from_pytest(request.config),
-        cwd=_invocation_dir(request.config),
+        cli_overrides=collect_from_pytest(request.config), cwd=_invocation_dir(request.config)
     )
 
 

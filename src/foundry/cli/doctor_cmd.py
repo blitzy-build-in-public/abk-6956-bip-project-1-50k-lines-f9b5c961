@@ -119,10 +119,7 @@ def _document(report: DoctorReport) -> str:
     """
     return (
         json.dumps(
-            report.as_document(),
-            indent=_JSON_INDENT,
-            sort_keys=True,
-            ensure_ascii=_JSON_UNESCAPED,
+            report.as_document(), indent=_JSON_INDENT, sort_keys=True, ensure_ascii=_JSON_UNESCAPED
         )
         + _NEWLINE
     )

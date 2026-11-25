@@ -4,8 +4,6 @@ on purpose. An unparsable candidate is a fault and never a silent return to the 
 ``pyproject.toml`` without ``[tool.foundry]`` is no configuration file, and a section header is
 checked as a key of its own (AAP 0.4.5, AAP 0.4.7)."""
 
-from __future__ import annotations
-
 import logging
 import subprocess
 import sys
@@ -111,12 +109,15 @@ def test_the_28_keys_are_published_shown_and_unknown_ones_refused(
 def test_discovery_walks_the_five_steps_and_a_configuration_free_run_uses_defaults(
     tmp_path: Path, clean_foundry_env: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.DEBUG, logger="foundry")
-    default = _resolve(tmp_path)
+    caplog.set_level(logging.NOTSET, logger="foundry")  # caplog restores it; a leak must not pass
+    default = _resolve(tmp_path, environ={"FOUNDRY_LOGGING__LEVEL": "DEBUG"})
     assert default.profile is ProfileName.DEFAULT and default.http.timeout == 10.0
     line = next(r for r in caplog.records if r.getMessage() == "foundry: no config file found")
-    assert (line.name, line.levelno) == ("foundry", logging.DEBUG)
+    assert (line.name, line.levelno, default.logging.level) == ("foundry", logging.DEBUG, "DEBUG")
     caplog.clear()
+    # The default level filters the same record: the DEBUG above had to come from the resolution.
+    assert _resolve(tmp_path).logging.level == "INFO"
+    assert "foundry: no config file found" not in [r.getMessage() for r in caplog.records]
     project = tmp_path / "project"
     _write(project, _FOUNDRY_TOML, "http.timeout = 2.0\n")
     _write(project, _PYPROJECT_TOML, "[tool.foundry]\nhttp.timeout = 5.0\n")

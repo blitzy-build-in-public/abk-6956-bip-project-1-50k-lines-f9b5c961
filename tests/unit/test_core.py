@@ -2,8 +2,6 @@
 at ``MAX_NODEID_NAME_LENGTH`` + 9, and the eight exception types carry their published attributes.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import re
 from collections.abc import Callable

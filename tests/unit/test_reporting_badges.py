@@ -1,9 +1,6 @@
 """The badge class one quarantined record shares across the report's two badge sites (AAP 0.4.6).
-
 Keep both badges reading ``QuarantinedRow.css_class``: a modifier composed inside the template would
 let a change to ``Outcome``'s string form unstyle the Quarantined section alone."""
-
-from __future__ import annotations
 
 from datetime import UTC, datetime
 

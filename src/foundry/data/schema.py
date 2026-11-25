@@ -37,13 +37,7 @@ from foundry.contract.validate import find_violation
 from foundry.contract.violations import RedactorCallable
 from foundry.data.loaders.base import LoadedTable, RawRow, data_error
 
-__all__ = [
-    "SCHEMA_SUFFIX",
-    "enforce_row",
-    "enforce_table",
-    "load_row_schema",
-    "schema_path_for",
-]
+__all__ = ["SCHEMA_SUFFIX", "enforce_row", "enforce_table", "load_row_schema", "schema_path_for"]
 
 # --- Locating the sidecar --------------------------------------------------
 
@@ -297,10 +291,6 @@ def enforce_table(
             schema_source=source,
         )
         validated_rows.append(
-            RawRow(
-                values=tuple(validated.items()),
-                line=row.line,
-                row_index=row.row_index,
-            )
+            RawRow(values=tuple(validated.items()), line=row.line, row_index=row.row_index)
         )
     return LoadedTable(path=table.path, columns=table.columns, rows=tuple(validated_rows))

@@ -40,13 +40,7 @@ NESTING_TRUNCATION_MARKER: Final[str] = "... [truncated: nesting depth]"
 
 #: Header names that are always redacted; configuration can widen this set but never narrow it.
 DEFAULT_HEADER_DENY_LIST: Final[frozenset[str]] = frozenset(
-    {
-        "authorization",
-        "proxy-authorization",
-        "cookie",
-        "set-cookie",
-        "x-api-key",
-    }
+    {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"}
 )
 
 #: Query parameter names that are always redacted, in addition to the header deny-list.
@@ -84,8 +78,7 @@ _CAMEL_BOUNDARY_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 #: ``Bearer``/``Basic`` credentials in free text; six is the floor, so prose like "basic" survives.
 _CREDENTIAL_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\b(bearer|basic)\s+([A-Za-z0-9\-._~+/]{6,}={0,2})",
-    re.IGNORECASE,
+    r"\b(bearer|basic)\s+([A-Za-z0-9\-._~+/]{6,}={0,2})", re.IGNORECASE
 )
 
 #: A credential after a scheme the engine resolves: only it is replaced, so its tail stays readable.
@@ -104,8 +97,7 @@ _SECRET_HEADER_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 #: A cookie header loses its whole value, marked: its pairs hold no word that can be resolved.
 _COOKIE_HEADER_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\b(?P<name>cookie|set-cookie)(?P<sep>\s*:\s*)(?P<value>[^\r\n]+)",
-    re.IGNORECASE,
+    r"\b(?P<name>cookie|set-cookie)(?P<sep>\s*:\s*)(?P<value>[^\r\n]+)", re.IGNORECASE
 )
 
 #: A ``Name: value`` line, safe by checking its name with :meth:`Redactor._free_text_redacts`.
@@ -541,8 +533,7 @@ class Redactor:
                 lambda match: self._redact_header_line(match, nested=nested), value
             )
         value = _KEY_VALUE_PATTERN.sub(
-            lambda match: self._redact_key_value(match, nested=nested, diagnostic=diagnostic),
-            value,
+            lambda match: self._redact_key_value(match, nested=nested, diagnostic=diagnostic), value
         )
         # A JSON document embedded in a JSON string is invisible to every pattern above.
         value = _ESCAPED_PAIR_PATTERN.sub(self._redact_escaped_pair, value)
@@ -583,10 +574,7 @@ class Redactor:
                         # Scrubbed in turn, so a part nested inside this one loses its value too.
                         pieces.append(
                             self._scrub(
-                                body,
-                                include_urls=False,
-                                nested=nested + 1,
-                                diagnostic=diagnostic,
+                                body, include_urls=False, nested=nested + 1, diagnostic=diagnostic
                             )
                         )
                     copied = part.body_end

@@ -9,12 +9,7 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
-from foundry.data.loaders.base import (
-    LoadedTable,
-    Loader,
-    build_table,
-    data_error,
-)
+from foundry.data.loaders.base import LoadedTable, Loader, build_table, data_error
 
 __all__: list[str] = ["LOADER", "JsonlLoader"]
 

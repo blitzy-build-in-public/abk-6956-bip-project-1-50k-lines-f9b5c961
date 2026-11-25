@@ -26,11 +26,9 @@ from foundry.config.models import FoundryConfig, HttpAuthConfig
 from foundry.config.sources import ConfigSource, ConfigSources
 from foundry.core.exceptions import ConfigError
 from foundry.obs import events
+from foundry.obs.logging import configure as configure_logging
 
-__all__: Final[tuple[str, ...]] = (
-    "check_secret_variables",
-    "resolve",
-)
+__all__: Final[tuple[str, ...]] = ("check_secret_variables", "resolve")
 
 _COMMAND_LINE_DETAIL: Final[str] = "command line"
 """What a rejection of the whole command-line payload names as its detail.
@@ -92,6 +90,11 @@ def resolve(
     :data:`foundry.config.layers.LAYER_ORDER` states, so precedence holds by construction, and
     :meth:`foundry.config.models.FoundryConfig.source_of` reports which layer won each key.
 
+    The resolved ``logging.level`` reaches the ``foundry`` logger before this function emits the
+    ``DEBUG`` records of the resolution, so an operator who asked for ``DEBUG`` observes them and
+    the zero-configuration trace AAP 0.4.7 documents: a record emitted ahead of that call is
+    filtered at the logger and reaches no handler, the terminal or the report's log tail.
+
     Args:
         cli_overrides: What the command line supplied, already coerced by
             :mod:`foundry.config.cli_layer`, or ``None`` when the caller has no command line.
@@ -119,8 +122,6 @@ def resolve(
 
     discovered = files.discover_file(cli_path=cli.config_path, environ=environment, cwd=directory)
     file_payload = files.load_file(discovered)
-    if discovered is None:
-        _log_no_config_file()
     # TOML delivers typed values, so the file layer's value *types* are checked here, as its key
     # names already are in files.load_file: pydantic's lax mode would otherwise turn a boolean in
     # a numeric slot into a number (AAP 0.4.5).
@@ -129,9 +130,7 @@ def resolve(
     )
     for name in file_payload.profile_names():
         validation.validate_file_values(
-            file_payload.profiles[name],
-            layer=errors.profile_layer(name),
-            detail=file_payload.label,
+            file_payload.profiles[name], layer=errors.profile_layer(name), detail=file_payload.label
         )
 
     env_payload = env.read_env(environment)
@@ -153,6 +152,12 @@ def resolve(
     config = _build(values, recorded)
     check_secret_variables(config, environment)
     resolved = config.with_sources(_complete_sources(config, recorded))
+    # The level is applied before the resolution's own records are written, because a record emitted
+    # ahead of it is filtered at the ``foundry`` logger and reaches no handler, the terminal or a
+    # report's log tail (AAP 0.4.7 row 1, AAP 0.13.1). Only the ``foundry`` logger is touched.
+    configure_logging(resolved.logging.level)
+    if discovered is None:
+        _log_no_config_file()
     _emit_sources(resolved)
     return resolved
 
@@ -454,5 +459,9 @@ def _log_no_config_file() -> None:
     the package's own logger. It goes through :func:`foundry.obs.events.emit_no_config_file`, the
     one place a lifecycle record is written, so the level clamp and single-line format apply here
     too rather than a logger being called from this module.
+
+    The caller invokes it once the resolved ``logging.level`` is on the ``foundry`` logger, so the
+    record reaches every handler the operator asked for instead of being filtered at the logger
+    (AAP 0.4.7).
     """
     events.emit_no_config_file()

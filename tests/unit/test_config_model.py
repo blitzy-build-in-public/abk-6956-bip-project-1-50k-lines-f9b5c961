@@ -3,8 +3,6 @@ every numeric range with one value beyond each, the ``http.auth`` cross-field ru
 header faults the HTTP layer would otherwise refuse at request time, and the read-only ``sources``
 provenance. The numbers stay literals: the model must match them."""
 
-from __future__ import annotations
-
 import json
 import tomllib
 import warnings

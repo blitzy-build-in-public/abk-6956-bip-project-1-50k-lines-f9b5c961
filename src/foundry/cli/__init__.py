@@ -19,16 +19,10 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-__all__: list[str] = [
-    "build_group",
-    "main",
-]
+__all__: list[str] = ["build_group", "main"]
 
 _LAZY_IMPORTS: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "build_group": "foundry.cli.main",
-        "main": "foundry.cli.main",
-    }
+    {"build_group": "foundry.cli.main", "main": "foundry.cli.main"}
 )
 """Which module defines each name of :data:`__all__`, for :func:`__getattr__` to import.
 

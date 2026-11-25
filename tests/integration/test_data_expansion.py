@@ -1,7 +1,5 @@
 """Data-driven expansion: a 12-row table and a 3x4 matrix become 12 stable cases (AAP 0.14.1)."""
 
-from __future__ import annotations
-
 import json
 import re
 import shutil

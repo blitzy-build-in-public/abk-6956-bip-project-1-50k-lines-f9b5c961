@@ -222,10 +222,7 @@ def classify_document(payload: object, path: Path) -> LoadedDocument:
         table_rows: list[tuple[Mapping[str, object], int | None]] = []
         for index, element in enumerate(payload):
             if not isinstance(element, Mapping):
-                data_error(
-                    path,
-                    f"element {index} is {type(element).__name__}, expected a mapping",
-                )
+                data_error(path, f"element {index} is {type(element).__name__}, expected a mapping")
             table_rows.append((element, None))
         return build_table(path, table_rows)
 
@@ -253,10 +250,7 @@ def classify_document(payload: object, path: Path) -> LoadedDocument:
             )
         return build_table(path, [(payload, None)])
 
-    data_error(
-        path,
-        f"expected a list of mappings or a mapping, got {type(payload).__name__}",
-    )
+    data_error(path, f"expected a list of mappings or a mapping, got {type(payload).__name__}")
 
 
 def check_row_width(

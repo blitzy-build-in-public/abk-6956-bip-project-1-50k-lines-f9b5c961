@@ -6,8 +6,6 @@ asserted on the bytes written, because a writer that redacts nothing passes the 
 leaks the file (AAP 0.3.2, 0.14.3, I4). Every input lives in ``tmp_path`` and log capture reads
 pytest's ``caplog``."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging
@@ -291,6 +289,27 @@ def test_the_log_tail_keeps_a_foundry_records_label(tmp_path: Path) -> None:
     assert written.splitlines() == ["INFO foundry.qa.secrets: token=***", "INFO mytool.auth: ***"]
     # One line per captured record, and an empty tail writes no file at all.
     assert writer.write_log_tail([]) is None
+
+
+@pytest.mark.parametrize(
+    ("source", "tail"),
+    [
+        ('    params={"token": SENTINEL}', ">   boom()\n"),
+        ('    log.info("call %d authorization=%s", index, SENTINEL)', ">   boom()\n"),
+        ('    assert False, f"deliberate failure token={SENTINEL}"', ">   boom()\n"),
+        ('    assert False, "token=" + token + " user=" + user', ">   boom()\n"),
+        ("    login(password=TOKEN)", ">   boom()\n"),
+        ("    token = TOKEN", ""),  # --tb=short: a markerless prefix may be a locals display
+    ],
+)
+def test_a_traceback_keeps_the_source_it_ran(tmp_path: Path, source: str, tail: str) -> None:
+    writer, secret = _writer(tmp_path), _SECRET_SENTINELS[0]
+    line = source.replace("TOKEN", repr(secret))
+    failure = f"E       AssertionError: deliberate failure token={secret}\n"
+    reference = writer.write_text("traceback", f"{line}\n{tail}{failure}")
+    assert reference is not None
+    masked = f"{line.replace(secret, '***')}\n{tail}{failure.replace(secret, '***')}"
+    assert (writer.run_dir / reference.path).read_text(encoding="utf-8") == masked
 
 
 def test_the_manifest_lists_one_entry_per_written_file(tmp_path: Path) -> None:

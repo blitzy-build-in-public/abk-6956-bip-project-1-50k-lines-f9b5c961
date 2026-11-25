@@ -1,9 +1,6 @@
 """The element boundary of the report builders (AAP 0.14.3).
-
 ``build_context`` validates the element sequence once and raises ``ElementTypeError``, so a caller
 defect never escapes as a builtin ``AttributeError``; ``build_panels`` reads only result records."""
-
-from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime

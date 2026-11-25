@@ -2,8 +2,6 @@
 fixed order, the ``--json`` document, exit 1 on a regression and exit 2 on a document that cannot
 be read. The committed documents are copied into ``tmp_path`` and are only ever read."""
 
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -48,6 +46,19 @@ _RUN_ERROR: Final[dict[str, object]] = {
     "worker_id": "gw0",
     "message": "worker gw0 disappeared",
 }
+_HOSTILE_NODEIDS: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "tests/\x1b[31mANSI-INJECTED\x1b[0m.py::test_x",
+        r"tests/\x1b[31mANSI-INJECTED\x1b[0m.py::test_x",
+    ),
+    ("tests/test_nul_\x00.py::test_x", r"tests/test_nul_\x00.py::test_x"),
+    ("tests/test_del_\x7f.py::test_x", r"tests/test_del_\x7f.py::test_x"),
+    ("tests/test_line_\n.py::test_x", r"tests/test_line_\x0a.py::test_x"),
+)
+r"""A node id a hostile result document can carry, and the ``\xNN`` spelling the terminal shows.
+The first is the payload the terminal-escape finding reproduces with; the other three are the
+control codes ``rich`` keeps beside it -- ``NUL``, ``DEL`` and a newline that would otherwise forge
+a line of its own inside the group."""
 
 
 class _Entry:
@@ -74,32 +85,12 @@ def _failing(path: Path) -> set[str]:
     return {str(item["nodeid"]) for item in results if item["outcome"] in {"failed", "error"}}
 
 
-def _failing_sets(base: Path, new: Path) -> dict[str, tuple[str, ...]]:
-    base_failing, new_failing = _failing(base), _failing(new)
-    return {
-        "newly_failing": tuple(sorted(new_failing - base_failing)),
-        "newly_passing": tuple(sorted(base_failing - new_failing)),
-        "still_failing": tuple(sorted(base_failing & new_failing)),
-    }
-
-
 def _rendered(sets: Mapping[str, tuple[str, ...]]) -> list[str]:
     lines: list[str] = []
     for label, values in zip(_LABELS, sets.values(), strict=True):
         lines.append(f"{label} ({len(values)}):")
         lines.extend([f"  {value}" for value in values] or [f"  {_EMPTY}"])
     return lines
-
-
-def _with_outcomes(source: Path, destination: Path, outcomes: Mapping[str, str]) -> Path:
-    elements = _elements(source)
-    for element in elements:
-        outcome = outcomes.get(str(element.get("nodeid", "")))
-        if outcome is not None:
-            element["outcome"] = outcome
-            element["failures"] = [] if outcome == "passed" else [dict(_FAILURE)]
-    destination.write_text(json.dumps(elements, indent=2) + "\n", encoding="utf-8")
-    return destination
 
 
 @pytest.fixture
@@ -116,7 +107,12 @@ def test_the_groups_render_in_order_and_the_json_document_holds_the_three_sets(
     result = _compare(base, new)
     assert result.exit_code == FAILED and result.stderr == ""
     assert result.stdout.splitlines() == _rendered(_EXPECTED)
-    assert _failing_sets(Path(base), Path(new)) == _EXPECTED
+    base_failing, new_failing = _failing(Path(base)), _failing(Path(new))
+    assert {
+        "newly_failing": tuple(sorted(new_failing - base_failing)),
+        "newly_passing": tuple(sorted(base_failing - new_failing)),
+        "still_failing": tuple(sorted(base_failing & new_failing)),
+    } == _EXPECTED
     documented = _compare(base, new, "--json")
     assert documented.exit_code == FAILED and documented.stderr == ""
     document = json.loads(documented.stdout)
@@ -127,17 +123,21 @@ def test_the_groups_render_in_order_and_the_json_document_holds_the_three_sets(
 def test_a_group_with_several_nodeids_lists_them_ascending(
     copies: dict[str, Path], tmp_path: Path
 ) -> None:
-    regressed = _with_outcomes(
-        copies["new"], tmp_path / "regressed.json", {_EMPTY_CART: "failed", _STOCK: "failed"}
-    )
+    wanted = {_EMPTY_CART: "failed", _STOCK: "failed"}
+    elements = _elements(copies["new"])
+    for element in elements:
+        outcome = wanted.get(str(element.get("nodeid", "")))
+        if outcome is not None:
+            element["outcome"] = outcome
+            element["failures"] = [] if outcome == "passed" else [dict(_FAILURE)]
+    regressed = tmp_path / "regressed.json"
+    regressed.write_text(json.dumps(elements, indent=2) + "\n", encoding="utf-8")
     document = json.loads(_compare(str(copies["new"]), str(regressed), "--json").stdout)
     assert document["newly_failing"] == [_EMPTY_CART, _STOCK]
     assert document["still_failing"] == [_CART, _OK]
 
 
-def test_identical_documents_exit_0_and_list_the_standing_failures(
-    copies: dict[str, Path],
-) -> None:
+def test_identical_documents_exit_0_and_list_the_standing_failures(copies: dict[str, Path]) -> None:
     base = str(copies["base"])
     result = _compare(base, base)
     assert result.exit_code == SUCCESS
@@ -159,6 +159,47 @@ def test_unreadable_document_exits_2(copies: dict[str, Path], position: str) -> 
     result = _compare(*arguments)
     assert result.exit_code == USAGE_OR_CONFIG and result.stdout == ""
     assert str(bad) in result.stderr and "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("nodeid", "spelled"), _HOSTILE_NODEIDS, ids=("ansi-esc", "nul", "del", "newline")
+)
+def test_a_hostile_nodeid_is_spelled_on_the_terminal_and_verbatim_in_the_json_document(
+    copies: dict[str, Path], tmp_path: Path, nodeid: str, spelled: str
+) -> None:
+    """A document's control characters reach the terminal spelled and the JSON document verbatim.
+    AAP 0.7.4 makes the terminal one of the product's three user surfaces, and a result document
+    handed to ``foundry report compare`` is operator-named input rather than trusted text, so no
+    node id it carries may colour or otherwise manipulate the operator's screen: every control
+    character is spelled ``\\xNN``, so one node id stays on one line, and the ``--json`` document
+    still holds the node id exactly as the document wrote it, which is what proves the treatment is
+    display-only."""
+    base = str(copies["base"])
+    # Give the record for ``_EMPTY_CART`` the node id ``nodeid`` and make that record fail.
+    elements = _elements(copies["new"])
+    rewritten = 0
+    for element in elements:
+        if element.get("record_type") == "result" and element.get("nodeid") == _EMPTY_CART:
+            element["nodeid"], element["outcome"] = nodeid, "failed"
+            element["failures"] = [dict(_FAILURE)]
+            rewritten += 1
+    assert rewritten == 1, f"{copies['new']} holds {rewritten} records for {_EMPTY_CART}"
+    hostile = tmp_path / "hostile.json"
+    hostile.write_text(json.dumps(elements, indent=2) + "\n", encoding="utf-8")
+    result = _compare(base, str(hostile))
+    assert result.exit_code == FAILED and result.stderr == ""
+    # Every C0, DEL or C1 character ``result.stdout`` holds, a newline included.
+    control = {char for char in result.stdout if ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F}
+    assert control <= {"\n"}, result.stdout
+    expected = {
+        "newly_failing": tuple(sorted((_OK, spelled))),
+        "newly_passing": (_DECLINED,),
+        "still_failing": (_CART,),
+    }
+    assert result.stdout.splitlines() == _rendered(expected)
+    documented = _compare(base, str(hostile), "--json")
+    assert documented.exit_code == FAILED and documented.stderr == ""
+    assert json.loads(documented.stdout)["newly_failing"] == sorted((_OK, nodeid))
 
 
 def test_run_error_elements_are_ignored(copies: dict[str, Path], tmp_path: Path) -> None:

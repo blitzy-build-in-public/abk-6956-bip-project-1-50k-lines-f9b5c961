@@ -2,9 +2,8 @@
 every published field default, the run tree and the three report files, with no plugin flag passed.
 """
 
-from __future__ import annotations
-
 import json
+import logging
 import re
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Mapping
@@ -34,8 +33,6 @@ _OPTIONS: Final[tuple[str, ...]] = tuple(
 _PROJECT: Final[str] = """import json
 import pathlib
 import re
-
-
 def test_zero_config_reports_defaults(foundry_config, foundry_profile):
     c = foundry_config
     assert foundry_profile == "default" and c.profile == "default"
@@ -48,7 +45,6 @@ def test_zero_config_reports_defaults(foundry_config, foundry_profile):
     assert c.artifacts.dir == pathlib.Path("artifacts")
     assert c.artifacts.keep_passed is False
     assert list(c.secrets.redact_keys) == ["authorization", "set-cookie", "cookie", "x-api-key"]
-
 def test_zero_config_artifacts(foundry_artifacts, foundry_run_id, request):
     assert re.fullmatch(r"\\d{8}T\\d{6}-[0-9a-f]{6}", foundry_run_id)
     directory = foundry_artifacts.dir_for(request.node.nodeid)
@@ -62,26 +58,19 @@ def test_zero_config_artifacts(foundry_artifacts, foundry_run_id, request):
 
 _EVENTS_CONFTEST: Final[str] = """import logging
 import pathlib
-
 import pytest
-
 EVENTS = pathlib.Path(__file__).with_name("foundry-events.log")
 LOG = logging.getLogger("foundry")
-PRIOR = LOG.level
-
 class _Lines(logging.Handler):
     def emit(self, record):
         with EVENTS.open("a", encoding="utf-8") as stream:
             stream.write(f"{record.levelname}|{record.getMessage()}\\n")
-
+# A level-free handler: it filters nothing, so whatever the configured level lets through arrives.
 HANDLER = _Lines()
-LOG.setLevel(logging.DEBUG)
 LOG.addHandler(HANDLER)
-
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config):
     LOG.removeHandler(HANDLER)
-    LOG.setLevel(PRIOR)
 """
 
 _NO_MATCH: Final[str] = "no_such_test"
@@ -108,7 +97,6 @@ _PUBLISHED: Final[str] = (
 def test_activation_runs_green_and_reports_the_defaults(
     pytester: pytest.Pytester, clean_foundry_env: None
 ) -> None:
-    pytester.makeconftest(_EVENTS_CONFTEST)
     pytester.makepyfile(**{_MODULE: _PROJECT})
     # Checked once the test module exists, so neither line can pass by finding an empty directory.
     assert not (pytester.path / "foundry.toml").exists()
@@ -144,9 +132,20 @@ def test_activation_runs_green_and_reports_the_defaults(
     assert directory.name in names
     # A node id separator would change the run tree's layout, so none may reach a directory name.
     assert all(not any(char in name for char in ("/", "::", "[")) for name in names)
-    # The conftest is the consuming project's own logging setup; the pinned DEBUG line needs it.
-    lines = (pytester.path / "foundry-events.log").read_text(encoding="utf-8").splitlines()
-    assert "DEBUG|foundry: no config file found" in [line.strip() for line in lines]
+
+
+def test_the_no_config_debug_line_reaches_a_handler_with_no_level_set(
+    pytester: pytest.Pytester, clean_foundry_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # DEBUG comes only from the env, the child handler is level-free, and a leaked level is cleared.
+    monkeypatch.setenv("FOUNDRY_LOGGING__LEVEL", "DEBUG")
+    monkeypatch.setattr(logging.getLogger("foundry"), "level", logging.NOTSET)
+    pytester.makeconftest(_EVENTS_CONFTEST)
+    pytester.makepyfile(test_no_config="def test_ok():\n    assert True\n")
+    result = pytester.runpytest()
+    assert result.ret == 0 and result.parseoutcomes() == {"passed": 1}
+    events = (pytester.path / "foundry-events.log").read_text(encoding="utf-8").splitlines()
+    assert "DEBUG|foundry: no config file found" in [line.strip() for line in events]
 
 
 def test_option_group_is_registered(pytester: pytest.Pytester, clean_foundry_env: None) -> None:

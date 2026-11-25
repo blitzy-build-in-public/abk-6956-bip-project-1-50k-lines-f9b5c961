@@ -31,6 +31,19 @@ parametrised case id stays readable and two runs of one case produce identical b
 _NEWLINE: Final[str] = "\n"
 """The document's single trailing newline, so its last line is a complete line to a shell reader."""
 
+_COMPARE_HELP: Final[str] = (
+    "compare two results.json documents: BASE is the baseline and NEW the newer one, both written "
+    "by a Foundry run. The node id sets print in the fixed order Newly failing, Newly passing, "
+    "Still failing, or one JSON document with --json. The status is 0 when nothing newly fails, 1 "
+    "when a test newly fails and 2 when either document is unreadable."
+)
+"""The one paragraph ``foundry report compare --help`` prints, in the operator's terms (AAP 0.7.4).
+
+The behaviour it describes is the command contract AAP 0.4.4 and 0.7.4 fix; the citations, the
+exception the callback raises and the group that maps it to a status stay in the docstring below,
+which click does not print once the command declares a ``help`` string.
+"""
+
 
 class _ExitCodeGroup(click.Group):
     """A click group that publishes the exit status its subcommand returned.
@@ -52,7 +65,7 @@ class _ExitCodeGroup(click.Group):
         return cast(object, result)
 
 
-@click.group(name="report", cls=_ExitCodeGroup)
+@click.group(name="report", cls=_ExitCodeGroup, help="compare Foundry result documents")
 def report_group() -> None:
     """Compare Foundry result documents."""
 
@@ -78,16 +91,13 @@ def _document(diff: ComparisonDiff) -> str:
     """
     return (
         json.dumps(
-            diff.as_dict(),
-            indent=_JSON_INDENT,
-            sort_keys=True,
-            ensure_ascii=_JSON_UNESCAPED,
+            diff.as_dict(), indent=_JSON_INDENT, sort_keys=True, ensure_ascii=_JSON_UNESCAPED
         )
         + _NEWLINE
     )
 
 
-@report_group.command(name="compare")
+@report_group.command(name="compare", help=_COMPARE_HELP)
 @click.argument("base", type=click.Path(dir_okay=False, path_type=Path))
 @click.argument("new", type=click.Path(dir_okay=False, path_type=Path))
 @click.option(

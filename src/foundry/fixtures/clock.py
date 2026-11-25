@@ -100,11 +100,7 @@ def _offset(
             )
     try:
         return timedelta(
-            days=days,
-            seconds=seconds,
-            microseconds=microseconds,
-            minutes=minutes,
-            hours=hours,
+            days=days, seconds=seconds, microseconds=microseconds, minutes=minutes, hours=hours
         )
     except OverflowError as error:
         raise FoundryError(f"{_PREFIX}: advance() offset is out of range: {error}") from error
@@ -171,11 +167,7 @@ class FoundryClock:
                 too large for :class:`datetime.timedelta` to hold.
         """
         self._instant = self._instant + _offset(
-            seconds=seconds,
-            minutes=minutes,
-            hours=hours,
-            days=days,
-            microseconds=microseconds,
+            seconds=seconds, minutes=minutes, hours=hours, days=days, microseconds=microseconds
         )
         return self._instant
 

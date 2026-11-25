@@ -1,8 +1,6 @@
 """Both time policies: the 100 ms sleep cap over tests/ and examples/ (AAP 0.14.2), and no raw
 wall-clock read over src/foundry outside the eight reviewed producers (AAP 0.14.3)."""
 
-from __future__ import annotations
-
 import ast
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path

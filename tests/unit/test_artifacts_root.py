@@ -2,8 +2,6 @@
 the session asks for it, so a blocked root costs one ``WARNING`` and disables capture for the run.
 """
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 from typing import Final

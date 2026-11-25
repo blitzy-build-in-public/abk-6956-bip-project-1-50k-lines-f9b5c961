@@ -30,11 +30,7 @@ from foundry.core.ids import utc_now
 from foundry.obs.events import emit_plumbing_failure
 from foundry.obs.redaction import MAX_DEPTH, Redactor, default_redactor
 
-__all__: Final[tuple[str, ...]] = (
-    "CassetteStore",
-    "redact_interaction",
-    "redact_interactions",
-)
+__all__: Final[tuple[str, ...]] = ("CassetteStore", "redact_interaction", "redact_interactions")
 
 _COMPONENT: Final[str] = "cassette.store"
 """The component name :func:`~foundry.obs.events.emit_plumbing_failure` reports."""
@@ -413,9 +409,7 @@ class CassetteStore:
         try:
             redacted, names = redact_interactions(document.interactions, self._redactor)
             document = replace(
-                document,
-                redacted_keys=(*document.redacted_keys, *names),
-                interactions=redacted,
+                document, redacted_keys=(*document.redacted_keys, *names), interactions=redacted
             )
         except _PLUMBING_ERRORS as exc:
             emit_plumbing_failure(

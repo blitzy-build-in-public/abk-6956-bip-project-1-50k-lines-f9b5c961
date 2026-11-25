@@ -57,6 +57,17 @@ _TYPO_ARG: Final[str] = f"--foundry-{_TYPO}=3.0"
 _TYPO_TOML: Final[str] = f"[http]\n{_TYPO.rsplit('.', 1)[-1]} = 3.0\n"
 _HINT: Final[str] = "did you mean 'http.timeout'?"
 
+_SHAPE_MESSAGE: Final[str] = (
+    "invalid shape for http.headers: expected a table of header names to values without "
+    "control characters"
+)
+_CONTROL_HINT: Final[str] = "Remove the control characters from the header name or value"
+_STRUCTURAL_HINT: Final[str] = "defined twice"
+# The TOML escapes are doubled so tomllib reads a real CR/LF inside the header, not the letters.
+_HDR_VALUE_FAULT: Final[str] = '[http.headers]\n"X-Bad" = "value\\r\\nInjected: yes"\n'
+_HDR_NAME_FAULT: Final[str] = '[http.headers]\n"X-Bad\\r\\nInjected: yes" = "value"\n'
+_NOT_A_TABLE: Final[str] = "[http]\nheaders = 5\n"
+
 _MISSING: Final[str] = "nope.toml"
 _TOKEN_VAR: Final[str] = "FOUNDRY_TEST_TOKEN_MISSING"
 _BEARER_TOML: Final[str] = f'[http.auth]\nstrategy = "bearer"\ntoken_env = "{_TOKEN_VAR}"\n'
@@ -96,6 +107,9 @@ def _assert_exit_2_without_reports(result: pytest.RunResult, directory: Path, ca
         pytest.param(None, {}, (_TYPO_ARG,), (_TYPO, _HINT), id="unknown-cli-key"),
         pytest.param(None, {_TIMEOUT_VAR: "abc"}, (), (_TIMEOUT_VAR, _NUMBER), id="bad-env"),
         pytest.param(None, {}, (_REC, _REP), (_REC, _REP), id="both-modes"),
+        pytest.param(_HDR_VALUE_FAULT, {}, (), (_SHAPE_MESSAGE, _CONTROL_HINT), id="crlf-value"),
+        pytest.param(_HDR_NAME_FAULT, {}, (), (_SHAPE_MESSAGE, _CONTROL_HINT), id="crlf-name"),
+        pytest.param(_NOT_A_TABLE, {}, (), (_SHAPE_MESSAGE, _STRUCTURAL_HINT), id="not-a-table"),
     ],
 )
 def test_configuration_faults_exit_2_without_reports(

@@ -1,9 +1,6 @@
 """A ``--foundry-*`` option may not change what a run collects (AAP 0.2.1, AAP 0.4.4).
-
 The option group arrives after the root directory and configuration file are fixed, so a typed path
 reads as a collection argument; these tests pin the repair."""
-
-from __future__ import annotations
 
 import sys
 from pathlib import Path
