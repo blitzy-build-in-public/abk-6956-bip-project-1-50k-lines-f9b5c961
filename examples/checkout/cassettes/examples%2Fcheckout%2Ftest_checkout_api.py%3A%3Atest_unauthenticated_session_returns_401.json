@@ -1,0 +1,22 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "body_sha256": null,
+        "headers_subset": {},
+        "method": "GET",
+        "path": "/private/profile",
+        "query": []
+      },
+      "response": {
+        "body": "{\"error\":\"unauthorized\",\"realm\":\"checkout\"}",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "status": 401
+      }
+    }
+  ],
+  "recorded_at": "2025-01-01T00:00:00.000+00:00",
+  "redacted_keys": []
+}
