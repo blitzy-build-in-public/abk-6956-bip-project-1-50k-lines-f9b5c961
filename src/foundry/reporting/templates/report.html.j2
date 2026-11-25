@@ -38,7 +38,7 @@
       <section aria-label="outcome counts">
         <ul class="summary">
           {% for c in ctx.counts %}
-          <li class="{{ c.css_class }}"><span class="count">{{ c.count }}</span> {{ c.outcome }}</li>
+          <li class="{{ c.css_class }}{% if c.count == 0 %} is-zero{% endif %}"><span class="count">{{ c.count }}</span> {{ c.outcome }}</li>
           {% endfor %}
         </ul>
       </section>
@@ -54,12 +54,12 @@
       {% else %}
       <div class="table-scroll">
         <table class="results">
-          <caption>test results, one row per test, sorted by node id</caption>
+          <caption><span class="caption-text">test results, one row per test, sorted by node id</span></caption>
           <thead>
             <tr>
               <th scope="col">test</th>
               <th scope="col">outcome</th>
-              <th scope="col">duration</th>
+              <th scope="col" class="num">duration</th>
               <th scope="col">profile</th>
               <th scope="col">markers</th>
             </tr>
@@ -96,7 +96,7 @@
       {% endif %}
       {% for panel in ctx.panels %}
       <details class="panel"{% if loop.first %} open{% endif %}>
-        <summary>{{ panel.nodeid }}: {{ panel.outcome }} ({{ panel.phase }})</summary>
+        <summary><span class="summary-text">{{ panel.nodeid }}: {{ panel.outcome }} ({{ panel.phase }})</span></summary>
         <pre class="message">{{ panel.message }}</pre>
         {% if panel.has_links %}
         {# Each *_path is a relative filesystem path whose node-id segment is percent-escaped by

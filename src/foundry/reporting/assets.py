@@ -97,6 +97,8 @@ h2 { font-size: 18px; font-weight: 600; margin: 28px 0 12px; }
 .summary-quarantined_failed .count { color: var(--quarantined); }
 .summary-quarantine_passed .count { color: var(--quarantined); }
 .summary-not_run .count { color: var(--not-run); }
+/* A zero tally is not an outcome state: the neutral colour overrides the chip's outcome one. */
+.summary li.is-zero .count { color: var(--muted); }
 
 /* Script-only controls: hidden until the script marks the document, so a no-script reader
    never meets a filter or a button that cannot work. */
@@ -116,9 +118,8 @@ html[data-foundry-js="enabled"] .controls { display: flex; }
 .controls button { background: var(--surface); cursor: pointer; }
 .controls button:hover { background: #eef0f3; }
 
-/* Results table: one row per test, sorted by node id. The header pins while the page scrolls; the
-   narrow-window rules below make the table's own box a scroll container, and a box that scrolls
-   sideways cannot pin a descendant, so there the header travels with the table instead. */
+/* Results table: one row per test, sorted by node id. The header pins while the page scrolls, and
+   the narrow-window rules below cap the box's height so it pins the header inside itself. */
 table.results { border-collapse: collapse; font-size: 14px; width: 100%; }
 
 table.results thead th {
@@ -134,7 +135,8 @@ table.results tbody th {
 table.results tbody th { font-weight: 400; text-align: left; }
 
 table.results tbody tr:hover { background: var(--surface); }
-/* nowrap keeps a duration and its unit on one line, so tabular figures stay in one column. */
+/* nowrap keeps a duration and its unit on one line. The duration column's header carries this
+   same class as its cells, so the label sits over the values it names. */
 table.results .num {
   font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
 }
@@ -163,6 +165,10 @@ table.results .nodeid { font-family: var(--font-mono); font-size: 13px; word-bre
   margin: 0 0 20px; padding: 12px 16px;
 }
 
+/* The page keeps a 20px rhythm between blocks; the table's box carries no margin, so the gap
+   comes from the section after it and no other table junction moves. */
+.table-scroll + .quarantined { margin-top: 20px; }
+
 .quarantined h2 { font-size: 16px; margin: 0 0 8px; }
 .quarantined ul { margin: 0; padding-left: 20px; }
 .quarantined li { margin: 4px 0; }
@@ -175,16 +181,38 @@ table.results .nodeid { font-family: var(--font-mono); font-size: 13px; word-bre
   box-shadow: var(--shadow); margin: 0 0 16px; padding: 12px 16px;
 }
 
-.panel summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+/* The triangle is drawn rather than left to ::marker: an inside marker can be pushed onto a line
+   of its own when the first word does not fit beside it. */
+.panel summary {
+  align-items: flex-start; cursor: pointer; display: flex; font-weight: 600; gap: 8px;
+  min-height: 44px; overflow-wrap: anywhere; padding: 11px 0;
+}
+.panel summary::before {
+  border-bottom: 5px solid transparent; border-left: 6px solid currentColor;
+  border-top: 5px solid transparent; content: ""; flex: none; height: 0; margin-top: 7px; width: 0;
+}
+.panel[open] > summary::before { transform: rotate(90deg); }
+.panel summary .summary-text { flex: 1; min-width: 0; }
+
+/* A forced-colours palette repaints the triangle's borders in the text colour and squares it, so
+   the silhouette is redrawn from a clipped box in a colour the palette keeps. */
+@media (forced-colors: active) {
+  .panel summary::before { background-color: LinkText; border-width: 0; height: 10px; width: 6px;
+    clip-path: polygon(0 0, 100% 50%, 0 100%); }
+}
 .panel summary:hover { color: var(--accent); }
 .panel summary:active { color: var(--accent-active); }
 
+/* A 44px hit box in a grid cell would leave the row's label at the top while its value centred. */
 .panel dl {
-  display: grid; gap: 4px 16px; grid-template-columns: max-content 1fr; margin: 12px 0 0;
+  align-items: baseline; display: grid; gap: 4px 16px; grid-template-columns: max-content 1fr;
+  margin: 12px 0 0;
 }
 
 .panel dt { color: var(--muted); font-size: 13px; }
 .panel dd { font-family: var(--font-mono); font-size: 13px; margin: 0; word-break: break-word; }
+/* An artifact link is a touch target too, so the whole box opens the dump, not just the glyphs. */
+.panel dd a { align-items: center; display: inline-flex; min-height: 44px; padding: 0 2px; }
 .panel p { margin: 8px 0 0; overflow-wrap: anywhere; }
 
 /* The failure message keeps its line structure and, as the panel's primary diagnostic text, is
@@ -236,24 +264,36 @@ footer.report-footer {
    readable at a fixed minimum, tightens its spacing, and scrolls sideways inside its own box
    instead of widening the page: no column is dropped and nothing is pushed off the viewport. */
 @media (max-width: 768px) {
-  .table-scroll { overflow-x: auto; }
+  /* Below this width the table's own box is the sideways scroller; a box that scrolls cannot pin a
+     descendant unless it also bounds the height, so cap it and the header pins to the box. */
+  .table-scroll {
+    background-attachment: local, local, scroll, scroll; max-height: 80vh;
+    background-image: linear-gradient(to right, var(--bg) 30%, rgba(255, 255, 255, 0)),
+      linear-gradient(to left, var(--bg) 30%, rgba(255, 255, 255, 0)),
+      linear-gradient(to right, rgba(27, 31, 36, 0.18), rgba(27, 31, 36, 0)),
+      linear-gradient(to left, rgba(27, 31, 36, 0.18), rgba(27, 31, 36, 0));
+    background-position: 0 0, 100% 0, 0 0, 100% 0; background-repeat: no-repeat;
+    background-size: 40px 100%, 40px 100%, 16px 100%, 16px 100%;
+    overflow-x: auto; overflow-y: auto;
+  }
   table.results { font-size: 13px; }
   table.results thead th,
   table.results tbody th,
   table.results tbody td { padding: 6px 8px; }
   table.results .nodeid { font-size: 12px; min-width: 20ch; }
-  /* A box that scrolls sideways cannot pin a descendant, and its height is the table's, so state
-     the unpinned header explicitly rather than leaving a sticky rule that can never take effect. */
-  table.results thead th { position: static; }
+  table.results thead th { position: sticky; }
   table.results caption { text-align: left; }
+  /* The local layers hide the scroll layers at each end, so a shadow shows only where the table
+     continues; the caption's text is pinned because a table-caption box cannot itself be sticky. */
+  table.results .caption-text { display: inline-block; left: 0; position: sticky; }
 }
 
 @media print {
   body { max-width: none; padding: 0; }
   table.results thead th { box-shadow: none; position: static; }
   .controls { display: none; }
-  /* A printed page cannot scroll sideways, so the table shows in full rather than clipped. */
-  .table-scroll { overflow: visible; }
+  /* A printed page cannot scroll, so the table shows in full and is never clamped to a box. */
+  .table-scroll { max-height: none; overflow: visible; }
   .panel, .quarantined, .banner { box-shadow: none; }
   pre.log { max-height: none; overflow: visible; }
   details { break-inside: avoid; }

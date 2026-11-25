@@ -1,8 +1,9 @@
 """Unit tests for the report's narrow-window layout and its numeric cells.
 
-The results table keeps its five columns inside its own scroll container, the identifier column
-keeps a readable floor below the narrow breakpoint, a duration never breaks from its unit, and the
-document stays offline-openable.
+The results table keeps its five columns inside its own scroll container and pins its header there,
+the identifier column keeps a readable floor below the narrow breakpoint, a duration never breaks
+from its unit, a header sits over the values it labels, a zero tally is not painted as an outcome,
+every interactive element reaches a forty-four pixel target, and the document opens offline.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ _PROFILE = "ci"
 _STARTED_AT = datetime(2025, 1, 2, 3, 4, 5, 0, tzinfo=UTC)
 _FINISHED_AT = datetime(2025, 1, 2, 3, 4, 5, 250_000, tzinfo=UTC)
 _NARROW_QUERY = "@media (max-width: 768px)"
+_PRINT_QUERY = "@media print"
 _EXTERNAL_MARKERS = ("http" + "://", "https" + "://", "url" + "(", "@" + "import")
 
 _RECORD = ResultRecord(
@@ -60,7 +62,7 @@ def test_the_results_table_sits_inside_its_own_scroll_container() -> None:
     table_end = document.index("</table>")
     assert wrapper_at < table_at < table_end < document.index("</div>", table_end)
     assert document.count('<div class="table-scroll">') == 1
-    assert document.count('<th scope="col">') == 5
+    assert document.count('<th scope="col"') == 5
 
 
 def test_a_run_with_no_records_renders_no_table_and_no_scroll_container() -> None:
@@ -90,7 +92,54 @@ def test_the_narrow_window_block_keeps_the_report_offline_openable() -> None:
     assert not assets.contains_external_reference(block)
 
 
-def test_the_header_pins_above_the_breakpoint_only() -> None:
-    """The sticky header survives on a wide window and is stated static where the table scrolls."""
+def test_the_header_pins_inside_its_scroll_box_below_the_breakpoint() -> None:
+    """The header pins at every width; below the breakpoint it pins to the table scroll box."""
     assert "position: sticky" in _rule(assets.CSS, "table.results thead th")
-    assert "position: static" in _rule(_responsive_block(), "table.results thead th")
+    block = _responsive_block()
+    assert "position: sticky" in _rule(block, "table.results thead th")
+    assert "max-height: 80vh" in _rule(block, ".table-scroll")
+    print_block = assets.CSS[assets.CSS.index(_PRINT_QUERY) :]
+    assert "max-height: none" in _rule(print_block, ".table-scroll")
+
+
+def test_the_duration_header_sits_over_the_values_it_labels() -> None:
+    document = _render([_RECORD])
+    assert '<th scope="col" class="num">duration</th>' in document
+    assert '<td class="num">' in document
+    assert "text-align: right" in _rule(assets.CSS, "table.results .num")
+
+
+def test_a_zero_tally_is_neutral_and_a_non_zero_tally_keeps_its_outcome_colour() -> None:
+    document = _render([_RECORD])
+    assert '<li class="summary-passed">' in document, (
+        "the one passing tally lost its outcome colour"
+    )
+    assert '<li class="summary-failed is-zero">' in document, "a zero tally is not marked neutral"
+    assert "color: var(--muted)" in _rule(assets.CSS, ".summary li.is-zero .count")
+
+
+def test_the_summary_and_the_artifact_links_reach_the_forty_four_pixel_target() -> None:
+    assert "min-height: 44px" in _rule(assets.CSS, ".panel summary")
+    assert "min-height: 44px" in _rule(assets.CSS, ".panel dd a")
+    assert "align-items: baseline" in _rule(assets.CSS, ".panel dl")
+
+
+def test_the_caption_text_is_pinned_inside_the_narrow_scroll_box() -> None:
+    document = _render([_RECORD])
+    assert document.count('<span class="caption-text">') == 1
+    block = _responsive_block()
+    assert "position: sticky" in _rule(block, "table.results .caption-text")
+    assert "background-attachment: local, local, scroll, scroll" in block
+
+
+def test_the_quarantined_section_keeps_the_page_rhythm_below_the_table() -> None:
+    rule = _rule(assets.CSS, ".table-scroll + .quarantined")
+    assert "margin-top: 20px" in rule, f"the table abuts the Quarantined section: {rule}"
+
+
+def test_the_drawn_disclosure_triangle_survives_a_forced_colours_palette() -> None:
+    """A forced palette repaints the triangle's borders, so the block is clipped back into shape."""
+    block = assets.CSS[assets.CSS.index("@media (forced-colors: active)") :]
+    rule = _rule(block, ".panel summary::before")
+    assert "border-width: 0" in rule, f"the squared block is not replaced: {rule}"
+    assert "clip-path: polygon(" in rule, f"the block is not clipped to a triangle: {rule}"

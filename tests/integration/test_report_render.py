@@ -559,7 +559,8 @@ def _assert_failure_panel(run: RunOutput) -> None:
     document = run.html
     panels = document.count(PANEL_OPEN)
     assert panels == 2, f"one panel per failing record, expected 2, found {panels}"
-    assert f"<summary>{API_NODEID}: failed (call)</summary>" in document, "no panel for the failure"
+    summary = f'<span class="summary-text">{API_NODEID}: failed (call)</span>'
+    assert f"<summary>{summary}</summary>" in document, "no panel for the failure"
     assert "request dump" in document, "the panel links no request dump"
     assert "response dump" in document, "the panel links no response dump"
     for name in ("request.json", "response.json"):
